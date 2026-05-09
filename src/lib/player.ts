@@ -1022,6 +1022,23 @@ export function drawPlayerEye(
     }
   }
   const hasSmash = p.smashAge >= 0;
+  // smashIntensity: 1 during the held squash, fading to 0 across the
+  // overshoot+settle window. Used to gate lean and anisotropic stretch
+  // (the only transforms that introduce a non-canvas axis) so they
+  // don't twist the smash but still ease back smoothly when it ends.
+  let smashIntensity = 0;
+  if (hasSmash) {
+    if (p.smashAge < SMASH_DURATION_SEC) {
+      smashIntensity = 1;
+    } else {
+      const recoverElapsed = p.smashAge - SMASH_DURATION_SEC;
+      const recoverDuration = SMASH_TOTAL_SEC - SMASH_DURATION_SEC;
+      smashIntensity = recoverDuration > 0
+        ? Math.max(0, 1 - recoverElapsed / recoverDuration)
+        : 0;
+    }
+  }
+  const smashInverse = 1 - smashIntensity;
 
   ctx.save();
   ctx.translate(baseX, baseY);
@@ -1052,15 +1069,21 @@ export function drawPlayerEye(
   }
   if (hasBrake) ctx.scale(brakeSx, brakeSy);
   ctx.scale(1, Math.max(0.001, eyeOpenY));
-  if (p.tiltAngle !== 0) ctx.rotate(p.tiltAngle);
+  // Lean and anisotropic stretch are the only steps that rotate the
+  // coordinate frame — they'd warp the wall-aligned smash. Multiplying
+  // by smashInverse fades them out during the hold and back in during
+  // the recovery so the transition is smooth, not a hard cut.
+  const effectiveTilt = p.tiltAngle * smashInverse;
+  if (effectiveTilt !== 0) ctx.rotate(effectiveTilt);
   if (bobOffsetY !== 0) ctx.translate(0, bobOffsetY);
   if (hasPop) ctx.scale(popSx, popSy);
   // anisotropic running stretch — rotate to motion direction, scale
   // (along, perpendicular), unrotate so subsequent transforms stay in
   // the eye's natural frame.
-  if (aniStrength > 0) {
+  const effectiveAni = aniStrength * smashInverse;
+  if (effectiveAni > 0) {
     ctx.rotate(aniAngle);
-    ctx.scale(1 + aniStrength, 1 - aniStrength);
+    ctx.scale(1 + effectiveAni, 1 - effectiveAni);
     ctx.rotate(-aniAngle);
   }
 
