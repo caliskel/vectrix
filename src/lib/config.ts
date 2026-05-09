@@ -141,18 +141,32 @@ export const IDLE_LOOK_FAR_DIST_RATIO = 0.9;
 export const IDLE_JITTER_AMPLITUDE = 0.5;
 
 // Movement animations for the player eye — lean (tilt into wind), bob
-// (vertical sway scaled by speed), and an optional squash + stretch
-// "pop" when speed crosses the lean threshold from below.
-export const LEAN_MAX_HORIZONTAL_RAD = 0.18;
-export const LEAN_MAX_DIAGONAL_RAD = 0.12;
+// (vertical sway scaled by speed), a squash + stretch "pop" on a sharp
+// start, and a reverse squeeze on a sharp brake. Knobs are deliberately
+// generous so the deformation reads in motion.
+export const LEAN_MAX_HORIZONTAL_RAD = 0.35; // ~20°
+export const LEAN_MAX_DIAGONAL_RAD = 0.25;   // ~14°
 export const LEAN_VELOCITY_THRESHOLD = 50;
-export const LEAN_LERP = 0.08; // per-frame factor at 60 fps; lib uses a
-// rate (≈5 / s) derived from this so the lerp is frame-rate independent
-export const BOB_AMPLITUDE_PX = 2;
+export const LEAN_LERP = 0.12; // per-frame factor at 60 fps; lib derives
+// a rate (≈8 / s) from this so the lerp is frame-rate independent
+export const BOB_AMPLITUDE_PX = 5;
 export const BOB_FREQUENCY_FACTOR = 200;
-export const SQUASH_DURATION_MS = 80;
-export const SQUASH_Y = 0.92;
-export const STRETCH_X = 1.05;
+// bob kicks in earlier than lean — even walk-speed body sways
+export const BOB_VELOCITY_THRESHOLD = 30;
+export const SQUASH_DURATION_MS = 120;
+export const SQUASH_Y = 0.82;
+export const STRETCH_X = 1.15;
+// sharp-start trigger: speed jumps from below LOW to above HIGH inside
+// one frame (with our high acceleration this happens on a fresh keypress)
+export const START_SQUASH_PREV_MAX = 30;
+export const START_SQUASH_CUR_MIN = 100;
+// sharp-brake squeeze: opposite of start, plays when speed plummets from
+// above HIGH to below LOW in a single frame (active counter-input)
+export const BRAKE_DURATION_MS = 100;
+export const BRAKE_STRETCH_Y = 1.1;
+export const BRAKE_SQUASH_X = 0.9;
+export const BRAKE_PREV_MIN = 100;
+export const BRAKE_CUR_MAX = 60;
 
 // Bindings store KeyboardEvent.code values (layout-independent). Modifier
 // codes are normalized to drop the Left/Right side suffix (see normalizeCode

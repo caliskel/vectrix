@@ -14,6 +14,12 @@ import {
   DASH_STRETCH_Y,
   BOB_AMPLITUDE_PX,
   BOB_FREQUENCY_FACTOR,
+  BOB_VELOCITY_THRESHOLD,
+  BRAKE_CUR_MAX,
+  BRAKE_DURATION_MS,
+  BRAKE_PREV_MIN,
+  BRAKE_SQUASH_X,
+  BRAKE_STRETCH_Y,
   IDLE_JITTER_AMPLITUDE,
   IDLE_LOOK_CALM_DOWN_MS,
   IDLE_LOOK_CENTER_CHANCE,
@@ -23,11 +29,14 @@ import {
   IDLE_LOOK_MID_DIST_RATIO,
   IDLE_LOOK_NEAR_DIST_RATIO,
   IDLE_LOOK_QUICK_DART_CHANCE,
+  LEAN_LERP,
   LEAN_MAX_DIAGONAL_RAD,
   LEAN_MAX_HORIZONTAL_RAD,
   LEAN_VELOCITY_THRESHOLD,
   SQUASH_DURATION_MS,
   SQUASH_Y,
+  START_SQUASH_CUR_MIN,
+  START_SQUASH_PREV_MAX,
   STRETCH_X,
   type Bindings,
 } from "./config";
@@ -56,9 +65,13 @@ const IDLE_INTERVAL_MAX_SEC = IDLE_LOOK_INTERVAL_MAX_MS / 1000;
 const IDLE_QUICK_DART_MIN_SEC = 0.3;
 const IDLE_QUICK_DART_MAX_SEC = 0.5;
 const IDLE_TIER_JITTER = 0.1; // ± around tier center, gives e.g. 0.2..0.4 for "near"
-const LEAN_LERP_RATE = 5; // ≈0.08 per frame at 60 fps, frame-rate independent
+// Derive a per-second lerp rate from the per-frame target so the easing
+// stays rate-correct even when the framerate drops. With LEAN_LERP=0.12
+// at 60 fps this gives ~7.7 / s; we round up slightly for snap.
+const LEAN_LERP_RATE = -Math.log(1 - LEAN_LERP) * 60;
 const BOB_DECAY_RATE = 6; // how fast bob phase eases to neutral when stopped
 const SQUASH_DURATION_SEC = SQUASH_DURATION_MS / 1000;
+const BRAKE_DURATION_SEC = BRAKE_DURATION_MS / 1000;
 
 function randomBlinkInterval(): number {
   return (
@@ -179,8 +192,9 @@ export type Player = {
   // movement animations
   tiltAngle: number;        // current lean (radians), eases toward target
   bobPhase: number;         // accumulator for the sin bob wave
-  squashTime: number;       // counts down through SQUASH_DURATION_SEC
-  prevSpeed: number;        // last frame's speed, used for squash trigger
+  squashTime: number;       // counts down through SQUASH_DURATION_SEC (start pop)
+  brakeSquashTime: number;  // counts down through BRAKE_DURATION_SEC (sharp stop)
+  prevSpeed: number;        // last frame's speed, used for squash + brake triggers
 };
 
 export function createPlayer(): Player {
@@ -214,6 +228,7 @@ export function createPlayer(): Player {
     tiltAngle: 0,
     bobPhase: 0,
     squashTime: 0,
+    brakeSquashTime: 0,
     prevSpeed: 0,
   };
 }
@@ -237,6 +252,7 @@ export function resetEyeState(p: Player): void {
   p.tiltAngle = 0;
   p.bobPhase = 0;
   p.squashTime = 0;
+  p.brakeSquashTime = 0;
   p.prevSpeed = 0;
 }
 
@@ -343,27 +359,44 @@ export function updateEye(
     dashDurationSec: number;
   },
 ): void {
-  // movement animations: lean, bob, squash. Skipped when dashing (dash
-  // owns its own deformation) — tilt eases back to 0 in that case.
+  // movement animations: lean, bob, squash + brake. Skipped when dashing
+  // (dash owns its own deformation) — tilt eases back to 0 in that case.
   const speed = Math.hypot(p.vx, p.vy);
   const isDashing = p.dashTime > 0;
-  const moving = speed >= LEAN_VELOCITY_THRESHOLD && !isDashing;
+  const movingForLean = speed >= LEAN_VELOCITY_THRESHOLD && !isDashing;
+  const movingForBob = speed >= BOB_VELOCITY_THRESHOLD && !isDashing;
 
-  // squash trigger — speed crossed the threshold from below this frame
+  // start-pop trigger — speed jumped from near-zero past 100 in one
+  // frame (with our high acceleration this is a fresh keypress)
   if (
     !isDashing &&
-    p.prevSpeed < LEAN_VELOCITY_THRESHOLD &&
-    speed >= LEAN_VELOCITY_THRESHOLD
+    p.prevSpeed < START_SQUASH_PREV_MAX &&
+    speed >= START_SQUASH_CUR_MIN
   ) {
     p.squashTime = SQUASH_DURATION_SEC;
+    p.brakeSquashTime = 0; // start cancels any active brake
+  }
+  // brake-pop trigger — speed plummeted from above 100 to below 60 in
+  // one frame (active counter-input). Friction-only stops are gradual
+  // and will not fire this.
+  if (
+    !isDashing &&
+    p.prevSpeed > BRAKE_PREV_MIN &&
+    speed < BRAKE_CUR_MAX &&
+    p.brakeSquashTime <= 0
+  ) {
+    p.brakeSquashTime = BRAKE_DURATION_SEC;
+    p.squashTime = 0; // brake cancels any active start-pop
   }
   if (p.squashTime > 0) p.squashTime = Math.max(0, p.squashTime - dt);
+  if (p.brakeSquashTime > 0)
+    p.brakeSquashTime = Math.max(0, p.brakeSquashTime - dt);
   p.prevSpeed = speed;
 
   // tilt target — sign of vx, with diagonal getting a smaller angle and
   // pure vertical leaving the eye upright
   let tiltTarget = 0;
-  if (moving) {
+  if (movingForLean) {
     const ax = Math.abs(p.vx);
     const ay = Math.abs(p.vy);
     if (ax > ay) {
@@ -376,9 +409,10 @@ export function updateEye(
   const leanK = 1 - Math.exp(-LEAN_LERP_RATE * dt);
   p.tiltAngle += (tiltTarget - p.tiltAngle) * leanK;
 
-  // bob — phase advances proportional to speed while moving; when stopped
-  // it eases toward the nearest "neutral" multiple of π so sin(phase) = 0
-  if (moving) {
+  // bob — phase advances proportional to speed while moving (down to
+  // walk speed via BOB_VELOCITY_THRESHOLD); when stopped it eases to the
+  // nearest "neutral" multiple of π so sin(phase) = 0
+  if (movingForBob) {
     p.bobPhase += dt * (speed / BOB_FREQUENCY_FACTOR);
   } else {
     const target = Math.round(p.bobPhase / Math.PI) * Math.PI;
@@ -604,16 +638,28 @@ export function drawPlayerEye(
   // translate(0, bobY) → scale (squash) → draw layers inside.
   const bobOffsetY =
     BOB_AMPLITUDE_PX * Math.sin(p.bobPhase) * (isDashing ? 0 : 1);
-  const squashAlpha = p.squashTime > 0 ? p.squashTime / SQUASH_DURATION_SEC : 0;
-  const squashSx = 1 + (STRETCH_X - 1) * squashAlpha;
-  const squashSy = 1 + (SQUASH_Y - 1) * squashAlpha;
+  // start pop and brake squeeze are mutually exclusive (each clears the
+  // other on trigger). Pick whichever has time remaining and lerp its
+  // scale back to 1 over its window.
+  let squashSx = 1;
+  let squashSy = 1;
+  if (p.squashTime > 0) {
+    const t = p.squashTime / SQUASH_DURATION_SEC;
+    squashSx = 1 + (STRETCH_X - 1) * t;
+    squashSy = 1 + (SQUASH_Y - 1) * t;
+  } else if (p.brakeSquashTime > 0) {
+    const t = p.brakeSquashTime / BRAKE_DURATION_SEC;
+    squashSx = 1 + (BRAKE_SQUASH_X - 1) * t;
+    squashSy = 1 + (BRAKE_STRETCH_Y - 1) * t;
+  }
+  const hasSquash = squashSx !== 1 || squashSy !== 1;
 
   ctx.save();
   ctx.translate(baseX, baseY);
   ctx.scale(1, Math.max(0.001, eyeOpenY));
   if (p.tiltAngle !== 0) ctx.rotate(p.tiltAngle);
   if (bobOffsetY !== 0) ctx.translate(0, bobOffsetY);
-  if (squashAlpha > 0) ctx.scale(squashSx, squashSy);
+  if (hasSquash) ctx.scale(squashSx, squashSy);
 
   // ===== outer ring (deformed in dash) =====
   drawNeon(
