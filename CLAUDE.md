@@ -121,18 +121,49 @@ its own `GameState` later when scripted encounters land.
   and rooms call it with their own threat list.
 - **Lean and bob animations during movement** — when the player is
   moving (|velocity| > 50 px/s) the eye tilts into the wind: full
-  ±0.18 rad for mostly-horizontal motion, ±0.12 rad on diagonals,
-  zero on pure vertical. The lean eases via a frame-rate-independent
-  lerp (≈0.08 per frame at 60 fps). A vertical bob runs at a phase
-  that advances proportional to current speed (`speed /
-  BOB_FREQUENCY_FACTOR`) and renders as `sin(phase) * 2 px`; when
-  the player stops, the phase eases to the nearest neutral so the
-  bob ends at zero offset rather than freezing at a peak. A small
-  squash + stretch (1.05 × 0.92 × 80 ms) plays when speed crosses
-  the lean threshold from below — the "pop" of starting to move.
-  All three are skipped while dashing (the dash teardrop owns the
-  visual). Constants live in `config.ts` (`LEAN_*`, `BOB_*`,
+  ±0.45 rad (~26°) for mostly-horizontal motion, ±0.32 rad on
+  diagonals, zero on pure vertical. The lean eases via a
+  frame-rate-independent lerp (≈12 / s, derived from a per-frame
+  factor of 0.18). A vertical bob runs at a phase that advances
+  proportional to current speed (`speed / BOB_FREQUENCY_FACTOR =
+  140`) and renders as `sin(phase) * 8 px`; when the player stops,
+  the phase eases to the nearest neutral so the bob ends at zero
+  offset. A start-pop squash + stretch (1.25 × 0.72 × 180 ms) plays
+  when speed crosses the lean threshold from below. All three skip
+  while dashing. Constants live in `config.ts` (`LEAN_*`, `BOB_*`,
   `SQUASH_*`, `STRETCH_X`).
+- **Anisotropic running stretch** — while moving fast (|velocity| >
+  100 px/s) the eye continuously stretches along the velocity vector
+  and squashes perpendicular, like a running ball. Strength is
+  `((speed - threshold) / VELOCITY_FACTOR) * 0.3`, capped at
+  `ANISOTROPIC_STRETCH_MAX = 0.3`, so at default `player.maxSpeed =
+  440` it sits around 0.17 (≈ 17 % stretch). Applied as a
+  rotate-scale-unrotate around the eye in the render path, after
+  squash and before flinch. Skipped during dash.
+- **Brake squeeze** — triggers when |velocity| drops faster than
+  `BRAKE_VELOCITY_DROP_THRESHOLD` over `BRAKE_DROP_TIME_MS` (200 px/s
+  / 100 ms ⇒ 2000 px/s² of deceleration). The squash is held at
+  (0.78, 1.22) for `BRAKE_DURATION_MS = 100`, then eases back to
+  (1.0, 1.0) over `BRAKE_RECOVERY_MS = 150`. Brake is mutually
+  exclusive with the start-pop and is gated by its own `brakeAge`
+  countdown so friction's continuous deceleration only fires once
+  per release.
+- **Smash on collision** — when the player crashes into an arena
+  edge or room wall, `triggerPlayerSmash(player, nx, ny, impact)`
+  flattens the eye along the surface normal: scale interpolates
+  between (`SMASH_MIN_SQUASH = 0.85`, perpendicular `1.15`) for a
+  light tap (impact = `SMASH_MIN_IMPACT_VELOCITY = 200 px/s`) and
+  (`SMASH_MAX_SQUASH = 0.6`, perpendicular `1.4`) for a slam at
+  500 px/s. The deformation holds for `SMASH_DURATION_MS = 120`,
+  springs past 1.0 for `SMASH_OVERSHOOT_MS = 60` (peak 1.05/0.95),
+  then settles over the rest of `SMASH_RECOVERY_MS = 200`. A
+  `SMASH_COOLDOWN_MS = 200` gate prevents the eye from pulsing
+  while resting against a wall. The audio cue is `audio.play.smash(s)`,
+  a low-velocity reuse of `hitSynth` so it sits roughly −26..−30 dB
+  below the normal hit. Sandbox calls it from each arena-edge
+  clamp; rooms calls it from `resolvePlayerWallCollisions` and the
+  closed-door clamp using `pre-velocity` captured before the
+  resolve zeros the stopped axis.
 - **Player micro-animations** — four "alive" tells layered on top of
   the eye, all driven from `updateEye` / `drawPlayerEye` so sandbox,
   rooms, and the landing preview share the behavior:

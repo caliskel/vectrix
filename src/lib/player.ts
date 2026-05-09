@@ -3,6 +3,12 @@ import {
   BLINK_INTERVAL_MAX_MS,
   BLINK_INTERVAL_MIN_MS,
   BLINK_OPEN_DURATION_MS,
+  ANISOTROPIC_STRETCH_MAX,
+  ANISOTROPIC_STRETCH_VELOCITY_FACTOR,
+  ANISOTROPIC_STRETCH_VELOCITY_THRESHOLD,
+  BRAKE_DROP_TIME_MS,
+  BRAKE_RECOVERY_MS,
+  BRAKE_VELOCITY_DROP_THRESHOLD,
   BREATH_AMPLITUDE,
   BREATH_INHALE_FRACTION,
   BREATH_PERIOD_MS,
@@ -20,9 +26,7 @@ import {
   BOB_AMPLITUDE_PX,
   BOB_FREQUENCY_FACTOR,
   BOB_VELOCITY_THRESHOLD,
-  BRAKE_CUR_MAX,
   BRAKE_DURATION_MS,
-  BRAKE_PREV_MIN,
   BRAKE_SQUASH_X,
   BRAKE_STRETCH_Y,
   FLINCH_COOLDOWN_MS,
@@ -49,6 +53,13 @@ import {
   PUPIL_DILATION_MIN,
   PUPIL_ENEMY_THREAT_RADIUS,
   PUPIL_THREAT_RADIUS,
+  SMASH_COOLDOWN_MS,
+  SMASH_DURATION_MS,
+  SMASH_MAX_SQUASH,
+  SMASH_MIN_IMPACT_VELOCITY,
+  SMASH_MIN_SQUASH,
+  SMASH_OVERSHOOT_MS,
+  SMASH_RECOVERY_MS,
   SQUASH_DURATION_MS,
   SQUASH_Y,
   START_SQUASH_CUR_MIN,
@@ -104,6 +115,24 @@ const LEAN_LERP_RATE = -Math.log(1 - LEAN_LERP) * 60;
 const BOB_DECAY_RATE = 6; // how fast bob phase eases to neutral when stopped
 const SQUASH_DURATION_SEC = SQUASH_DURATION_MS / 1000;
 const BRAKE_DURATION_SEC = BRAKE_DURATION_MS / 1000;
+const BRAKE_RECOVERY_SEC = BRAKE_RECOVERY_MS / 1000;
+const BRAKE_TOTAL_SEC = BRAKE_DURATION_SEC + BRAKE_RECOVERY_SEC;
+// Per-second deceleration that triggers a brake squeeze. Derived from
+// the user-facing "drop X over Y ms" pair so callers reason in absolute
+// terms while we compare against current frame's deceleration.
+const BRAKE_DECEL_THRESHOLD =
+  (BRAKE_VELOCITY_DROP_THRESHOLD * 1000) / BRAKE_DROP_TIME_MS;
+const SMASH_DURATION_SEC = SMASH_DURATION_MS / 1000;
+const SMASH_OVERSHOOT_SEC = SMASH_OVERSHOOT_MS / 1000;
+const SMASH_RECOVERY_SEC = SMASH_RECOVERY_MS / 1000;
+const SMASH_TOTAL_SEC = SMASH_DURATION_SEC + SMASH_RECOVERY_SEC;
+const SMASH_OVERSHOOT_SQUASH = 1.05; // peak overshoot scale along normal
+const SMASH_OVERSHOOT_STRETCH = 0.95; // peak overshoot scale perpendicular
+// Impact velocity above which the eye reaches full SMASH_MAX_SQUASH;
+// below SMASH_MIN_IMPACT_VELOCITY no smash is triggered. Linear lerp
+// in between picks the squash strength.
+const SMASH_FULL_IMPACT_VELOCITY = 500;
+const SMASH_COOLDOWN_SEC = SMASH_COOLDOWN_MS / 1000;
 
 function randomBlinkInterval(): number {
   return (
@@ -225,8 +254,16 @@ export type Player = {
   tiltAngle: number;        // current lean (radians), eases toward target
   bobPhase: number;         // accumulator for the sin bob wave
   squashTime: number;       // counts down through SQUASH_DURATION_SEC (start pop)
-  brakeSquashTime: number;  // counts down through BRAKE_DURATION_SEC (sharp stop)
+  // brake squeeze: counts up from 0; first BRAKE_DURATION_SEC holds full
+  // squash, the next BRAKE_RECOVERY_SEC eases to neutral. -1 = inactive.
+  brakeAge: number;
   prevSpeed: number;        // last frame's speed, used for squash + brake triggers
+  // wall-impact smash. smashAge counts up; phases derived from it. -1 = inactive.
+  smashAge: number;
+  smashSquashAlong: number; // peak squash scale along the contact normal
+  smashNormalX: number;     // unit vector pointing away from the surface
+  smashNormalY: number;
+  smashCooldown: number;    // gates re-trigger so resting against a wall doesn't pulse
   // micro-animations: breathing, threat-driven dilation, double blink, flinch
   breathPhase: number;      // accumulator for the idle breath sin wave
   pupilDilation: number;    // smoothed factor (PUPIL_DILATION_MIN..MAX) applied to pupil
@@ -271,8 +308,13 @@ export function createPlayer(): Player {
     tiltAngle: 0,
     bobPhase: 0,
     squashTime: 0,
-    brakeSquashTime: 0,
+    brakeAge: -1,
     prevSpeed: 0,
+    smashAge: -1,
+    smashSquashAlong: 1,
+    smashNormalX: 1,
+    smashNormalY: 0,
+    smashCooldown: 0,
     breathPhase: Math.random() * Math.PI * 2,
     pupilDilation: PUPIL_DILATION_MAX,
     doubleBlinkPending: false,
@@ -305,8 +347,13 @@ export function resetEyeState(p: Player): void {
   p.tiltAngle = 0;
   p.bobPhase = 0;
   p.squashTime = 0;
-  p.brakeSquashTime = 0;
+  p.brakeAge = -1;
   p.prevSpeed = 0;
+  p.smashAge = -1;
+  p.smashSquashAlong = 1;
+  p.smashNormalX = 1;
+  p.smashNormalY = 0;
+  p.smashCooldown = 0;
   p.breathPhase = Math.random() * Math.PI * 2;
   p.pupilDilation = PUPIL_DILATION_MAX;
   p.doubleBlinkPending = false;
@@ -326,6 +373,41 @@ export function eyeOnHit(p: Player): void {
 
 export function eyeStartClosing(p: Player): void {
   p.isClosing = true;
+}
+
+/**
+ * Trigger a wall-impact smash. Returns the strength factor (0..1) used
+ * for the squash so the caller can pass it on to the audio cue, or -1
+ * when the impact didn't qualify (cooldown active or below the minimum
+ * inward velocity).
+ *
+ * Normal must point AWAY from the surface (toward the player). Impact
+ * velocity is the magnitude of the inward velocity component; weaker
+ * impacts produce a softer squash via lerp from SMASH_MIN_SQUASH to
+ * SMASH_MAX_SQUASH.
+ */
+export function triggerPlayerSmash(
+  p: Player,
+  normalX: number,
+  normalY: number,
+  impactVelocity: number,
+): number {
+  if (p.smashCooldown > 0) return -1;
+  if (impactVelocity < SMASH_MIN_IMPACT_VELOCITY) return -1;
+  const t = Math.min(
+    1,
+    (impactVelocity - SMASH_MIN_IMPACT_VELOCITY) /
+      (SMASH_FULL_IMPACT_VELOCITY - SMASH_MIN_IMPACT_VELOCITY),
+  );
+  // SMASH_MAX_SQUASH < SMASH_MIN_SQUASH because "max" is the strongest
+  // squash (lowest scale); a heavy impact lerps toward MAX_SQUASH.
+  const squash = SMASH_MIN_SQUASH + (SMASH_MAX_SQUASH - SMASH_MIN_SQUASH) * t;
+  p.smashAge = 0;
+  p.smashSquashAlong = squash;
+  p.smashNormalX = normalX;
+  p.smashNormalY = normalY;
+  p.smashCooldown = SMASH_COOLDOWN_SEC;
+  return t;
 }
 
 export function inputDirection(
@@ -480,23 +562,32 @@ export function updateEye(
     speed >= START_SQUASH_CUR_MIN
   ) {
     p.squashTime = SQUASH_DURATION_SEC;
-    p.brakeSquashTime = 0; // start cancels any active brake
+    p.brakeAge = -1; // start cancels any active brake
   }
-  // brake-pop trigger — speed plummeted from above 100 to below 60 in
-  // one frame (active counter-input). Friction-only stops are gradual
-  // and will not fire this.
-  if (
-    !isDashing &&
-    p.prevSpeed > BRAKE_PREV_MIN &&
-    speed < BRAKE_CUR_MAX &&
-    p.brakeSquashTime <= 0
-  ) {
-    p.brakeSquashTime = BRAKE_DURATION_SEC;
-    p.squashTime = 0; // brake cancels any active start-pop
+  // brake squeeze trigger — magnitude of velocity is dropping faster
+  // than BRAKE_VELOCITY_DROP_THRESHOLD over BRAKE_DROP_TIME_MS, which
+  // converts to a per-second deceleration. Friction at full speed is
+  // already steep enough to cross this; counter-input crosses it
+  // dramatically. Cooldown via brakeAge prevents continuous pulsing
+  // while friction keeps decelerating.
+  if (!isDashing && p.brakeAge < 0 && dt > 1e-6) {
+    const decelRate = (p.prevSpeed - speed) / dt;
+    if (decelRate > BRAKE_DECEL_THRESHOLD) {
+      p.brakeAge = 0;
+      p.squashTime = 0; // brake cancels any active start-pop
+    }
   }
   if (p.squashTime > 0) p.squashTime = Math.max(0, p.squashTime - dt);
-  if (p.brakeSquashTime > 0)
-    p.brakeSquashTime = Math.max(0, p.brakeSquashTime - dt);
+  if (p.brakeAge >= 0) {
+    p.brakeAge += dt;
+    if (p.brakeAge >= BRAKE_TOTAL_SEC) p.brakeAge = -1;
+  }
+  // smash timer + cooldown
+  if (p.smashAge >= 0) {
+    p.smashAge += dt;
+    if (p.smashAge >= SMASH_TOTAL_SEC) p.smashAge = -1;
+  }
+  if (p.smashCooldown > 0) p.smashCooldown = Math.max(0, p.smashCooldown - dt);
   p.prevSpeed = speed;
 
   // tilt target — sign of vx, with diagonal getting a smaller angle and
@@ -848,20 +939,81 @@ export function drawPlayerEye(
   const bobOffsetY =
     BOB_AMPLITUDE_PX * Math.sin(p.bobPhase) * (isDashing ? 0 : 1);
   // start pop and brake squeeze are mutually exclusive (each clears the
-  // other on trigger). Pick whichever has time remaining and lerp its
-  // scale back to 1 over its window.
+  // other on trigger). Brake holds at full squeeze for BRAKE_DURATION
+  // then eases back to neutral over BRAKE_RECOVERY.
   let squashSx = 1;
   let squashSy = 1;
   if (p.squashTime > 0) {
     const t = p.squashTime / SQUASH_DURATION_SEC;
     squashSx = 1 + (STRETCH_X - 1) * t;
     squashSy = 1 + (SQUASH_Y - 1) * t;
-  } else if (p.brakeSquashTime > 0) {
-    const t = p.brakeSquashTime / BRAKE_DURATION_SEC;
-    squashSx = 1 + (BRAKE_SQUASH_X - 1) * t;
-    squashSy = 1 + (BRAKE_STRETCH_Y - 1) * t;
+  } else if (p.brakeAge >= 0) {
+    if (p.brakeAge < BRAKE_DURATION_SEC) {
+      squashSx = BRAKE_SQUASH_X;
+      squashSy = BRAKE_STRETCH_Y;
+    } else {
+      const t = (p.brakeAge - BRAKE_DURATION_SEC) / BRAKE_RECOVERY_SEC;
+      squashSx = BRAKE_SQUASH_X + (1 - BRAKE_SQUASH_X) * t;
+      squashSy = BRAKE_STRETCH_Y + (1 - BRAKE_STRETCH_Y) * t;
+    }
   }
   const hasSquash = squashSx !== 1 || squashSy !== 1;
+
+  // Anisotropic stretch — continuous deformation along the velocity
+  // vector while running. Strength scales with speed above the
+  // threshold, capped at ANISOTROPIC_STRETCH_MAX. Skipped during dash
+  // (the dash teardrop owns its deformation).
+  const liveSpeed = Math.hypot(p.vx, p.vy);
+  let aniStrength = 0;
+  let aniAngle = 0;
+  if (
+    !isDashing &&
+    liveSpeed > ANISOTROPIC_STRETCH_VELOCITY_THRESHOLD
+  ) {
+    aniStrength = Math.min(
+      ANISOTROPIC_STRETCH_MAX,
+      ((liveSpeed - ANISOTROPIC_STRETCH_VELOCITY_THRESHOLD) /
+        ANISOTROPIC_STRETCH_VELOCITY_FACTOR) *
+        0.3,
+    );
+    if (aniStrength > 0) aniAngle = Math.atan2(p.vy, p.vx);
+  }
+
+  // Smash deformation — three phases (held / overshoot / settle). The
+  // along-normal axis gets the heavy squash; perpendicular gets a
+  // matching stretch (additive, sums to 2 so volume reads roughly
+  // preserved). Overshoot flips both axes briefly past 1.0 for the
+  // spring read.
+  let smashAlong = 1;
+  let smashPerp = 1;
+  if (p.smashAge >= 0) {
+    if (p.smashAge < SMASH_DURATION_SEC) {
+      smashAlong = p.smashSquashAlong;
+      smashPerp = 2 - p.smashSquashAlong;
+    } else if (p.smashAge < SMASH_DURATION_SEC + SMASH_OVERSHOOT_SEC) {
+      // ramp from full squash to overshoot peak
+      const t =
+        (p.smashAge - SMASH_DURATION_SEC) / SMASH_OVERSHOOT_SEC;
+      smashAlong =
+        p.smashSquashAlong +
+        (SMASH_OVERSHOOT_SQUASH - p.smashSquashAlong) * t;
+      smashPerp =
+        2 - p.smashSquashAlong +
+        (SMASH_OVERSHOOT_STRETCH - (2 - p.smashSquashAlong)) * t;
+    } else {
+      // settle from overshoot peak to neutral
+      const settleStart = SMASH_DURATION_SEC + SMASH_OVERSHOOT_SEC;
+      const settleDuration = SMASH_TOTAL_SEC - settleStart;
+      const t = settleDuration > 0
+        ? (p.smashAge - settleStart) / settleDuration
+        : 1;
+      smashAlong =
+        SMASH_OVERSHOOT_SQUASH + (1 - SMASH_OVERSHOOT_SQUASH) * t;
+      smashPerp =
+        SMASH_OVERSHOOT_STRETCH + (1 - SMASH_OVERSHOOT_STRETCH) * t;
+    }
+  }
+  const hasSmash = p.smashAge >= 0;
 
   ctx.save();
   ctx.translate(baseX, baseY);
@@ -869,6 +1021,21 @@ export function drawPlayerEye(
   if (p.tiltAngle !== 0) ctx.rotate(p.tiltAngle);
   if (bobOffsetY !== 0) ctx.translate(0, bobOffsetY);
   if (hasSquash) ctx.scale(squashSx, squashSy);
+  // anisotropic running stretch — rotate to motion direction, scale
+  // (along, perpendicular), unrotate so subsequent transforms stay in
+  // the eye's natural frame.
+  if (aniStrength > 0) {
+    ctx.rotate(aniAngle);
+    ctx.scale(1 + aniStrength, 1 - aniStrength);
+    ctx.rotate(-aniAngle);
+  }
+  // smash impact — rotate to surface normal, scale, unrotate
+  if (hasSmash) {
+    const smashAngle = Math.atan2(p.smashNormalY, p.smashNormalX);
+    ctx.rotate(smashAngle);
+    ctx.scale(smashAlong, smashPerp);
+    ctx.rotate(-smashAngle);
+  }
 
   // flinch translate — eye recoils away from the bullet that just
   // crossed; offset eases back to 0 over FLINCH_DURATION

@@ -36,6 +36,7 @@ import {
   eyeStartClosing,
   findNearestThreat,
   resetEyeState,
+  triggerPlayerSmash,
   updateEye,
 } from "../lib/player";
 
@@ -1062,20 +1063,39 @@ function frame(now: number) {
   const maxX = viewW - WALL_THICKNESS - half;
   const minY = WALL_THICKNESS + half;
   const maxY = viewH - WALL_THICKNESS - half;
+  // Arena clamp + smash detection. Each side resolves the inward
+  // velocity component before zeroing — that's the impact velocity for
+  // the smash effect.
   if (player.x < minX) {
     player.x = minX;
+    if (player.vx < 0) {
+      const s = triggerPlayerSmash(player, 1, 0, -player.vx);
+      if (s >= 0) audio.play.smash(s);
+    }
     player.vx = 0;
   }
   if (player.y < minY) {
     player.y = minY;
+    if (player.vy < 0) {
+      const s = triggerPlayerSmash(player, 0, 1, -player.vy);
+      if (s >= 0) audio.play.smash(s);
+    }
     player.vy = 0;
   }
   if (player.x > maxX) {
     player.x = maxX;
+    if (player.vx > 0) {
+      const s = triggerPlayerSmash(player, -1, 0, player.vx);
+      if (s >= 0) audio.play.smash(s);
+    }
     player.vx = 0;
   }
   if (player.y > maxY) {
     player.y = maxY;
+    if (player.vy > 0) {
+      const s = triggerPlayerSmash(player, 0, -1, player.vy);
+      if (s >= 0) audio.play.smash(s);
+    }
     player.vy = 0;
   }
 

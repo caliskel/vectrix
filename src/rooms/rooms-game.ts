@@ -37,6 +37,7 @@ import {
   inputDirection,
   loadPlayerProfile,
   resetEyeState,
+  triggerPlayerSmash,
   updateEye,
 } from "../lib/player";
 import { createPauseMenu } from "./pause-menu";
@@ -849,6 +850,11 @@ export function start(canvas: HTMLCanvasElement): void {
 
     const half = settings.player.size / 2;
     const wasDashing = player.dashTime > 0;
+    // Capture inward velocity before resolve zeroes the stopped axis.
+    // After resolving, pick whichever axis carried the larger impact
+    // and emit a single smash for that surface normal.
+    const preVx = player.vx;
+    const preVy = player.vy;
     const collisionResult = resolvePlayerWallCollisions(
       player,
       currentRoom.walls,
@@ -860,6 +866,31 @@ export function start(canvas: HTMLCanvasElement): void {
     ) {
       abortDash();
     }
+    if (collisionResult.stoppedX || collisionResult.stoppedY) {
+      let impact = 0;
+      let nx = 0;
+      let ny = 0;
+      if (collisionResult.stoppedX) {
+        const i = Math.abs(preVx);
+        if (i > impact) {
+          impact = i;
+          nx = -Math.sign(preVx);
+          ny = 0;
+        }
+      }
+      if (collisionResult.stoppedY) {
+        const i = Math.abs(preVy);
+        if (i > impact) {
+          impact = i;
+          nx = 0;
+          ny = -Math.sign(preVy);
+        }
+      }
+      if (impact > 0) {
+        const s = triggerPlayerSmash(player, nx, ny, impact);
+        if (s >= 0) audio.play.smash(s);
+      }
+    }
 
     // also clamp by the closed door (acts like a wall)
     if (currentRoom.door && currentRoom.door.state === "closed") {
@@ -870,8 +901,35 @@ export function start(canvas: HTMLCanvasElement): void {
         w: d.w,
         h: d.h,
       };
+      const preDoorVx = player.vx;
+      const preDoorVy = player.vy;
       const r2 = resolvePlayerWallCollisions(player, [doorWall], half);
       if (wasDashing && (r2.stoppedX || r2.stoppedY)) abortDash();
+      if (r2.stoppedX || r2.stoppedY) {
+        let impact = 0;
+        let nx = 0;
+        let ny = 0;
+        if (r2.stoppedX) {
+          const i = Math.abs(preDoorVx);
+          if (i > impact) {
+            impact = i;
+            nx = -Math.sign(preDoorVx);
+            ny = 0;
+          }
+        }
+        if (r2.stoppedY) {
+          const i = Math.abs(preDoorVy);
+          if (i > impact) {
+            impact = i;
+            nx = 0;
+            ny = -Math.sign(preDoorVy);
+          }
+        }
+        if (impact > 0) {
+          const s = triggerPlayerSmash(player, nx, ny, impact);
+          if (s >= 0) audio.play.smash(s);
+        }
+      }
     }
 
     // trail particle spawn

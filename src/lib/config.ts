@@ -144,29 +144,56 @@ export const IDLE_JITTER_AMPLITUDE = 0.5;
 // (vertical sway scaled by speed), a squash + stretch "pop" on a sharp
 // start, and a reverse squeeze on a sharp brake. Knobs are deliberately
 // generous so the deformation reads in motion.
-export const LEAN_MAX_HORIZONTAL_RAD = 0.35; // ~20°
-export const LEAN_MAX_DIAGONAL_RAD = 0.25;   // ~14°
+export const LEAN_MAX_HORIZONTAL_RAD = 0.45; // ~26°
+export const LEAN_MAX_DIAGONAL_RAD = 0.32;   // ~18°
 export const LEAN_VELOCITY_THRESHOLD = 50;
-export const LEAN_LERP = 0.12; // per-frame factor at 60 fps; lib derives
-// a rate (≈8 / s) from this so the lerp is frame-rate independent
-export const BOB_AMPLITUDE_PX = 5;
-export const BOB_FREQUENCY_FACTOR = 200;
+export const LEAN_LERP = 0.18; // per-frame factor at 60 fps; lib derives
+// a rate (≈12 / s) from this so the lerp is frame-rate independent
+export const BOB_AMPLITUDE_PX = 8;
+export const BOB_FREQUENCY_FACTOR = 140;
 // bob kicks in earlier than lean — even walk-speed body sways
 export const BOB_VELOCITY_THRESHOLD = 30;
-export const SQUASH_DURATION_MS = 120;
-export const SQUASH_Y = 0.82;
-export const STRETCH_X = 1.15;
+export const SQUASH_DURATION_MS = 180;
+export const SQUASH_Y = 0.72;
+export const STRETCH_X = 1.25;
 // sharp-start trigger: speed jumps from below LOW to above HIGH inside
 // one frame (with our high acceleration this happens on a fresh keypress)
 export const START_SQUASH_PREV_MAX = 30;
 export const START_SQUASH_CUR_MIN = 100;
-// sharp-brake squeeze: opposite of start, plays when speed plummets from
-// above HIGH to below LOW in a single frame (active counter-input)
+// sharp-brake squeeze: triggered when |velocity| drops by more than
+// BRAKE_VELOCITY_DROP_THRESHOLD over BRAKE_DROP_TIME_MS (a per-second
+// deceleration; the lib uses (prevSpeed - speed) / dt vs the derived
+// rate). Hold full squash for BRAKE_DURATION_MS, then ease back to 1.0
+// over BRAKE_RECOVERY_MS.
 export const BRAKE_DURATION_MS = 100;
-export const BRAKE_STRETCH_Y = 1.1;
-export const BRAKE_SQUASH_X = 0.9;
-export const BRAKE_PREV_MIN = 100;
-export const BRAKE_CUR_MAX = 60;
+export const BRAKE_RECOVERY_MS = 150;
+export const BRAKE_STRETCH_Y = 1.22;
+export const BRAKE_SQUASH_X = 0.78;
+export const BRAKE_VELOCITY_DROP_THRESHOLD = 200; // px/s
+export const BRAKE_DROP_TIME_MS = 100;            // ms
+
+// Anisotropic stretch — while moving fast the body continuously stretches
+// along the velocity direction (and squashes perpendicular) like a ball
+// running. Strength scales with speed above the threshold and clamps at
+// ANISOTROPIC_STRETCH_MAX. Skipped during dash.
+export const ANISOTROPIC_STRETCH_MAX = 0.3;
+export const ANISOTROPIC_STRETCH_VELOCITY_THRESHOLD = 100;
+export const ANISOTROPIC_STRETCH_VELOCITY_FACTOR = 600;
+
+// Smash on collision — when the player slams into a wall (or stationary
+// enemy) the eye flattens against the surface, springs back past 1.0
+// (overshoot), then settles. Trigger requires inward velocity above
+// SMASH_MIN_IMPACT_VELOCITY; squash strength interpolates between
+// SMASH_MIN_SQUASH (light tap) and SMASH_MAX_SQUASH (full slam).
+// Cooldown gates re-trigger so a player resting against a wall with a
+// noisy velocity doesn't pulse.
+export const SMASH_MIN_IMPACT_VELOCITY = 200;
+export const SMASH_MAX_SQUASH = 0.6;
+export const SMASH_MIN_SQUASH = 0.85;
+export const SMASH_DURATION_MS = 120;
+export const SMASH_RECOVERY_MS = 200;
+export const SMASH_OVERSHOOT_MS = 60;
+export const SMASH_COOLDOWN_MS = 200;
 
 // Player micro-animations: breathing, threat-driven pupil dilation,
 // occasional double blink, and flinch on near-misses. These run on top

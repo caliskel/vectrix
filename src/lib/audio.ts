@@ -247,6 +247,7 @@ class AudioEngine {
     pickupSpawn: (): void => this.playPickupSpawn(),
     pickupGrab: (type: PickupType): void => this.playPickupGrab(type),
     hit: (): void => this.playHit(),
+    smash: (strength: number): void => this.playSmash(strength),
     multUp: (tier: number): void => this.playMultUp(tier),
     runEnd: (): void => this.playRunEnd(),
   };
@@ -339,6 +340,18 @@ class AudioEngine {
     if (!this.hitSynth) return;
     try {
       this.hitSynth.triggerAttackRelease(80, 0.4, toneNow());
+    } catch {}
+  }
+
+  // Wall-bump cue. Reuses the hit synth at very low velocity so it sits
+  // far below the regular damage hit (-26..-30 dB depending on strength)
+  // and doesn't grate during normal play.
+  private playSmash(strength: number): void {
+    if (!this.hitSynth) return;
+    const s = Math.max(0, Math.min(1, strength));
+    const velocity = 0.04 + 0.04 * s;
+    try {
+      this.hitSynth.triggerAttackRelease(70, 0.18, toneNow(), velocity);
     } catch {}
   }
 
