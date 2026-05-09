@@ -20,6 +20,7 @@ export type BulletsSettings = {
 
 export type PlayerSettings = {
   size: number;
+  maxSpeed: number;
   colorIdle: string;
   colorWalk: string;
   colorDash: string;
@@ -40,18 +41,21 @@ export type Settings = {
   dash: DashSettings;
 };
 
-export const STORAGE_KEY = "dash-proto:settings";
+export const STORAGE_KEY = "dash-proto:settings:v3";
 
+// Bindings store KeyboardEvent.code values (layout-independent). Modifier
+// codes are normalized to drop the Left/Right side suffix (see normalizeCode
+// in main.ts) so either Shift key counts as "Shift", etc.
 export const DEFAULT_SETTINGS: Settings = {
   bindings: {
-    up: "w",
-    down: "s",
-    left: "a",
-    right: "d",
-    walk: "shift",
-    dash: "x",
-    menu1: "escape",
-    menu2: "tab",
+    up: "ArrowUp",
+    down: "ArrowDown",
+    left: "ArrowLeft",
+    right: "ArrowRight",
+    walk: "Shift",
+    dash: "KeyX",
+    menu1: "Escape",
+    menu2: "Tab",
   },
   bullets: {
     spawnIntervalMs: 1200,
@@ -63,13 +67,14 @@ export const DEFAULT_SETTINGS: Settings = {
   },
   player: {
     size: 32,
-    colorIdle: "#ffd700",
+    maxSpeed: 440,
+    colorIdle: "#ffffff",
     colorWalk: "#b0b0b0",
-    colorDash: "#00e5ff",
+    colorDash: "#888888",
     walkFactor: 0.4,
   },
   dash: {
-    distance: 150,
+    distance: 120,
     durationMs: 120,
     iframesMs: 150,
     cooldownMs: 400,

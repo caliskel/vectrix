@@ -7,24 +7,28 @@ import {
 } from "./config";
 
 const KEY_LABELS: Record<string, string> = {
-  " ": "Space",
-  shift: "Shift",
-  control: "Ctrl",
-  alt: "Alt",
-  meta: "Meta",
-  tab: "Tab",
-  escape: "Esc",
-  enter: "Enter",
-  backspace: "Backspace",
-  arrowup: "↑",
-  arrowdown: "↓",
-  arrowleft: "←",
-  arrowright: "→",
+  Space: "Space",
+  Shift: "Shift",
+  Control: "Ctrl",
+  Alt: "Alt",
+  Meta: "Meta",
+  Tab: "Tab",
+  Escape: "Esc",
+  Enter: "Enter",
+  Backspace: "Backspace",
+  Delete: "Del",
+  ArrowUp: "↑",
+  ArrowDown: "↓",
+  ArrowLeft: "←",
+  ArrowRight: "→",
 };
 
-function keyLabel(k: string): string {
-  if (KEY_LABELS[k]) return KEY_LABELS[k];
-  return k.length === 1 ? k.toUpperCase() : k;
+function keyLabel(code: string): string {
+  if (KEY_LABELS[code]) return KEY_LABELS[code];
+  if (code.startsWith("Key")) return code.slice(3); // KeyX → X
+  if (code.startsWith("Digit")) return code.slice(5); // Digit1 → 1
+  if (code.startsWith("Numpad")) return "Num " + code.slice(6);
+  return code;
 }
 
 const STYLE = `
@@ -121,7 +125,11 @@ export type MenuHandle = {
 
 type CaptureSlot = { target: keyof Bindings; button: HTMLButtonElement };
 
-export function createMenu(settings: Settings, save: () => void): MenuHandle {
+export function createMenu(
+  settings: Settings,
+  save: () => void,
+  restartRun: () => void,
+): MenuHandle {
   injectStyle();
 
   const root = document.createElement("div");
@@ -328,6 +336,14 @@ export function createMenu(settings: Settings, save: () => void): MenuHandle {
     );
     s.appendChild(
       makeRow(
+        "Max speed",
+        makeSlider(120, 1500, 20, p.maxSpeed, (v) => `${v} px/s`, (v) => {
+          p.maxSpeed = v;
+        }),
+      ),
+    );
+    s.appendChild(
+      makeRow(
         "Idle color",
         makeColor(p.colorIdle, (v) => {
           p.colorIdle = v;
@@ -415,6 +431,16 @@ export function createMenu(settings: Settings, save: () => void): MenuHandle {
       });
       row.appendChild(b);
     }
+    const restart = document.createElement("button");
+    restart.className = "dp-btn";
+    restart.type = "button";
+    restart.textContent = "Restart run";
+    restart.style.marginLeft = "auto";
+    restart.addEventListener("click", () => {
+      restartRun();
+    });
+    row.appendChild(restart);
+
     const reset = document.createElement("button");
     reset.className = "dp-btn danger";
     reset.type = "button";

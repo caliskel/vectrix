@@ -23,7 +23,27 @@ resize();
 window.addEventListener("resize", resize);
 
 const keys = new Set<string>();
-const menu = createMenu(settings, save);
+const menu = createMenu(settings, save, () => resetRun());
+
+// Normalize KeyboardEvent.code so the left/right variant of a modifier
+// shares a single binding (Shift, Control, Alt, Meta).
+function normalizeCode(code: string): string {
+  switch (code) {
+    case "ShiftLeft":
+    case "ShiftRight":
+      return "Shift";
+    case "ControlLeft":
+    case "ControlRight":
+      return "Control";
+    case "AltLeft":
+    case "AltRight":
+      return "Alt";
+    case "MetaLeft":
+    case "MetaRight":
+      return "Meta";
+  }
+  return code;
+}
 
 function isBoundKey(k: string): boolean {
   for (const v of Object.values(settings.bindings)) if (v === k) return true;
@@ -31,16 +51,16 @@ function isBoundKey(k: string): boolean {
 }
 
 window.addEventListener("keydown", (e) => {
-  const k = e.key.toLowerCase();
+  const code = normalizeCode(e.code);
 
   if (menu.isCapturing()) {
     e.preventDefault();
-    if (k === "escape") menu.cancelCapture();
-    else menu.acceptCapturedKey(k);
+    if (code === "Escape") menu.cancelCapture();
+    else menu.acceptCapturedKey(code);
     return;
   }
 
-  if (k === settings.bindings.menu1 || k === settings.bindings.menu2) {
+  if (code === settings.bindings.menu1 || code === settings.bindings.menu2) {
     e.preventDefault();
     menu.toggle();
     keys.clear();
@@ -52,20 +72,22 @@ window.addEventListener("keydown", (e) => {
     return;
   }
 
-  keys.add(k);
-  if (isBoundKey(k)) e.preventDefault();
+  keys.add(code);
+  if (isBoundKey(code)) e.preventDefault();
 });
 
 window.addEventListener("keyup", (e) => {
-  keys.delete(e.key.toLowerCase());
+  keys.delete(normalizeCode(e.code));
 });
 window.addEventListener("blur", () => keys.clear());
 
-const ACCEL = 2400;
-const MAX_SPEED = 440;
+// ACCEL is derived from maxSpeed so the friction-determined natural cap
+// stays slightly above maxSpeed and the cap clamp actually engages.
+const ACCEL_FACTOR = 9;
 const FRICTION = 8.0;
 const SPAWN_ANGLE_SPREAD = Math.PI / 3;
 const DEATH_PAUSE = 0.5;
+const WALL_THICKNESS = 6;
 const BEST_KEY = "dash-prototype:best";
 
 type Bullet = {
@@ -94,6 +116,7 @@ let bullets: Bullet[] = [];
 let spawnTimer = 0;
 let runTime = 0;
 let started = false;
+let initialFillDone = false;
 let best = Number.parseFloat(localStorage.getItem(BEST_KEY) ?? "0") || 0;
 
 type GameState = "alive" | "dying";
@@ -114,6 +137,7 @@ function resetRun() {
   spawnTimer = 0;
   runTime = 0;
   started = false;
+  initialFillDone = false;
 }
 resetRun();
 
@@ -172,26 +196,29 @@ function tryStartDash() {
 function spawnBullet() {
   const sz = settings.bullets.size;
   const h = sz / 2;
+  const inset = h + WALL_THICKNESS;
   const edge = Math.floor(Math.random() * 4);
+  const xRange = viewW - 2 * inset;
+  const yRange = viewH - 2 * inset;
   let x = 0;
   let y = 0;
   let nx = 0;
   let ny = 0;
   if (edge === 0) {
-    x = Math.random() * viewW;
-    y = h;
+    x = inset + Math.random() * xRange;
+    y = inset;
     ny = 1;
   } else if (edge === 1) {
-    x = viewW - h;
-    y = Math.random() * viewH;
+    x = viewW - inset;
+    y = inset + Math.random() * yRange;
     nx = -1;
   } else if (edge === 2) {
-    x = Math.random() * viewW;
-    y = viewH - h;
+    x = inset + Math.random() * xRange;
+    y = viewH - inset;
     ny = -1;
   } else {
-    x = h;
-    y = Math.random() * viewH;
+    x = inset;
+    y = inset + Math.random() * yRange;
     nx = 1;
   }
   const baseAngle = Math.atan2(ny, nx);
@@ -272,16 +299,18 @@ function frame(now: number) {
         player.facingX = input.x;
         player.facingY = input.y;
       }
-      player.vx += input.x * ACCEL * dt;
-      player.vy += input.y * ACCEL * dt;
+      const accel = settings.player.maxSpeed * ACCEL_FACTOR;
+      player.vx += input.x * accel * dt;
+      player.vy += input.y * accel * dt;
       const damp = Math.exp(-FRICTION * dt);
       player.vx *= damp;
       player.vy *= damp;
+      const maxSpeed = settings.player.maxSpeed;
       const cap = keys.has(settings.bindings.walk)
-        ? MAX_SPEED * settings.player.walkFactor
-        : MAX_SPEED;
+        ? maxSpeed * settings.player.walkFactor
+        : maxSpeed;
       const sp = Math.hypot(player.vx, player.vy);
-      if (sp > cap && (input.x !== 0 || input.y !== 0)) {
+      if (sp > cap) {
         const k = cap / sp;
         player.vx *= k;
         player.vy *= k;
@@ -297,53 +326,80 @@ function frame(now: number) {
     player.y += player.vy * dt;
 
     const half = settings.player.size / 2;
-    if (player.x < half) {
-      player.x = half;
+    const minX = WALL_THICKNESS + half;
+    const maxX = viewW - WALL_THICKNESS - half;
+    const minY = WALL_THICKNESS + half;
+    const maxY = viewH - WALL_THICKNESS - half;
+    if (player.x < minX) {
+      player.x = minX;
       player.vx = 0;
     }
-    if (player.y < half) {
-      player.y = half;
+    if (player.y < minY) {
+      player.y = minY;
       player.vy = 0;
     }
-    if (player.x > viewW - half) {
-      player.x = viewW - half;
+    if (player.x > maxX) {
+      player.x = maxX;
       player.vx = 0;
     }
-    if (player.y > viewH - half) {
-      player.y = viewH - half;
+    if (player.y > maxY) {
+      player.y = maxY;
       player.vy = 0;
     }
 
     if (started) {
-      const interval = settings.bullets.spawnIntervalMs / 1000;
+      if (
+        !initialFillDone &&
+        bullets.length >= settings.bullets.maxBullets
+      ) {
+        initialFillDone = true;
+      }
+      const baseInterval = settings.bullets.spawnIntervalMs / 1000;
+      const filling =
+        !initialFillDone && bullets.length < settings.bullets.maxBullets;
+      const effInterval = filling ? 0.04 : baseInterval;
+      const perTick = filling ? 4 : 1;
       spawnTimer += dt;
-      while (spawnTimer >= interval) {
-        spawnTimer -= interval;
-        spawnBullet();
+      while (
+        spawnTimer >= effInterval &&
+        bullets.length < settings.bullets.maxBullets
+      ) {
+        spawnTimer -= effInterval;
+        for (
+          let i = 0;
+          i < perTick && bullets.length < settings.bullets.maxBullets;
+          i++
+        ) {
+          spawnBullet();
+        }
       }
     }
 
     const bh = settings.bullets.size / 2;
+    const minBx = WALL_THICKNESS + bh;
+    const maxBx = viewW - WALL_THICKNESS - bh;
+    const minBy = WALL_THICKNESS + bh;
+    const maxBy = viewH - WALL_THICKNESS - bh;
     for (const b of bullets) {
       const px = b.x;
       const py = b.y;
       b.x += b.vx * dt;
       b.y += b.vy * dt;
       if (b.bounces) {
-        if (b.x < bh && px >= bh && b.vx < 0) {
-          b.x = bh;
+        if (b.x < minBx && px >= minBx && b.vx < 0) {
+          b.x = minBx;
           b.vx = -b.vx;
         }
-        if (b.x > viewW - bh && px <= viewW - bh && b.vx > 0) {
-          b.x = viewW - bh;
+        if (b.x > maxBx && px <= maxBx && b.vx > 0) {
+          b.x = maxBx;
           b.vx = -b.vx;
         }
-        if (b.y < bh && py >= bh && b.vy < 0) {
-          b.y = bh;
+        if (b.y < minBy && py >= minBy && b.vy < 0) {
+          b.y = minBy;
           b.vy = -b.vy;
         }
-        if (b.y > viewH - bh && py <= viewH - bh && b.vy > 0) {
-          b.y = viewH - bh;
+        if (b.y > maxBy && py <= maxBy && b.vy > 0) {
+          b.y = maxBy;
           b.vy = -b.vy;
         }
       }
@@ -377,6 +433,18 @@ function frame(now: number) {
 function render() {
   ctx.fillStyle = "#000";
   ctx.fillRect(0, 0, viewW, viewH);
+
+  // arena frame — drawn first so bullets/player visually sit on top of it
+  ctx.save();
+  ctx.strokeStyle = "rgba(255,255,255,0.6)";
+  ctx.lineWidth = WALL_THICKNESS;
+  ctx.strokeRect(
+    WALL_THICKNESS / 2,
+    WALL_THICKNESS / 2,
+    viewW - WALL_THICKNESS,
+    viewH - WALL_THICKNESS,
+  );
+  ctx.restore();
 
   const bSize = settings.bullets.size;
   ctx.fillStyle = settings.bullets.color;
