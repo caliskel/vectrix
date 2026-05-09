@@ -9,21 +9,25 @@ import type { Enemy, EnemyContext, EnemyType, Laser } from "./types";
 // burgundy) without needing canvas radial gradients. All iris layers
 // must stay fully opaque — only the upper gloss highlight is
 // translucent.
+// Iris stack fills almost the whole interior of the outer ring (~3.5px
+// dark gap), then steps inward in even 5px rings so the gradient reads
+// as depth rather than a target. Pupil is large and visibly black on
+// top of the burgundy core, with a tiny white catchlight.
 const WATCHER_RADIUS = 30;        // outer ring radius
-const OUTER_RING_W = 6;
-const IRIS_OUTER_R = 21;
-const IRIS_MID_R = 16;
-const IRIS_INNER_R = 11;
+const OUTER_RING_W = 5;
+const IRIS_OUTER_R = 24;
+const IRIS_MID_R = 19;
+const IRIS_INNER_R = 14;
 const IRIS_OUTER_COLOR = "#ff1744";
-const IRIS_MID_COLOR = "#a8001f";
-const IRIS_INNER_COLOR = "#3d0010";
-const PUPIL_RADIUS = 4;
-const PUPIL_HIGHLIGHT_R = 1.5;
-const PUPIL_HIGHLIGHT_OFFSET = 0.7;
-const GLOSS_OFFSET_Y = -22;
-const GLOSS_W = 14;
-const GLOSS_H = 6;
-const GLOSS_ALPHA = 0.18;
+const IRIS_MID_COLOR = "#c8002a";
+const IRIS_INNER_COLOR = "#6b0014";
+const PUPIL_RADIUS = 6;
+const PUPIL_HIGHLIGHT_R = 1.8;
+const PUPIL_HIGHLIGHT_OFFSET = 1.5;
+const GLOSS_OFFSET_Y = -16;
+const GLOSS_W = 12;
+const GLOSS_H = 5;
+const GLOSS_ALPHA = 0.2;
 const PUPIL_LERP_RATE = 10;
 const WATCHER_HP_MAX = 2;
 
