@@ -1,4 +1,3 @@
-import { drawNeon } from "../lib/neon";
 import {
   DEFAULT_PLAYER_PROFILE,
   type PlayerProfile,
@@ -80,30 +79,6 @@ const swatchDashParticles = need<HTMLElement>("#swatch-dash-particles");
 const resetBtn = need<HTMLButtonElement>("#profile-reset");
 const saveBtn = need<HTMLButtonElement>("#profile-save");
 
-// Pseudo-dash: every DEMO_INTERVAL the preview eye darts a few px to the
-// right and back over PSEUDO_DASH_DURATION, leaving a trail of sparks
-// in the chosen DASH PARTICLES color. The eye itself doesn't change
-// color — that's the whole point: showing the particle color in
-// context without recoloring the orb.
-const DEMO_INTERVAL = 3.0;
-const PSEUDO_DASH_DURATION = 0.2;
-const PSEUDO_DASH_OFFSET_PX = 28;
-let pseudoDashElapsed = -1; // -1 when idle, otherwise counts up to PSEUDO_DASH_DURATION
-let demoCooldown = 1.2;
-
-type Spark = {
-  x: number;
-  y: number;
-  vx: number;
-  vy: number;
-  size: number;
-  initialSize: number;
-  age: number;
-  lifetime: number;
-  color: string;
-};
-const sparks: Spark[] = [];
-
 (function initPreviewCanvas() {
   const dpr = window.devicePixelRatio || 1;
   previewCanvas.width = PREVIEW_CANVAS_SIZE * dpr;
@@ -169,11 +144,6 @@ function onPlayerOpen() {
   previewPlayer.closeAmount = 0;
   previewPlayer.x = PREVIEW_CANVAS_SIZE / 2;
   previewPlayer.y = PREVIEW_CANVAS_SIZE / 2;
-  // start the pseudo-dash with a small initial cooldown so it triggers
-  // soon after open, not on the first frame
-  pseudoDashElapsed = -1;
-  demoCooldown = 1.2;
-  sparks.length = 0;
   previewLast = performance.now();
   if (previewRafId === null) {
     previewRafId = requestAnimationFrame(previewFrame);
@@ -184,61 +154,6 @@ function stopPreview() {
   if (previewRafId !== null) {
     cancelAnimationFrame(previewRafId);
     previewRafId = null;
-  }
-}
-
-function spawnSpark(color: string) {
-  // emit "behind" the eye — leftward fan since the pseudo-dash always
-  // travels +x. Slight upward drift for a floaty trail look.
-  const angle = Math.PI + (Math.random() - 0.5) * 1.0;
-  const speed = 80 + Math.random() * 100;
-  const sz = 3 + Math.random() * 3;
-  sparks.push({
-    x: previewPlayer.x,
-    y: previewPlayer.y,
-    vx: Math.cos(angle) * speed,
-    vy: Math.sin(angle) * speed - 18,
-    size: sz,
-    initialSize: sz,
-    age: 0,
-    lifetime: 0.4 + Math.random() * 0.2,
-    color,
-  });
-}
-
-function updateSparks(dt: number) {
-  if (sparks.length === 0) return;
-  for (const s of sparks) {
-    s.age += dt;
-    s.x += s.vx * dt;
-    s.y += s.vy * dt;
-    const k = Math.pow(0.95, dt * 60);
-    s.vx *= k;
-    s.vy *= k;
-  }
-  for (let i = sparks.length - 1; i >= 0; i--) {
-    if (sparks[i].age >= sparks[i].lifetime) sparks.splice(i, 1);
-  }
-}
-
-function drawSparks(ctx: CanvasRenderingContext2D) {
-  for (const s of sparks) {
-    const t = s.age / s.lifetime;
-    const alpha = t < 0.5 ? 1 : Math.max(0, 1 - (t - 0.5) * 2);
-    const sz = Math.max(0.5, s.initialSize * (1 - t));
-    ctx.save();
-    ctx.globalAlpha = alpha;
-    drawNeon(
-      ctx,
-      () => {
-        ctx.fillStyle = s.color;
-        ctx.fillRect(s.x - sz / 2, s.y - sz / 2, sz, sz);
-      },
-      s.color,
-      8,
-      3,
-    );
-    ctx.restore();
   }
 }
 
@@ -253,41 +168,16 @@ function previewFrame(now: number) {
     dashDurationSec: FAKE_DASH_DURATION_SEC,
   });
 
-  // pseudo-dash: brief sideways nudge with sparks trailing behind,
-  // recurring on a cooldown. Eye colors stay on the picker idle values
-  // — only the sparks are the user's chosen DASH PARTICLES color.
-  if (pseudoDashElapsed >= 0) {
-    pseudoDashElapsed += dt;
-    const t = pseudoDashElapsed / PSEUDO_DASH_DURATION;
-    if (t >= 1) {
-      pseudoDashElapsed = -1;
-      previewPlayer.x = PREVIEW_CANVAS_SIZE / 2;
-    } else {
-      // 0 → +offset → 0 over the duration (half-sine arc)
-      const wave = Math.sin(t * Math.PI);
-      previewPlayer.x = PREVIEW_CANVAS_SIZE / 2 + PSEUDO_DASH_OFFSET_PX * wave;
-      // emit ~70 % of frames so the trail reads as a stream, not a wall
-      if (Math.random() < 0.7) spawnSpark(pickerDashParticles.value);
-    }
-  } else {
-    demoCooldown -= dt;
-    if (demoCooldown <= 0) {
-      pseudoDashElapsed = 0;
-      demoCooldown = DEMO_INTERVAL;
-    }
-  }
-  updateSparks(dt);
-
   const ctx = previewCanvas.getContext("2d");
   if (ctx) {
     ctx.clearRect(0, 0, PREVIEW_CANVAS_SIZE, PREVIEW_CANVAS_SIZE);
-    drawSparks(ctx);
     drawPlayerEye(ctx, previewPlayer, PREVIEW_PLAYER_SIZE, {
       ringColor: pickerOuter.value,
       glowColor: pickerOuter.value,
       pupilColor: pickerPupil.value,
       irisColor: pickerIris.value,
-      // dash eye stays canonical cyan in-game; preview keeps it consistent
+      // dash eye stays canonical cyan in-game; the preview never enters
+      // a dash state but keep this consistent in case the caller does
       ghostColor: "#00e5ff",
       dashDurationSec: FAKE_DASH_DURATION_SEC,
     });
