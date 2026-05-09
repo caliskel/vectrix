@@ -172,6 +172,18 @@ export const BRAKE_CUR_MAX = 60;
 // lets the player walk away if they keep moving but punishes ignoring
 // the eye while reading laser telegraphs.
 export const WATCHER_SPEED_FACTOR = 0.28;
+// Brake-and-aim feel: instead of a hard stop on entering aiming,
+// velocity decays each frame (DECEL_FACTOR is the per-60fps-frame
+// multiplier; converted to a frame-rate-independent factor in the sim).
+// On exit (cooldown) velocity ramps back up toward chase via a lerp.
+// The squash deformation sells the brake — 150 ms of held squash, then
+// 200 ms recovery to 1.0.
+export const WATCHER_DECEL_FACTOR = 0.88;
+export const WATCHER_ACCEL_LERP = 0.06;
+export const WATCHER_BRAKE_SQUASH_X = 0.88;
+export const WATCHER_BRAKE_STRETCH_Y = 1.12;
+export const WATCHER_BRAKE_SQUASH_DURATION_MS = 150;
+export const WATCHER_BRAKE_RECOVERY_MS = 200;
 
 // Bindings store KeyboardEvent.code values (layout-independent). Modifier
 // codes are normalized to drop the Left/Right side suffix (see normalizeCode

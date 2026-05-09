@@ -1,5 +1,13 @@
 import { audio } from "../audio";
-import { WATCHER_SPEED_FACTOR } from "../config";
+import {
+  WATCHER_ACCEL_LERP,
+  WATCHER_BRAKE_RECOVERY_MS,
+  WATCHER_BRAKE_SQUASH_DURATION_MS,
+  WATCHER_BRAKE_SQUASH_X,
+  WATCHER_BRAKE_STRETCH_Y,
+  WATCHER_DECEL_FACTOR,
+  WATCHER_SPEED_FACTOR,
+} from "../config";
 import { drawNeon } from "../neon";
 import type { Enemy, EnemyContext, EnemyType, Laser } from "./types";
 
@@ -39,6 +47,10 @@ const PHASE_COOLDOWN_SEC = 0.8;
 type WatcherPhase = "idle" | "aiming" | "firing" | "cooldown";
 
 const MAX_PUPIL_OFFSET = (IRIS_OUTER_R - PUPIL_RADIUS) * 0.7;
+const VELOCITY_SNAP_THRESHOLD = 5; // px/s; below this we kill drift to 0
+const BRAKE_SQUASH_SEC = WATCHER_BRAKE_SQUASH_DURATION_MS / 1000;
+const BRAKE_RECOVERY_SEC = WATCHER_BRAKE_RECOVERY_MS / 1000;
+const BRAKE_TOTAL_SEC = BRAKE_SQUASH_SEC + BRAKE_RECOVERY_SEC;
 
 export class Watcher implements Enemy {
   readonly type: EnemyType = "watcher";
@@ -55,6 +67,12 @@ export class Watcher implements Enemy {
   private phase: WatcherPhase = "idle";
   private phaseTimer = PHASE_IDLE_SEC;
   private dashIdAlreadyDamaged = -1;
+  // Brake squash state — set on idle→aiming transition. brakeAge < 0
+  // means inactive; otherwise it counts up in seconds and drives the
+  // squash/stretch transform applied in draw().
+  private brakeAge = -1;
+  private brakeDirX = 1;
+  private brakeDirY = 0;
 
   constructor(x: number, y: number) {
     this.x = x;
@@ -79,28 +97,64 @@ export class Watcher implements Enemy {
     if (this.destroyed) return;
     const { dt, player } = ctxRoom;
 
-    // Movement: freeze during aiming/firing so the laser is readable —
-    // the player gets a clean stop-then-aim tell. Chase resumes in
-    // cooldown/idle.
-    const frozen = this.phase === "aiming" || this.phase === "firing";
+    // Movement model per phase:
+    //   idle     — direct-set velocity toward player (full chase).
+    //   aiming   — coast: each frame velocity *= DECEL_FACTOR (raised
+    //              to dt*60 for frame-rate independence). Hard zero
+    //              once below the snap threshold so float drift can't
+    //              jiggle a "stopped" enemy.
+    //   firing   — fully stopped.
+    //   cooldown — accelerate back toward chase target via a lerp so
+    //              by the time idle begins the velocity already matches
+    //              the chase speed (no teleport-into-motion).
     const dx = player.x - this.x;
     const dy = player.y - this.y;
     const dist = Math.hypot(dx, dy);
-    if (frozen) {
-      this.vx = 0;
-      this.vy = 0;
-    } else {
-      const speed = ctxRoom.playerMaxSpeed * WATCHER_SPEED_FACTOR;
-      if (dist > 1e-3) {
-        const inv = 1 / dist;
-        this.vx = dx * inv * speed;
-        this.vy = dy * inv * speed;
-      } else {
+    const chaseSpeed = ctxRoom.playerMaxSpeed * WATCHER_SPEED_FACTOR;
+    let targetVx = 0;
+    let targetVy = 0;
+    if (dist > 1e-3) {
+      const inv = 1 / dist;
+      targetVx = dx * inv * chaseSpeed;
+      targetVy = dy * inv * chaseSpeed;
+    }
+
+    switch (this.phase) {
+      case "idle":
+        this.vx = targetVx;
+        this.vy = targetVy;
+        break;
+      case "aiming": {
+        const decelStep = Math.pow(WATCHER_DECEL_FACTOR, dt * 60);
+        this.vx *= decelStep;
+        this.vy *= decelStep;
+        if (
+          this.vx * this.vx + this.vy * this.vy <
+          VELOCITY_SNAP_THRESHOLD * VELOCITY_SNAP_THRESHOLD
+        ) {
+          this.vx = 0;
+          this.vy = 0;
+        }
+        break;
+      }
+      case "firing":
         this.vx = 0;
         this.vy = 0;
+        break;
+      case "cooldown": {
+        const k = 1 - Math.pow(1 - WATCHER_ACCEL_LERP, dt * 60);
+        this.vx += (targetVx - this.vx) * k;
+        this.vy += (targetVy - this.vy) * k;
+        break;
       }
-      this.x += this.vx * dt;
-      this.y += this.vy * dt;
+    }
+    this.x += this.vx * dt;
+    this.y += this.vy * dt;
+
+    // Tick brake squash timer
+    if (this.brakeAge >= 0) {
+      this.brakeAge += dt;
+      if (this.brakeAge >= BRAKE_TOTAL_SEC) this.brakeAge = -1;
     }
 
     // Pupil tracking — locked during aiming/firing (the "captured target"),
@@ -134,6 +188,19 @@ export class Watcher implements Enemy {
         const inv = 1 / Math.max(Math.hypot(dx, dy), 1e-6);
         this.pupilLockX = dx * inv * MAX_PUPIL_OFFSET;
         this.pupilLockY = dy * inv * MAX_PUPIL_OFFSET;
+
+        // Trigger brake squash. Direction is current motion (or fall
+        // back to chase target if velocity is already zero) so the
+        // squash axis aligns with the way the Watcher is "skidding".
+        const speed = Math.hypot(this.vx, this.vy);
+        if (speed > 1e-3) {
+          this.brakeDirX = this.vx / speed;
+          this.brakeDirY = this.vy / speed;
+        } else {
+          this.brakeDirX = dx * inv;
+          this.brakeDirY = dy * inv;
+        }
+        this.brakeAge = 0;
         const laser: Laser = {
           ownerType: "watcher",
           ownerEnemy: this,
@@ -170,6 +237,30 @@ export class Watcher implements Enemy {
 
   draw(ctx: CanvasRenderingContext2D): void {
     if (this.destroyed) return;
+
+    // Brake squash transform — held at full squash for the squash phase,
+    // then linearly recovers toward 1.0 over the recovery phase. Axis
+    // aligns with motion direction so the orb compresses along travel.
+    const squashing = this.brakeAge >= 0;
+    if (squashing) {
+      let scaleAlong: number;
+      let scalePerp: number;
+      if (this.brakeAge < BRAKE_SQUASH_SEC) {
+        scaleAlong = WATCHER_BRAKE_SQUASH_X;
+        scalePerp = WATCHER_BRAKE_STRETCH_Y;
+      } else {
+        const t = (this.brakeAge - BRAKE_SQUASH_SEC) / BRAKE_RECOVERY_SEC;
+        scaleAlong = WATCHER_BRAKE_SQUASH_X + (1 - WATCHER_BRAKE_SQUASH_X) * t;
+        scalePerp = WATCHER_BRAKE_STRETCH_Y + (1 - WATCHER_BRAKE_STRETCH_Y) * t;
+      }
+      const angle = Math.atan2(this.brakeDirY, this.brakeDirX);
+      ctx.save();
+      ctx.translate(this.x, this.y);
+      ctx.rotate(angle);
+      ctx.scale(scaleAlong, scalePerp);
+      ctx.rotate(-angle);
+      ctx.translate(-this.x, -this.y);
+    }
 
     // 1. Outer ring — stroke only (no fill). The unfilled annulus between
     //    ring and iris exposes the room background as a dark gap, which
@@ -249,7 +340,10 @@ export class Watcher implements Enemy {
     ctx.fill();
     ctx.restore();
 
-    // HP pips above the watcher
+    if (squashing) ctx.restore();
+
+    // HP pips above the watcher (drawn outside the squash transform so
+    // the UI overhead doesn't deform with the body)
     const dotSpacing = 10;
     const dotsY = this.y - WATCHER_RADIUS - 12;
     const startX = this.x - (dotSpacing * (WATCHER_HP_MAX - 1)) / 2;
