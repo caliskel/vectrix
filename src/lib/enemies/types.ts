@@ -2,7 +2,7 @@ import type { Bullet } from "../bullets";
 import type { FloatingText, Particle, Ring } from "../particles";
 import type { Player } from "../player";
 
-export type EnemyType = "turret" | "watcher";
+export type EnemyType = "turret" | "watcher" | "hunter";
 
 // Beam/laser entity owned by the room (not by any single enemy) so any
 // enemy can stamp one into the room state. Self-expires by age.
@@ -59,4 +59,10 @@ export interface Enemy {
    * the last damaged dashId internally.
    */
   tryDashDamage(dashId: number, px: number, py: number, half: number): boolean;
+  /**
+   * Optional reaction when this enemy was the one that dealt contact
+   * damage to the player — e.g. Hunter bouncing off so it doesn't
+   * camp on the player while i-frames tick down.
+   */
+  onContactDamage?(): void;
 }

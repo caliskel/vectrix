@@ -391,11 +391,17 @@ Each room is rebuilt fresh by its `buildRoomN()` factory on
   while the Watcher is alive and opens on clear with the same flash
   + sting flow. Door leads to Room 3.
 
-### Room 3 (placeholder)
+### Room 3
 
-- Closed border, no enemies, no door, `message: "Room 3 — coming
-  soon"`. Used to verify the Room 2 → Room 3 transition while
-  Room 3 content is in flight.
+- Player spawns at (150, 400). One **Hunter** at (950, 400). Same
+  right-wall door layout as Rooms 1–2 — door closed until the Hunter
+  is destroyed. On clear: door opens → Room 4 placeholder.
+
+### Room 4 (placeholder)
+
+- Closed border, no enemies, no door, `message: "Room 4 — coming
+  soon"`. Used to verify the Room 3 → Room 4 transition while
+  Room 4 content is in flight.
 
 ### Watcher (`lib/enemies/watcher.ts`)
 
@@ -423,6 +429,31 @@ Fragile (HP 2) but dangerous at distance.
 - Death: +800 score, double ring (red outer + white inner), 12
   particles split between PALETTE.bullet and white,
   `bulletBreak` cue. `console.log("Watcher destroyed")` for tracing.
+
+### Hunter (`lib/enemies/hunter.ts`)
+
+Inertial chaser — fast, fragile, can't turn instantly.
+
+- Body is a 4-vertex arrow polygon (`(-22,-12), (22,0), (-22,12),
+  (-10,0)` in local space) painted with a translucent fill +
+  neon outer stroke; rotated by `atan2(vy, vx)` so it always
+  points along its motion.
+- Physics: accelerates toward the player at 1500 px/s², capped at
+  `1.2 × player.maxSpeed` (≈528 at default settings). No wall
+  collision — Hunter clips through walls (TODO, same as Watcher).
+- Visual reactions to speed: when |v| > 250 the body stretches
+  1.15 × 0.9 along motion (bullet shape); 2 short speed lines
+  trail behind below 200 px/s, 4 lines of varied length above.
+  Outer-stroke glow blur ramps from 12 (idle) to 20 (max speed).
+- Damage: HP 1, dies on a single dash-through (`+600 score`).
+  Contact outside i-frames deals 1 damage to the player and the
+  Hunter bounces (`vx,vy *= -0.5`) with a 100 ms perpendicular
+  squeeze so it doesn't camp on the player while i-frames tick
+  down. The bounce wires through `Enemy.onContactDamage()` —
+  optional method on the Enemy interface that rooms-game calls
+  right after `takeHit()` in the contact loop.
+- Death: orange ring, 16 orange particles 300–450 px/s,
+  `bulletBreak` cue, `console.log("Hunter destroyed")`.
 
 ### Lasers (`lib/enemies/types.ts`)
 

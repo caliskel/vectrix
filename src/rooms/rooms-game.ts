@@ -51,6 +51,7 @@ import {
 import { buildRoom1, ROOM_H_PX, ROOM_W_PX } from "./room1";
 import { buildRoom2 } from "./room2";
 import { buildRoom3 } from "./room3";
+import { buildRoom4 } from "./room4";
 import type { Room } from "./room";
 
 const ACCEL_FACTOR = 9;
@@ -59,11 +60,12 @@ const HIT_IFRAME = 1.0;
 const HIT_VIGNETTE = 0.2;
 const TURRET_KILL_SCORE = 500;
 const WATCHER_KILL_SCORE = 800;
+const HUNTER_KILL_SCORE = 600;
 const LASER_DODGE_SCORE = 50;
 const LASER_HIT_PADDING = 6; // px added to player half for laser collision
 const SCREEN_SHAKE_DURATION_SEC = 0.2;
 const SCREEN_SHAKE_PX = 4;
-const ROOM_TOTAL = 3;
+const ROOM_TOTAL = 4;
 const ROOM_CLEAR_FLASH = 0.2;
 const ROOMS_BEST_KEY = "dash-proto:rooms-best";
 
@@ -337,6 +339,7 @@ export function start(canvas: HTMLCanvasElement): void {
   rooms.set("room1", buildRoom1());
   rooms.set("room2", buildRoom2());
   rooms.set("room3", buildRoom3());
+  rooms.set("room4", buildRoom4());
 
   const state: GameState = {
     runState: "playing",
@@ -376,6 +379,7 @@ export function start(canvas: HTMLCanvasElement): void {
     rooms.set("room1", buildRoom1());
     rooms.set("room2", buildRoom2());
     rooms.set("room3", buildRoom3());
+    rooms.set("room4", buildRoom4());
   }
 
   function restartRun() {
@@ -636,7 +640,44 @@ export function start(canvas: HTMLCanvasElement): void {
 
   function destroyEnemy(enemy: Enemy) {
     audio.play.bulletBreak();
-    if (enemy.type === "watcher") {
+    if (enemy.type === "hunter") {
+      state.score += HUNTER_KILL_SCORE;
+      addFloatingText(
+        floatingTexts,
+        `+${HUNTER_KILL_SCORE}`,
+        enemy.x,
+        enemy.y - 18,
+        {
+          size: 22,
+          color: "#fb923c",
+          lifetime: 0.7,
+        },
+      );
+      addRing(rings, enemy.x, enemy.y, {
+        startR: 8,
+        endR: 130,
+        color: "#fb923c",
+        lifetime: 0.45,
+      });
+      for (let i = 0; i < 16; i++) {
+        const a = Math.random() * Math.PI * 2;
+        const sp = 300 + Math.random() * 150;
+        particles.push({
+          x: enemy.x,
+          y: enemy.y,
+          vx: Math.cos(a) * sp,
+          vy: Math.sin(a) * sp,
+          initialSize: 4,
+          color: "#fb923c",
+          age: 0,
+          lifetime: 0.75,
+          glowStrong: 14,
+          glowSoft: 5,
+          drag: 0.96,
+        });
+      }
+      console.log("Hunter destroyed");
+    } else if (enemy.type === "watcher") {
       state.score += WATCHER_KILL_SCORE;
       addFloatingText(
         floatingTexts,
@@ -1068,6 +1109,7 @@ export function start(canvas: HTMLCanvasElement): void {
       for (const e of currentRoom.enemies) {
         if (e.overlapsPlayer(player.x, player.y, half)) {
           takeHit();
+          if (e.onContactDamage) e.onContactDamage();
           break;
         }
       }
@@ -1364,7 +1406,9 @@ export function start(canvas: HTMLCanvasElement): void {
           ? 2
           : currentRoom.id === "room3"
             ? 3
-            : 1;
+            : currentRoom.id === "room4"
+              ? 4
+              : 1;
     ctx.fillText(`${roomNum} / ${ROOM_TOTAL}`, colA, y0 + 14);
 
     const alive = aliveEnemies().length;
