@@ -157,6 +157,80 @@ Source: `src/lib/config.ts` and `src/lib/score.ts`.
 Storage key: `dash-proto:settings:v3`. Per-config best-score keys:
 `dash-prototype:score:Default|Easy|Normal|Hard`.
 
+## Main menu structure
+
+`index.html` is the landing page that picks between the modes and a
+couple of side panels. Same neon palette as the rest of the game,
+zero framework — pure HTML / CSS / a small TS module
+(`src/landing/main.ts`).
+
+Layout: a 2×2 grid of cards under the DASH title.
+
+| card     | accent             | action                                             |
+| -------- | ------------------ | -------------------------------------------------- |
+| SANDBOX  | purple `--player`  | `<a href="/sandbox.html">`                         |
+| ROOMS    | cyan `--player-dash` | `<a href="/rooms.html">`                         |
+| PLAYER   | yellow `#ffd60a`   | opens the Player overlay                           |
+| ABOUT    | neutral `--text`   | opens the About overlay                            |
+
+Both overlays share the same dark backdrop (`rgba(10,14,26,0.92)` +
+backdrop-filter blur), a centered frame, an `×` corner button that
+closes without saving, and an Esc handler. Tab is preventDefault'd
+while an overlay is open so focus doesn't leak under the modal.
+
+### Player overlay
+
+Two columns:
+
+- **Live preview canvas** (300 × 300, dpr-scaled). A `Player` from
+  `lib/player.ts` runs through `updateEye` + `drawPlayerEye` every
+  frame — same code path as in-game, so the preview is identical to
+  what rooms will render. The rAF loop is started on overlay open
+  and cancelled on close.
+- **Color form** with three rows (OUTER RING / IRIS / PUPIL). Each
+  has a label, a small description, a native `<input type="color">`,
+  and a 24 × 24 swatch that mirrors the picker. Picker `input`
+  events refresh the preview directly — no apply step.
+
+`SAVE & CLOSE` writes the current pickers to `localStorage` under
+`dash-proto:player-profile` and closes the overlay. `RESET` slams
+the pickers back to `DEFAULT_PLAYER_PROFILE`. `×` and Esc close
+without saving (the next open re-reads from localStorage so unsaved
+edits are discarded).
+
+### About overlay
+
+A monospace text block with the controls cheat sheet and a CLOSE
+button. Static — no animation, no state.
+
+### Player profile and where it applies
+
+```ts
+type PlayerProfile = {
+  outerRing: string; // default #ffffff
+  iris: string;      // default #0a0e1a (PALETTE.bg)
+  pupil: string;     // default #ffffff
+};
+```
+
+Helpers in `lib/player.ts`:
+
+- `loadPlayerProfile()` — reads the localStorage key with shape
+  guards; falls back to defaults on any partial / corrupt save.
+- `savePlayerProfile(profile)` — writes the JSON, swallows quota /
+  privacy errors.
+
+`drawPlayerEye` accepts an optional `profile` in its opts. When set
+it overrides `ringColor` / `pupilColor` / `irisColor` (default
+`PALETTE.bg`) — the eye reads as the player's customization
+regardless of dash/walk state.
+
+- **Rooms** loads the profile once at `start()` and forwards it on
+  every player render. So Rooms reflects the customization.
+- **Sandbox** does NOT pass `profile`; it keeps the existing
+  palette-driven dash/walk/idle color flips. Customization is a
+  Rooms-only feature for now.
+
 ## Rooms mode
 
 Story / scripted-encounter mode. First playable iteration: one real

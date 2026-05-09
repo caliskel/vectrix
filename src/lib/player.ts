@@ -56,6 +56,56 @@ function randomBlinkInterval(): number {
   );
 }
 
+// PlayerProfile — color customization owned by the landing-page editor
+// and applied in rooms. Sandbox keeps using the palette directly.
+export type PlayerProfile = {
+  outerRing: string;
+  iris: string;
+  pupil: string;
+};
+
+export const DEFAULT_PLAYER_PROFILE: PlayerProfile = {
+  outerRing: "#ffffff",
+  iris: "#0a0e1a",
+  pupil: "#ffffff",
+};
+
+export const PLAYER_PROFILE_KEY = "dash-proto:player-profile";
+
+export function loadPlayerProfile(): PlayerProfile {
+  try {
+    const raw = localStorage.getItem(PLAYER_PROFILE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as Partial<PlayerProfile>;
+      return {
+        outerRing:
+          typeof parsed.outerRing === "string"
+            ? parsed.outerRing
+            : DEFAULT_PLAYER_PROFILE.outerRing,
+        iris:
+          typeof parsed.iris === "string"
+            ? parsed.iris
+            : DEFAULT_PLAYER_PROFILE.iris,
+        pupil:
+          typeof parsed.pupil === "string"
+            ? parsed.pupil
+            : DEFAULT_PLAYER_PROFILE.pupil,
+      };
+    }
+  } catch {
+    // fall through to defaults
+  }
+  return { ...DEFAULT_PLAYER_PROFILE };
+}
+
+export function savePlayerProfile(profile: PlayerProfile): void {
+  try {
+    localStorage.setItem(PLAYER_PROFILE_KEY, JSON.stringify(profile));
+  } catch {
+    // ignore quota / privacy-mode errors
+  }
+}
+
 export type DashGhost = {
   x: number;
   y: number;
@@ -390,8 +440,16 @@ export type EyeRenderOpts = {
   pupilColor: string;
   ghostColor: string;
   dashDurationSec: number;
+  /** Defaults to PALETTE.bg when neither this nor profile.iris is set. */
+  irisColor?: string;
   blurStrong?: number;
   blurSoft?: number;
+  /**
+   * When provided, overrides ringColor / pupilColor / irisColor with the
+   * profile's values — the eye reads as the player's saved customization
+   * regardless of dash/walk state.
+   */
+  profile?: PlayerProfile;
 };
 
 export function drawPlayerEye(
@@ -437,6 +495,12 @@ export function drawPlayerEye(
   const baseX = p.x + sx;
   const baseY = p.y + sy;
 
+  // resolve final colors with profile precedence
+  const ringColor = opts.profile?.outerRing ?? opts.ringColor;
+  const pupilColor = opts.profile?.pupil ?? opts.pupilColor;
+  const irisColor = opts.profile?.iris ?? opts.irisColor ?? PALETTE.bg;
+  const glowColor = opts.profile?.outerRing ?? opts.glowColor;
+
   // ===== ghosts (drawn first, behind the live eye) =====
   if (p.dashGhosts.length > 0) {
     drawDashGhosts(ctx, p.dashGhosts, opts.ghostColor, eyeOpenY);
@@ -455,11 +519,11 @@ export function drawPlayerEye(
       } else {
         ctx.arc(0, 0, r, 0, Math.PI * 2);
       }
-      ctx.strokeStyle = opts.ringColor;
+      ctx.strokeStyle = ringColor;
       ctx.lineWidth = 2;
       ctx.stroke();
     },
-    opts.glowColor,
+    glowColor,
     opts.blurStrong ?? 25,
     opts.blurSoft ?? 10,
   );
@@ -472,7 +536,7 @@ export function drawPlayerEye(
   if (isDashing) {
     ctx.translate(p.dashDirX * irisShift, p.dashDirY * irisShift);
   }
-  ctx.fillStyle = PALETTE.bg;
+  ctx.fillStyle = irisColor;
   ctx.beginPath();
   ctx.arc(0, 0, irisR, 0, Math.PI * 2);
   ctx.fill();
@@ -480,12 +544,12 @@ export function drawPlayerEye(
   drawNeon(
     ctx,
     () => {
-      ctx.fillStyle = opts.pupilColor;
+      ctx.fillStyle = pupilColor;
       ctx.beginPath();
       ctx.arc(p.pupilOffsetX, p.pupilOffsetY, pupilR, 0, Math.PI * 2);
       ctx.fill();
     },
-    opts.pupilColor,
+    pupilColor,
     10,
     4,
   );
@@ -517,7 +581,7 @@ export function drawPlayerEye(
     ctx.clip();
     const lidH = blink * r;
     const lidW = r * Math.max(stretchX, 1) * 2 + 4;
-    ctx.fillStyle = opts.ringColor;
+    ctx.fillStyle = ringColor;
     ctx.fillRect(-lidW / 2, -r * Math.max(stretchY, 1) - 2, lidW, lidH + 2);
     ctx.fillRect(
       -lidW / 2,

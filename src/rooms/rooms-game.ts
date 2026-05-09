@@ -28,6 +28,7 @@ import {
   addRing,
 } from "../lib/particles";
 import {
+  type PlayerProfile,
   createPlayer,
   dashSpeed,
   drawPlayerEye,
@@ -35,6 +36,7 @@ import {
   eyeStartClosing,
   findNearestThreat,
   inputDirection,
+  loadPlayerProfile,
   resetEyeState,
   updateEye,
 } from "../lib/player";
@@ -90,6 +92,11 @@ export function start(canvas: HTMLCanvasElement): void {
   audio.setMasterVolume(settings.audio.master);
   audio.setSfxVolume(settings.audio.sfx);
   audio.setMusicVolume(settings.audio.music);
+
+  // Player profile from the landing-page editor (saved in localStorage).
+  // Loaded once at start; the editor lives on a different page so a
+  // change implies a navigation back, which re-runs start().
+  const profile: PlayerProfile = loadPlayerProfile();
 
   // Canvas / layout state
   let dpr = window.devicePixelRatio || 1;
@@ -805,6 +812,7 @@ export function start(canvas: HTMLCanvasElement): void {
         pupilColor,
         ghostColor: settings.player.colorDash,
         dashDurationSec: settings.dash.durationMs / 1000,
+        profile,
       });
     }
 
