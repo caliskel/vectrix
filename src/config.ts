@@ -34,11 +34,16 @@ export type DashSettings = {
   cooldownMs: number;
 };
 
+export type RunSettings = {
+  durationSec: number; // 0 = infinite, otherwise hard time limit in seconds
+};
+
 export type Settings = {
   bindings: Bindings;
   bullets: BulletsSettings;
   player: PlayerSettings;
   dash: DashSettings;
+  run: RunSettings;
 };
 
 export const STORAGE_KEY = "dash-proto:settings:v3";
@@ -79,6 +84,9 @@ export const DEFAULT_SETTINGS: Settings = {
     iframesMs: 150,
     cooldownMs: 400,
   },
+  run: {
+    durationSec: 0,
+  },
 };
 
 export type Preset = {
@@ -86,6 +94,7 @@ export type Preset = {
   player?: Partial<PlayerSettings>;
   dash?: Partial<DashSettings>;
   bindings?: Partial<Bindings>;
+  run?: Partial<RunSettings>;
 };
 
 export const PRESETS: Record<"Easy" | "Normal" | "Hard", Preset> = {

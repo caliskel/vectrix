@@ -144,6 +144,7 @@ export function createMenu(
     panel.className = "dp-panel";
     panel.appendChild(makeHeader());
     panel.appendChild(makeBindings());
+    panel.appendChild(makeRun());
     panel.appendChild(makeBullets());
     panel.appendChild(makePlayer());
     panel.appendChild(makeDash());
@@ -266,6 +267,27 @@ export function createMenu(
     s.appendChild(makeRow("Dash", makeBindButton("dash")));
     s.appendChild(makeRow("Open menu (1)", makeBindButton("menu1")));
     s.appendChild(makeRow("Open menu (2)", makeBindButton("menu2")));
+    return s;
+  }
+
+  function makeRun() {
+    const r = settings.run;
+    const s = makeSection("Run");
+    s.appendChild(
+      makeRow(
+        "Time limit",
+        makeSlider(
+          0,
+          300,
+          15,
+          r.durationSec,
+          (v) => (v === 0 ? "∞ (endless)" : `${v} s`),
+          (v) => {
+            r.durationSec = v;
+          },
+        ),
+      ),
+    );
     return s;
   }
 

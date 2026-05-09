@@ -117,7 +117,6 @@ const FRICTION = 8.0;
 const SPAWN_ANGLE_SPREAD = Math.PI / 3;
 const WALL_THICKNESS = 6;
 
-const RUN_DURATION = 60;
 const HIT_IFRAME = 1.0;
 const HIT_VIGNETTE = 0.2;
 const MULT_GROW = 0.2;
@@ -128,6 +127,7 @@ const MULT_DECAY_RATE = 0.5;
 const NEAR_MISS_BASE = 50;
 const DASH_BASE = 100;
 const NEAR_MISS_SPEED_THRESHOLD = 50;
+const HIT_PENALTY = 500;
 
 const SCORE_KEY_PREFIX = "dash-prototype:score:";
 
@@ -205,7 +205,7 @@ type EndSnapshot = {
 type GameRunState = {
   runState: "running" | "ended";
   endReason: "timeout" | "ko" | null;
-  timeLeft: number;
+  elapsed: number;
   hp: number;
   score: number;
   multiplier: number;
@@ -235,7 +235,7 @@ const player = {
 const state: GameRunState = {
   runState: "running",
   endReason: null,
-  timeLeft: RUN_DURATION,
+  elapsed: 0,
   hp: 3,
   score: 0,
   multiplier: 1.0,
@@ -261,7 +261,7 @@ let endSettingsBounds: Bounds | null = null;
 function resetRun() {
   state.runState = "running";
   state.endReason = null;
-  state.timeLeft = RUN_DURATION;
+  state.elapsed = 0;
   state.hp = 3;
   state.score = 0;
   state.multiplier = 1.0;
@@ -495,6 +495,13 @@ function awardNearMiss(b: Bullet) {
 function hitPlayer() {
   if (state.runState === "ended") return;
   state.hp -= 1;
+  state.score -= HIT_PENALTY;
+  addFloatingText(`-${HIT_PENALTY}`, player.x, player.y - settings.player.size, {
+    size: 24,
+    color: "#ff5555",
+    lifetime: 0.8,
+    vy: -40,
+  });
   state.multiplier = MULT_MIN;
   state.multiplierTimer = 0;
   state.hitIframeTime = HIT_IFRAME;
@@ -511,7 +518,7 @@ function endRun(reason: "timeout" | "ko") {
   state.endSnapshot = {
     score: state.score,
     bestMult: state.bestMultThisRun,
-    survived: RUN_DURATION - state.timeLeft,
+    survived: state.elapsed,
     configId: id,
     bestScore: id ? getBestScore(id) : null,
     newBest,
@@ -557,8 +564,9 @@ function frame(now: number) {
     }
   }
   if (started) {
-    state.timeLeft = Math.max(0, state.timeLeft - dt);
-    if (state.timeLeft <= 0) {
+    state.elapsed += dt;
+    const limit = settings.run.durationSec;
+    if (limit > 0 && state.elapsed >= limit) {
       endRun("timeout");
     }
   }
@@ -885,6 +893,7 @@ function drawHUD() {
   const x0 = 22;
   const y0 = 22;
   ctx.save();
+  ctx.globalAlpha = 0.6;
   ctx.textBaseline = "top";
   ctx.textAlign = "left";
 
@@ -894,10 +903,15 @@ function drawHUD() {
   ctx.fillText("TIME", x0, y0);
   ctx.fillText("HP", x0 + 220, y0);
 
-  // TIME value
+  // TIME value (countdown if a limit is set, otherwise count up)
   ctx.font = "600 22px ui-monospace, SFMono-Regular, Menlo, monospace";
   ctx.fillStyle = "#ffffff";
-  ctx.fillText(state.timeLeft.toFixed(1), x0, y0 + 14);
+  const limit = settings.run.durationSec;
+  const timeStr =
+    limit > 0
+      ? Math.max(0, limit - state.elapsed).toFixed(1)
+      : state.elapsed.toFixed(1);
+  ctx.fillText(timeStr, x0, y0 + 14);
 
   // hearts
   let heartX = x0 + 220;
