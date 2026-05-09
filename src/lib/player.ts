@@ -55,6 +55,7 @@ import {
   PUPIL_THREAT_RADIUS,
   SMASH_COOLDOWN_MS,
   SMASH_DURATION_MS,
+  SMASH_FULL_IMPACT_VELOCITY,
   SMASH_MAX_SQUASH,
   SMASH_MIN_IMPACT_VELOCITY,
   SMASH_MIN_SQUASH,
@@ -128,10 +129,6 @@ const SMASH_RECOVERY_SEC = SMASH_RECOVERY_MS / 1000;
 const SMASH_TOTAL_SEC = SMASH_DURATION_SEC + SMASH_RECOVERY_SEC;
 const SMASH_OVERSHOOT_SQUASH = 1.05; // peak overshoot scale along normal
 const SMASH_OVERSHOOT_STRETCH = 0.95; // peak overshoot scale perpendicular
-// Impact velocity above which the eye reaches full SMASH_MAX_SQUASH;
-// below SMASH_MIN_IMPACT_VELOCITY no smash is triggered. Linear lerp
-// in between picks the squash strength.
-const SMASH_FULL_IMPACT_VELOCITY = 500;
 const SMASH_COOLDOWN_SEC = SMASH_COOLDOWN_MS / 1000;
 
 function randomBlinkInterval(): number {

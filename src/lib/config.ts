@@ -188,7 +188,13 @@ export const ANISOTROPIC_STRETCH_VELOCITY_FACTOR = 900;
 // Cooldown gates re-trigger so a player resting against a wall with a
 // noisy velocity doesn't pulse.
 export const SMASH_MIN_IMPACT_VELOCITY = 200;
-export const SMASH_MAX_SQUASH = 0.6;
+// Impact velocity at which the squash reaches SMASH_MAX_SQUASH; below
+// SMASH_MIN_IMPACT_VELOCITY no smash fires; in between the squash
+// strength linearly interpolates from SMASH_MIN_SQUASH to MAX_SQUASH.
+// Bumped well above the player's max speed so normal play sits in the
+// middle of the range and never reaches the heaviest deformation.
+export const SMASH_FULL_IMPACT_VELOCITY = 800;
+export const SMASH_MAX_SQUASH = 0.78;
 export const SMASH_MIN_SQUASH = 0.85;
 export const SMASH_DURATION_MS = 120;
 export const SMASH_RECOVERY_MS = 200;
