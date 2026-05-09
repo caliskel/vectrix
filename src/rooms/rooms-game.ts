@@ -504,9 +504,9 @@ export function start(canvas: HTMLCanvasElement): void {
       }
       // keep the eye animation alive (closing, blink decay) while overlay is up
       updateEye(player, dt, {
-        isDashing: false,
         threat: null,
         size: settings.player.size,
+        dashDurationSec: settings.dash.durationMs / 1000,
       });
       render();
       requestAnimationFrame(frame);
@@ -677,9 +677,9 @@ export function start(canvas: HTMLCanvasElement): void {
 
     checkRoomCleared();
 
-    // eye state: pupil tracks the closest threat in the room
+    // eye state: pupil tracks the closest threat in the room, dash ghosts
+    // also spawn here while dashing
     updateEye(player, dt, {
-      isDashing: player.dashTime > 0,
       threat: findNearestThreat(
         player.x,
         player.y,
@@ -687,6 +687,7 @@ export function start(canvas: HTMLCanvasElement): void {
         currentRoom.enemies,
       ),
       size: settings.player.size,
+      dashDurationSec: settings.dash.durationMs / 1000,
     });
 
     // door overlap → transition
@@ -802,6 +803,8 @@ export function start(canvas: HTMLCanvasElement): void {
         ringColor,
         glowColor: ringColor,
         pupilColor,
+        ghostColor: settings.player.colorDash,
+        dashDurationSec: settings.dash.durationMs / 1000,
       });
     }
 

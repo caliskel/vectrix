@@ -106,6 +106,26 @@ export const PARTICLE_TRAIL_MIN_SPEED = 80;
 export const PARTICLE_LATERAL_JITTER = 60;
 export const PARTICLE_DRAG = 0.95;
 
+// Dash visual tuning. Stretch puts the outer ring into a teardrop along
+// the dash direction; ghosts stamp the silhouette behind the player so
+// the streak reads as a real teleport rather than a smear.
+export const DASH_STRETCH_X = 1.4;
+export const DASH_STRETCH_Y = 0.7;
+export const DASH_STRETCH_PEAK_X = 1.6;
+export const DASH_STRETCH_END_X = 1.1;
+export const DASH_STRETCH_PEAK_PHASE_MS = 80;
+export const DASH_STRETCH_END_PHASE_MS = 40;
+export const DASH_GHOST_INTERVAL_MS = 25;
+export const DASH_GHOST_LIFETIME_MS = 250;
+export const DASH_GHOST_INITIAL_ALPHA = 0.5;
+
+// Eyelid blink — covers the eye with same-colored top + bottom lids
+// instead of squeezing the whole orb.
+export const BLINK_INTERVAL_MIN_MS = 4000;
+export const BLINK_INTERVAL_MAX_MS = 7000;
+export const BLINK_CLOSE_DURATION_MS = 70;
+export const BLINK_OPEN_DURATION_MS = 130;
+
 // Bindings store KeyboardEvent.code values (layout-independent). Modifier
 // codes are normalized to drop the Left/Right side suffix (see normalizeCode
 // in main.ts) so either Shift key counts as "Shift", etc.

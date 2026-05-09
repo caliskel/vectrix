@@ -1,15 +1,57 @@
-import type { Bindings } from "./config";
+import {
+  BLINK_CLOSE_DURATION_MS,
+  BLINK_INTERVAL_MAX_MS,
+  BLINK_INTERVAL_MIN_MS,
+  BLINK_OPEN_DURATION_MS,
+  DASH_GHOST_INITIAL_ALPHA,
+  DASH_GHOST_INTERVAL_MS,
+  DASH_GHOST_LIFETIME_MS,
+  DASH_STRETCH_END_PHASE_MS,
+  DASH_STRETCH_END_X,
+  DASH_STRETCH_PEAK_PHASE_MS,
+  DASH_STRETCH_PEAK_X,
+  DASH_STRETCH_X,
+  DASH_STRETCH_Y,
+  type Bindings,
+} from "./config";
 import { drawNeon } from "./neon";
 import { PALETTE } from "./palette";
 
-// Eye-state durations (seconds).
 const SHAKE_DURATION = 0.2;
 const DILATE_DURATION = 0.3;
-const BLINK_DURATION = 0.2;
 const CLOSE_DURATION = 0.6;
-const PUPIL_LERP_RATE = 8; // 1 - exp(-rate * dt) ≈ 0.12 at 60 fps
+const PUPIL_LERP_RATE = 8;
 const SHAKE_RADIUS = 3;
-const PUPIL_DILATE_PEAK = 0.5; // +50%
+const PUPIL_DILATE_PEAK = 0.5;
+
+const BLINK_CLOSE_SEC = BLINK_CLOSE_DURATION_MS / 1000;
+const BLINK_OPEN_SEC = BLINK_OPEN_DURATION_MS / 1000;
+const BLINK_INTERVAL_MIN_SEC = BLINK_INTERVAL_MIN_MS / 1000;
+const BLINK_INTERVAL_MAX_SEC = BLINK_INTERVAL_MAX_MS / 1000;
+const BLINK_CYCLE_SEC = BLINK_CLOSE_SEC + BLINK_OPEN_SEC;
+const DASH_GHOST_INTERVAL_SEC = DASH_GHOST_INTERVAL_MS / 1000;
+const DASH_GHOST_LIFETIME_SEC = DASH_GHOST_LIFETIME_MS / 1000;
+const DASH_PEAK_SEC = DASH_STRETCH_PEAK_PHASE_MS / 1000;
+const DASH_END_SEC = DASH_STRETCH_END_PHASE_MS / 1000;
+
+function randomBlinkInterval(): number {
+  return (
+    BLINK_INTERVAL_MIN_SEC +
+    Math.random() * (BLINK_INTERVAL_MAX_SEC - BLINK_INTERVAL_MIN_SEC)
+  );
+}
+
+export type DashGhost = {
+  x: number;
+  y: number;
+  dirX: number;
+  dirY: number;
+  stretchX: number;
+  stretchY: number;
+  size: number;
+  age: number;
+  lifetime: number;
+};
 
 export type Player = {
   x: number;
@@ -26,12 +68,18 @@ export type Player = {
   // ----- eye state -----
   pupilOffsetX: number;
   pupilOffsetY: number;
-  shakeTime: number;     // counts down after a hit
-  dilateTime: number;    // counts down after a hit (pupil grows then settles)
-  blinkTime: number;     // counts down during a blink
-  blinkCooldown: number; // counts down to the next blink
-  isClosing: boolean;    // mode flips this on death
-  closeAmount: number;   // 0..1 animated toward isClosing
+  shakeTime: number;
+  dilateTime: number;
+  // blink: 0..1 progress derived from blinkActive + blinkElapsed
+  blinkActive: boolean;
+  blinkElapsed: number;
+  blinkCooldown: number;
+  // open/close (death) — independent of blink
+  isClosing: boolean;
+  closeAmount: number;
+  // dash ghost trail — captured stamps of the outer ring
+  dashGhosts: DashGhost[];
+  ghostSpawnTimer: number;
 };
 
 export function createPlayer(): Player {
@@ -51,10 +99,13 @@ export function createPlayer(): Player {
     pupilOffsetY: 0,
     shakeTime: 0,
     dilateTime: 0,
-    blinkTime: 0,
-    blinkCooldown: 4 + Math.random() * 3,
+    blinkActive: false,
+    blinkElapsed: 0,
+    blinkCooldown: randomBlinkInterval(),
     isClosing: false,
     closeAmount: 0,
+    dashGhosts: [],
+    ghostSpawnTimer: 0,
   };
 }
 
@@ -63,14 +114,15 @@ export function resetEyeState(p: Player): void {
   p.pupilOffsetY = 0;
   p.shakeTime = 0;
   p.dilateTime = 0;
-  p.blinkTime = 0;
-  p.blinkCooldown = 4 + Math.random() * 3;
+  p.blinkActive = false;
+  p.blinkElapsed = 0;
+  p.blinkCooldown = randomBlinkInterval();
   p.isClosing = false;
   p.closeAmount = 0;
+  p.dashGhosts = [];
+  p.ghostSpawnTimer = 0;
 }
 
-// Triggered by a damaging hit. Pupil dilates, eye shakes briefly,
-// pupil tracking is suspended for the shake window.
 export function eyeOnHit(p: Player): void {
   p.shakeTime = SHAKE_DURATION;
   p.dilateTime = DILATE_DURATION;
@@ -80,7 +132,6 @@ export function eyeStartClosing(p: Player): void {
   p.isClosing = true;
 }
 
-// Resolve normalized movement input from currently-pressed keys.
 export function inputDirection(
   keys: Set<string>,
   bindings: Bindings,
@@ -99,15 +150,11 @@ export function inputDirection(
   return { x, y };
 }
 
-// Dash speed derived from configured distance and duration so both menu
-// sliders are live (settings.dash.distance / durationMs).
 export function dashSpeed(distance: number, durationMs: number): number {
   const dur = durationMs / 1000;
   return dur > 0 ? distance / dur : 0;
 }
 
-// Closest threat (bullet or enemy) to the player. Used by the pupil to
-// pick what to look at. Returns null when nothing is on the field.
 type Pointable = { x: number; y: number };
 type EnemyLike = { x: number; y: number; isDead: () => boolean };
 
@@ -143,35 +190,63 @@ export function findNearestThreat(
   return best;
 }
 
-// Per-frame update for the eye-state values: shake/dilate decay,
-// blink scheduler + animation, pupil tracking with inertia, and the
-// open/close animation. Caller passes the current size to derive the
-// pupil's allowed travel range.
+// Dash deformation factor along the dash axis. Combines a "pop" peak
+// during the first frames, a stable middle, and a small squash at the
+// tail. Ghost spawning captures this snapshot too.
+function dashStretchX(
+  dashTimeRemaining: number,
+  dashDurationSec: number,
+): number {
+  const elapsed = dashDurationSec - dashTimeRemaining;
+  if (elapsed < DASH_PEAK_SEC) {
+    const t = elapsed / DASH_PEAK_SEC;
+    return DASH_STRETCH_PEAK_X + (DASH_STRETCH_X - DASH_STRETCH_PEAK_X) * t;
+  }
+  if (dashTimeRemaining < DASH_END_SEC) {
+    const t = 1 - dashTimeRemaining / DASH_END_SEC;
+    return DASH_STRETCH_X + (DASH_STRETCH_END_X - DASH_STRETCH_X) * t;
+  }
+  return DASH_STRETCH_X;
+}
+
+function blinkProgress(p: Player): number {
+  if (!p.blinkActive) return 0;
+  if (p.blinkElapsed < BLINK_CLOSE_SEC) {
+    return p.blinkElapsed / BLINK_CLOSE_SEC;
+  }
+  return 1 - (p.blinkElapsed - BLINK_CLOSE_SEC) / BLINK_OPEN_SEC;
+}
+
 export function updateEye(
   p: Player,
   dt: number,
   options: {
-    isDashing: boolean;
     threat: Pointable | null;
     size: number;
+    dashDurationSec: number;
   },
 ): void {
   // shake/dilate countdown
   if (p.shakeTime > 0) p.shakeTime = Math.max(0, p.shakeTime - dt);
   if (p.dilateTime > 0) p.dilateTime = Math.max(0, p.dilateTime - dt);
 
-  // blink scheduling
-  if (p.blinkTime > 0) {
-    p.blinkTime = Math.max(0, p.blinkTime - dt);
+  // blink scheduler
+  if (p.blinkActive) {
+    p.blinkElapsed += dt;
+    if (p.blinkElapsed >= BLINK_CYCLE_SEC) {
+      p.blinkActive = false;
+      p.blinkElapsed = 0;
+      p.blinkCooldown = randomBlinkInterval();
+    }
   } else {
     p.blinkCooldown -= dt;
     if (p.blinkCooldown <= 0) {
-      p.blinkTime = BLINK_DURATION;
-      p.blinkCooldown = 4 + Math.random() * 3;
+      p.blinkActive = true;
+      p.blinkElapsed = 0;
     }
   }
 
-  // open/close animation
+  // open/close (death) animation
   const closeSpeed = 1 / CLOSE_DURATION;
   if (p.isClosing) {
     p.closeAmount = Math.min(1, p.closeAmount + closeSpeed * dt);
@@ -179,11 +254,38 @@ export function updateEye(
     p.closeAmount = Math.max(0, p.closeAmount - closeSpeed * dt);
   }
 
-  // pupil tracking
-  if (p.shakeTime > 0) {
-    // tracking suspended during shake — the pupil "panics" in place
-    return;
+  const isDashing = p.dashTime > 0;
+
+  // dash ghost emission
+  if (isDashing) {
+    p.ghostSpawnTimer += dt;
+    while (p.ghostSpawnTimer >= DASH_GHOST_INTERVAL_SEC) {
+      p.ghostSpawnTimer -= DASH_GHOST_INTERVAL_SEC;
+      const sx = dashStretchX(p.dashTime, options.dashDurationSec);
+      p.dashGhosts.push({
+        x: p.x,
+        y: p.y,
+        dirX: p.dashDirX,
+        dirY: p.dashDirY,
+        stretchX: sx,
+        stretchY: DASH_STRETCH_Y,
+        size: options.size,
+        age: 0,
+        lifetime: DASH_GHOST_LIFETIME_SEC,
+      });
+    }
+  } else {
+    p.ghostSpawnTimer = 0;
   }
+
+  // age + cull ghosts
+  for (const g of p.dashGhosts) g.age += dt;
+  if (p.dashGhosts.length > 0) {
+    p.dashGhosts = p.dashGhosts.filter((g) => g.age < g.lifetime);
+  }
+
+  // pupil tracking — suspended during shake (panic in place)
+  if (p.shakeTime > 0) return;
 
   const irisR = options.size * 0.42;
   const pupilR = options.size * 0.18;
@@ -191,7 +293,7 @@ export function updateEye(
 
   let dx = 0;
   let dy = 0;
-  if (options.isDashing) {
+  if (isDashing) {
     const len = Math.hypot(p.dashDirX, p.dashDirY) || 1;
     dx = (p.dashDirX / len) * maxOffset;
     dy = (p.dashDirY / len) * maxOffset;
@@ -202,7 +304,6 @@ export function updateEye(
     dx = (tdx / tlen) * maxOffset;
     dy = (tdy / tlen) * maxOffset;
   }
-  // ...else target is (0,0) so pupil drifts forward when nothing's around.
 
   const k = 1 - Math.exp(-PUPIL_LERP_RATE * dt);
   p.pupilOffsetX += (dx - p.pupilOffsetX) * k;
@@ -213,6 +314,8 @@ export type EyeRenderOpts = {
   ringColor: string;
   glowColor: string;
   pupilColor: string;
+  ghostColor: string;
+  dashDurationSec: number;
   blurStrong?: number;
   blurSoft?: number;
 };
@@ -233,23 +336,23 @@ export function drawPlayerEye(
   const dilateFactor = 1 + PUPIL_DILATE_PEAK * dilateProgress;
   const pupilR = pupilRBase * dilateFactor;
 
-  // blink scaleY (1 → 0.1 → 1 over BLINK_DURATION)
-  let blinkScale = 1;
-  if (p.blinkTime > 0) {
-    const elapsed = BLINK_DURATION - p.blinkTime;
-    const half = BLINK_DURATION / 2;
-    if (elapsed < half) {
-      blinkScale = 1 - 0.9 * (elapsed / half);
-    } else {
-      blinkScale = 0.1 + 0.9 * ((elapsed - half) / half);
-    }
+  // dash deformation
+  const isDashing = p.dashTime > 0;
+  let stretchX = 1;
+  let stretchY = 1;
+  let dashAngle = 0;
+  let irisShift = 0;
+  if (isDashing && opts.dashDurationSec > 0) {
+    stretchX = dashStretchX(p.dashTime, opts.dashDurationSec);
+    stretchY = DASH_STRETCH_Y;
+    dashAngle = Math.atan2(p.dashDirY, p.dashDirX);
+    irisShift = r * stretchX * 0.3;
   }
 
-  // close amount drives a vertical squeeze; multiplied with blink so a
-  // blink mid-death still reads
-  const eyeScaleY = blinkScale * (1 - p.closeAmount);
+  // close (death) only — vertical squeeze of the entire eye
+  const eyeOpenY = 1 - p.closeAmount;
 
-  // shake jitter (one random offset per frame, applied as translate)
+  // shake jitter (one offset per frame)
   let sx = 0;
   let sy = 0;
   if (p.shakeTime > 0) {
@@ -257,32 +360,49 @@ export function drawPlayerEye(
     sy = (Math.random() * 2 - 1) * SHAKE_RADIUS;
   }
 
-  ctx.save();
-  ctx.translate(p.x + sx, p.y + sy);
-  ctx.scale(1, Math.max(0.001, eyeScaleY));
+  const baseX = p.x + sx;
+  const baseY = p.y + sy;
 
-  // outer ring with the neon halo — this is the main player-color cue
+  // ===== ghosts (drawn first, behind the live eye) =====
+  if (p.dashGhosts.length > 0) {
+    drawDashGhosts(ctx, p.dashGhosts, opts.ghostColor, eyeOpenY);
+  }
+
+  // ===== outer ring (deformed in dash) =====
+  ctx.save();
+  ctx.translate(baseX, baseY);
+  ctx.scale(1, Math.max(0.001, eyeOpenY));
   drawNeon(
     ctx,
     () => {
+      ctx.beginPath();
+      if (isDashing) {
+        ctx.ellipse(0, 0, r * stretchX, r * stretchY, dashAngle, 0, Math.PI * 2);
+      } else {
+        ctx.arc(0, 0, r, 0, Math.PI * 2);
+      }
       ctx.strokeStyle = opts.ringColor;
       ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.arc(0, 0, r, 0, Math.PI * 2);
       ctx.stroke();
     },
     opts.glowColor,
     opts.blurStrong ?? 25,
     opts.blurSoft ?? 10,
   );
+  ctx.restore();
 
-  // dark iris fills the inside so the pupil reads as a bright disc
+  // ===== iris + pupil + highlight (NOT deformed; shifted forward in dash) =====
+  ctx.save();
+  ctx.translate(baseX, baseY);
+  ctx.scale(1, Math.max(0.001, eyeOpenY));
+  if (isDashing) {
+    ctx.translate(p.dashDirX * irisShift, p.dashDirY * irisShift);
+  }
   ctx.fillStyle = PALETTE.bg;
   ctx.beginPath();
   ctx.arc(0, 0, irisR, 0, Math.PI * 2);
   ctx.fill();
 
-  // pupil — softly glowing
   drawNeon(
     ctx,
     () => {
@@ -296,7 +416,6 @@ export function drawPlayerEye(
     4,
   );
 
-  // tiny upper-left highlight on the pupil (relative to pupil center)
   ctx.fillStyle = "#ffffff";
   ctx.beginPath();
   ctx.arc(
@@ -307,6 +426,66 @@ export function drawPlayerEye(
     Math.PI * 2,
   );
   ctx.fill();
-
   ctx.restore();
+
+  // ===== eyelids (clipped to the outer-ring shape) =====
+  const blink = blinkProgress(p);
+  if (blink > 0) {
+    ctx.save();
+    ctx.translate(baseX, baseY);
+    ctx.scale(1, Math.max(0.001, eyeOpenY));
+    ctx.beginPath();
+    if (isDashing) {
+      ctx.ellipse(0, 0, r * stretchX, r * stretchY, dashAngle, 0, Math.PI * 2);
+    } else {
+      ctx.arc(0, 0, r, 0, Math.PI * 2);
+    }
+    ctx.clip();
+    const lidH = blink * r;
+    const lidW = r * Math.max(stretchX, 1) * 2 + 4;
+    ctx.fillStyle = opts.ringColor;
+    ctx.fillRect(-lidW / 2, -r * Math.max(stretchY, 1) - 2, lidW, lidH + 2);
+    ctx.fillRect(
+      -lidW / 2,
+      r * Math.max(stretchY, 1) - lidH,
+      lidW,
+      lidH + 2,
+    );
+    ctx.restore();
+  }
+}
+
+function drawDashGhosts(
+  ctx: CanvasRenderingContext2D,
+  ghosts: DashGhost[],
+  color: string,
+  eyeOpenY: number,
+): void {
+  for (const g of ghosts) {
+    const t = g.age / g.lifetime;
+    const alpha = (1 - t) * DASH_GHOST_INITIAL_ALPHA;
+    if (alpha <= 0) continue;
+    const fade = 1 - t * 0.3; // shrink slightly as it ages
+    const ghostAngle = Math.atan2(g.dirY, g.dirX);
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    // ghosts sit at their captured world positions; they ride the
+    // same close (death) squeeze so they fade with the player
+    ctx.translate(g.x, g.y);
+    ctx.scale(1, Math.max(0.001, eyeOpenY));
+    ctx.beginPath();
+    ctx.ellipse(
+      0,
+      0,
+      (g.size / 2) * g.stretchX * fade,
+      (g.size / 2) * g.stretchY * fade,
+      ghostAngle,
+      0,
+      Math.PI * 2,
+    );
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.restore();
+  }
 }

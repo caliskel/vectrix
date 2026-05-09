@@ -930,9 +930,9 @@ function frame(now: number) {
       state.hitVignetteTime = Math.max(0, state.hitVignetteTime - dt);
     // keep the eye animation alive (closing, blink decay) while overlay is up
     updateEye(player, dt, {
-      isDashing: false,
       threat: null,
       size: settings.player.size,
+      dashDurationSec: settings.dash.durationMs / 1000,
     });
     render();
     requestAnimationFrame(frame);
@@ -1240,11 +1240,11 @@ function frame(now: number) {
     bullets = bullets.filter((b) => !consumed.has(b));
   }
 
-  // eye state: pupil tracks the closest bullet
+  // eye state: pupil tracks the closest bullet, dash ghosts spawn here too
   updateEye(player, dt, {
-    isDashing: player.dashTime > 0,
     threat: findNearestThreat(player.x, player.y, bullets),
     size: settings.player.size,
+    dashDurationSec: settings.dash.durationMs / 1000,
   });
 
   // pickups: age, expire, collect
@@ -1406,6 +1406,8 @@ function render() {
       ringColor,
       glowColor: glow,
       pupilColor,
+      ghostColor: settings.player.colorDash,
+      dashDurationSec: settings.dash.durationMs / 1000,
     });
   }
 
