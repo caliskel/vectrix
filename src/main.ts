@@ -7,6 +7,15 @@ import {
   type Settings,
 } from "./config";
 import { createMenu } from "./menu";
+import {
+  PICKUP_COLORS,
+  PICKUP_HALF,
+  PICKUP_LABELS,
+  drawPickup,
+  drawPickupIcon,
+  rollPickupType,
+  type Pickup,
+} from "./pickups";
 
 const settings: Settings = loadSettings();
 const save = () => saveSettings(settings);
@@ -202,6 +211,16 @@ type EndSnapshot = {
   newBest: boolean;
 };
 
+type ShieldState = { remaining: number; charges: number };
+type ScoreBoostState = { remaining: number };
+type DashRushState = { remaining: number };
+
+type ActiveEffects = {
+  shield: ShieldState | null;
+  scoreBoost: ScoreBoostState | null;
+  dashRush: DashRushState | null;
+};
+
 type GameRunState = {
   runState: "running" | "ended";
   endReason: "timeout" | "ko" | null;
@@ -215,6 +234,7 @@ type GameRunState = {
   hitVignetteTime: number;
   dashId: number;
   dashChain: number;
+  effects: ActiveEffects;
   endSnapshot: EndSnapshot | null;
 };
 
@@ -245,10 +265,12 @@ const state: GameRunState = {
   hitVignetteTime: 0,
   dashId: 0,
   dashChain: 0,
+  effects: { shield: null, scoreBoost: null, dashRush: null },
   endSnapshot: null,
 };
 
 let bullets: Bullet[] = [];
+let pickups: Pickup[] = [];
 let spawnTimer = 0;
 let started = false;
 let initialFillDone = false;
@@ -271,6 +293,7 @@ function resetRun() {
   state.hitVignetteTime = 0;
   state.dashId = 0;
   state.dashChain = 0;
+  state.effects = { shield: null, scoreBoost: null, dashRush: null };
   state.endSnapshot = null;
 
   player.x = viewW / 2;
@@ -284,6 +307,7 @@ function resetRun() {
   player.cooldown = 0;
 
   bullets = [];
+  pickups = [];
   spawnTimer = 0;
   started = false;
   initialFillDone = false;
@@ -396,7 +420,8 @@ function spawnBullet() {
 }
 
 function aabbHit(b: Bullet): boolean {
-  const ph = settings.player.size / 2;
+  let ph = settings.player.size / 2;
+  if (state.effects.shield) ph *= settings.pickups.shield.hitboxMul;
   const bh = settings.bullets.size / 2;
   return (
     Math.abs(b.x - player.x) < ph + bh && Math.abs(b.y - player.y) < ph + bh
@@ -448,6 +473,8 @@ function addRing(
 }
 
 function bumpMultiplier() {
+  // while a score boost is active the multiplier is frozen
+  if (state.effects.scoreBoost) return;
   state.multiplier = Math.min(MULT_MAX, state.multiplier + MULT_GROW);
   state.multiplierTimer = 0;
   if (state.multiplier > state.bestMultThisRun) {
@@ -472,6 +499,93 @@ function awardDashThrough(b: Bullet) {
     endR: settings.bullets.size / 2 + 14,
     color: "#ffffff",
     lifetime: 0.18,
+  });
+  // chance to drop a pickup at the bullet's position
+  if (Math.random() < settings.pickups.dropChance) {
+    const type = rollPickupType(settings.pickups.weights);
+    pickups.push({
+      x: b.x,
+      y: b.y,
+      type,
+      age: 0,
+      lifetime: settings.pickups.lifetime,
+    });
+  }
+}
+
+function applyPickup(p: Pickup) {
+  const color = PICKUP_COLORS[p.type];
+  const label = PICKUP_LABELS[p.type];
+  switch (p.type) {
+    case "hp":
+      if (state.hp < 3) {
+        state.hp += 1;
+        addFloatingText(label, p.x, p.y - 18, {
+          color,
+          size: 18,
+          lifetime: 0.7,
+        });
+      } else {
+        const bonus = settings.pickups.heal.scoreOnFull;
+        state.score += bonus;
+        addFloatingText(`+${bonus}`, p.x, p.y - 18, {
+          color,
+          size: 18,
+          lifetime: 0.7,
+        });
+      }
+      break;
+    case "shield": {
+      const cfg = settings.pickups.shield;
+      if (state.effects.shield) {
+        state.effects.shield.remaining = cfg.duration;
+        state.effects.shield.charges = cfg.charges;
+      } else {
+        state.effects.shield = {
+          remaining: cfg.duration,
+          charges: cfg.charges,
+        };
+      }
+      addFloatingText(label, p.x, p.y - 18, {
+        color,
+        size: 18,
+        lifetime: 0.7,
+      });
+      break;
+    }
+    case "scoreBoost": {
+      const cfg = settings.pickups.scoreBoost;
+      state.multiplier = Math.min(MULT_MAX, state.multiplier + cfg.bonus);
+      state.effects.scoreBoost = { remaining: cfg.duration };
+      if (state.multiplier > state.bestMultThisRun) {
+        state.bestMultThisRun = state.multiplier;
+      }
+      addFloatingText(label, p.x, p.y - 18, {
+        color,
+        size: 18,
+        lifetime: 0.7,
+      });
+      break;
+    }
+    case "dashRush": {
+      state.effects.dashRush = {
+        remaining: settings.pickups.dashRush.duration,
+      };
+      player.cooldown = 0;
+      addFloatingText(label, p.x, p.y - 18, {
+        color,
+        size: 18,
+        lifetime: 0.7,
+      });
+      break;
+    }
+  }
+  // pickup confirmation ring
+  addRing(p.x, p.y, {
+    startR: 4,
+    endR: 32,
+    color,
+    lifetime: 0.3,
   });
 }
 
@@ -583,7 +697,9 @@ function frame(now: number) {
     player.vy = player.dashDirY * v;
     if (player.dashTime <= 0) {
       player.dashTime = 0;
-      player.cooldown = settings.dash.cooldownMs / 1000;
+      player.cooldown = state.effects.dashRush
+        ? 0
+        : settings.dash.cooldownMs / 1000;
       player.vx *= 0.35;
       player.vy *= 0.35;
     }
@@ -620,13 +736,43 @@ function frame(now: number) {
   if (state.hitVignetteTime > 0)
     state.hitVignetteTime = Math.max(0, state.hitVignetteTime - dt);
 
-  // multiplier decay
-  state.multiplierTimer += dt;
-  if (state.multiplierTimer > MULT_DECAY_DELAY) {
-    state.multiplier = Math.max(
-      MULT_MIN,
-      state.multiplier - MULT_DECAY_RATE * dt,
-    );
+  // active effects countdown
+  if (state.effects.shield) {
+    state.effects.shield.remaining -= dt;
+    if (state.effects.shield.remaining <= 0) {
+      addRing(player.x, player.y, {
+        startR: settings.player.size * 0.7,
+        endR: settings.player.size * 1.6,
+        color: "#60a5fa",
+        lifetime: 0.4,
+      });
+      state.effects.shield = null;
+    }
+  }
+  if (state.effects.scoreBoost) {
+    state.effects.scoreBoost.remaining -= dt;
+    if (state.effects.scoreBoost.remaining <= 0) {
+      state.effects.scoreBoost = null;
+      // give a fresh decay grace window after the boost expires
+      state.multiplierTimer = 0;
+    }
+  }
+  if (state.effects.dashRush) {
+    state.effects.dashRush.remaining -= dt;
+    if (state.effects.dashRush.remaining <= 0) {
+      state.effects.dashRush = null;
+    }
+  }
+
+  // multiplier decay (paused while a score boost is active)
+  if (!state.effects.scoreBoost) {
+    state.multiplierTimer += dt;
+    if (state.multiplierTimer > MULT_DECAY_DELAY) {
+      state.multiplier = Math.max(
+        MULT_MIN,
+        state.multiplier - MULT_DECAY_RATE * dt,
+      );
+    }
   }
 
   player.x += player.vx * dt;
@@ -719,10 +865,12 @@ function frame(now: number) {
   );
   while (bullets.length > settings.bullets.maxBullets) bullets.shift();
 
-  // collisions: dash-through (i-frame) > hit-ignore > damage; near-miss otherwise
+  // collisions: dash-through (i-frame) > hit-ignore > shield-block > damage;
+  // near-miss otherwise
   const playerSpeed = Math.hypot(player.vx, player.vy);
   const nearRadius = settings.player.size + 20;
   const inDash = player.dashIframeTime > 0;
+  const consumedBullets: Bullet[] = [];
 
   for (const b of bullets) {
     const aabb = aabbHit(b);
@@ -734,6 +882,31 @@ function frame(now: number) {
         }
       } else if (state.hitIframeTime > 0) {
         // immune from this hit but no scoring
+      } else if (state.effects.shield && state.effects.shield.charges > 0) {
+        const cfg = settings.pickups.shield;
+        state.effects.shield.charges -= 1;
+        state.score += cfg.scoreOnBlock;
+        addFloatingText(`+${cfg.scoreOnBlock}`, b.x, b.y, {
+          color: "#60a5fa",
+          size: 16,
+          lifetime: 0.5,
+        });
+        addRing(player.x, player.y, {
+          startR: settings.player.size * 0.5,
+          endR: settings.player.size * 1.0,
+          color: "#ffffff",
+          lifetime: 0.18,
+        });
+        consumedBullets.push(b);
+        if (state.effects.shield.charges <= 0) {
+          addRing(player.x, player.y, {
+            startR: settings.player.size * 0.7,
+            endR: settings.player.size * 1.8,
+            color: "#60a5fa",
+            lifetime: 0.45,
+          });
+          state.effects.shield = null;
+        }
       } else {
         hitPlayer();
         if (state.hp <= 0) break;
@@ -751,6 +924,36 @@ function frame(now: number) {
       }
     }
   }
+  if (consumedBullets.length > 0) {
+    const consumed = new Set(consumedBullets);
+    bullets = bullets.filter((b) => !consumed.has(b));
+  }
+
+  // pickups: age, expire, collect
+  const playerHalf = settings.player.size / 2;
+  const pickRadius = PICKUP_HALF * settings.pickups.pickupRadiusMul + playerHalf;
+  const pickRadius2 = pickRadius * pickRadius;
+  const survivingPickups: Pickup[] = [];
+  for (const p of pickups) {
+    p.age += dt;
+    if (p.age >= p.lifetime) {
+      addRing(p.x, p.y, {
+        startR: 4,
+        endR: 22,
+        color: PICKUP_COLORS[p.type],
+        lifetime: 0.25,
+      });
+      continue;
+    }
+    const dx = p.x - player.x;
+    const dy = p.y - player.y;
+    if (dx * dx + dy * dy < pickRadius2) {
+      applyPickup(p);
+      continue;
+    }
+    survivingPickups.push(p);
+  }
+  pickups = survivingPickups;
 
   render();
   requestAnimationFrame(frame);
@@ -786,6 +989,11 @@ function render() {
   ctx.fillStyle = settings.bullets.color;
   for (const b of bullets) {
     ctx.fillRect(b.x - bSize / 2, b.y - bSize / 2, bSize, bSize);
+  }
+
+  // pickups (drawn under the player so the player visually grabs them)
+  for (const p of pickups) {
+    drawPickup(ctx, p, settings.pickups.blinkDuration);
   }
 
   // player
@@ -833,6 +1041,36 @@ function render() {
     ctx.beginPath();
     ctx.arc(player.x, player.y, r, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * t);
     ctx.stroke();
+  }
+
+  // shield ring around the player; cracks (gaps) reflect remaining charges
+  if (state.effects.shield) {
+    const r = pSize * settings.pickups.shield.hitboxMul * 0.65 + 6;
+    const charges = state.effects.shield.charges;
+    const maxCharges = settings.pickups.shield.charges;
+    const cracks = Math.max(0, maxCharges - charges);
+    ctx.save();
+    ctx.strokeStyle = "#60a5fa";
+    ctx.lineWidth = 2.5;
+    ctx.globalAlpha = 0.75;
+    if (cracks <= 0) {
+      ctx.beginPath();
+      ctx.arc(player.x, player.y, r, 0, Math.PI * 2);
+      ctx.stroke();
+    } else {
+      // draw arc segments separated by small gaps for each crack
+      const gap = 0.18; // radians
+      const segments = cracks; // 1 crack = 1 gap; 2 cracks = 2 gaps (opposite)
+      const totalGap = gap * segments;
+      const seg = (Math.PI * 2 - totalGap) / segments;
+      for (let i = 0; i < segments; i++) {
+        const start = -Math.PI / 2 + i * (seg + gap);
+        ctx.beginPath();
+        ctx.arc(player.x, player.y, r, start, start + seg);
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
   }
 
   // rings
@@ -935,8 +1173,15 @@ function drawHUD() {
   ctx.fillText(state.score.toLocaleString("en-US"), x0, row2y + 14);
 
   const multStr = `×${state.multiplier.toFixed(1)}`;
-  const mc = multColor(state.multiplier);
-  if (state.multiplier >= 3) {
+  const boosting = !!state.effects.scoreBoost;
+  let mc = multColor(state.multiplier);
+  if (boosting) {
+    // purple pulse while score boost is active
+    mc = "#c084fc";
+    const pulse = 6 + 6 * Math.abs(Math.sin(performance.now() / 180));
+    ctx.shadowColor = mc;
+    ctx.shadowBlur = pulse;
+  } else if (state.multiplier >= 3) {
     ctx.shadowColor = mc;
     ctx.shadowBlur = 10;
   }
@@ -954,6 +1199,40 @@ function drawHUD() {
   const t = (state.multiplier - MULT_MIN) / (MULT_MAX - MULT_MIN);
   ctx.fillStyle = mc;
   ctx.fillRect(barX, barY, barW * Math.max(0, Math.min(1, t)), barH);
+
+  // active effects column (under the SCORE/MULT row)
+  let effY = row2y + 60;
+  ctx.font = "500 12px system-ui, -apple-system, sans-serif";
+  if (state.effects.shield) {
+    drawPickupIcon(ctx, x0 + 8, effY + 6, "shield");
+    ctx.fillStyle = PICKUP_COLORS.shield;
+    ctx.fillText(
+      `SHIELD ${state.effects.shield.remaining.toFixed(1)}s  ×${state.effects.shield.charges}`,
+      x0 + 22,
+      effY,
+    );
+    effY += 20;
+  }
+  if (state.effects.scoreBoost) {
+    drawPickupIcon(ctx, x0 + 8, effY + 6, "scoreBoost");
+    ctx.fillStyle = PICKUP_COLORS.scoreBoost;
+    ctx.fillText(
+      `BOOST ${state.effects.scoreBoost.remaining.toFixed(1)}s`,
+      x0 + 22,
+      effY,
+    );
+    effY += 20;
+  }
+  if (state.effects.dashRush) {
+    drawPickupIcon(ctx, x0 + 8, effY + 6, "dashRush");
+    ctx.fillStyle = PICKUP_COLORS.dashRush;
+    ctx.fillText(
+      `DASH ${state.effects.dashRush.remaining.toFixed(1)}s`,
+      x0 + 22,
+      effY,
+    );
+    effY += 20;
+  }
 
   ctx.restore();
 }

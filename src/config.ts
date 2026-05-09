@@ -38,12 +38,42 @@ export type RunSettings = {
   durationSec: number; // 0 = infinite, otherwise hard time limit in seconds
 };
 
+export type PickupsSettings = {
+  dropChance: number;        // probability 0..1 of a dash-through bullet dropping a pickup
+  lifetime: number;          // seconds before pickup expires
+  blinkDuration: number;     // seconds at the tail of life when pickup blinks
+  pickupRadiusMul: number;   // pickup hitbox radius multiplier vs visual half-size
+  weights: {
+    hp: number;
+    shield: number;
+    scoreBoost: number;
+    dashRush: number;
+  };
+  heal: {
+    scoreOnFull: number;     // score given if HP already at max
+  };
+  shield: {
+    duration: number;        // seconds
+    charges: number;         // hits absorbed
+    hitboxMul: number;       // player hitbox multiplier while shield is active
+    scoreOnBlock: number;    // flat score per absorbed bullet
+  };
+  scoreBoost: {
+    duration: number;        // seconds
+    bonus: number;           // added to current multiplier when activated
+  };
+  dashRush: {
+    duration: number;        // seconds of cooldown-free dashing
+  };
+};
+
 export type Settings = {
   bindings: Bindings;
   bullets: BulletsSettings;
   player: PlayerSettings;
   dash: DashSettings;
   run: RunSettings;
+  pickups: PickupsSettings;
 };
 
 export const STORAGE_KEY = "dash-proto:settings:v3";
@@ -87,6 +117,17 @@ export const DEFAULT_SETTINGS: Settings = {
   run: {
     durationSec: 0,
   },
+  pickups: {
+    dropChance: 0.18,
+    lifetime: 5,
+    blinkDuration: 1.5,
+    pickupRadiusMul: 1.5,
+    weights: { hp: 25, shield: 25, scoreBoost: 25, dashRush: 25 },
+    heal: { scoreOnFull: 500 },
+    shield: { duration: 8, charges: 2, hitboxMul: 1.5, scoreOnBlock: 200 },
+    scoreBoost: { duration: 6, bonus: 1.0 },
+    dashRush: { duration: 3 },
+  },
 };
 
 export type Preset = {
@@ -95,6 +136,7 @@ export type Preset = {
   dash?: Partial<DashSettings>;
   bindings?: Partial<Bindings>;
   run?: Partial<RunSettings>;
+  pickups?: Partial<PickupsSettings>;
 };
 
 export const PRESETS: Record<"Easy" | "Normal" | "Hard", Preset> = {
