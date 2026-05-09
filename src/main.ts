@@ -32,8 +32,6 @@ window.addEventListener("resize", resize);
 const keys = new Set<string>();
 const menu = createMenu(settings, save, () => resetRun());
 
-// Normalize KeyboardEvent.code so the left/right variant of a modifier
-// shares a single binding (Shift, Control, Alt, Meta).
 function normalizeCode(code: string): string {
   switch (code) {
     case "ShiftLeft":
@@ -75,12 +73,10 @@ window.addEventListener("keydown", (e) => {
   }
 
   if (menu.isOpen()) {
-    // game input ignored while paused; let the DOM handle keys for inputs
     return;
   }
 
-  if (gameState === "dying") {
-    // popup waits for explicit user input — only Enter closes it
+  if (state.runState === "ended") {
     if (code === "Enter") {
       e.preventDefault();
       resetRun();
@@ -99,26 +95,41 @@ window.addEventListener("blur", () => keys.clear());
 
 canvas.addEventListener("click", (e) => {
   if (menu.isOpen()) return;
-  if (gameState !== "dying") return;
-  if (!deathButtonBounds) return;
+  if (state.runState !== "ended") return;
   const rect = canvas.getBoundingClientRect();
   const x = e.clientX - rect.left;
   const y = e.clientY - rect.top;
-  const b = deathButtonBounds;
-  if (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) {
+  if (hitBounds(endTryAgainBounds, x, y)) {
     resetRun();
+  } else if (hitBounds(endSettingsBounds, x, y)) {
+    menu.setOpen(true);
   }
 });
 
-// ACCEL is derived from maxSpeed so the friction-determined natural cap
-// stays slightly above maxSpeed and the cap clamp actually engages.
+type Bounds = { x: number; y: number; w: number; h: number };
+function hitBounds(b: Bounds | null, x: number, y: number): boolean {
+  if (!b) return false;
+  return x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h;
+}
+
 const ACCEL_FACTOR = 9;
 const FRICTION = 8.0;
 const SPAWN_ANGLE_SPREAD = Math.PI / 3;
-const DEATH_PAUSE = 2.0;
-const DEATH_BURST = 0.5; // visual burst plays during the first slice of the pause
 const WALL_THICKNESS = 6;
-const BEST_KEY_PREFIX = "dash-prototype:best:";
+
+const RUN_DURATION = 60;
+const HIT_IFRAME = 1.0;
+const HIT_VIGNETTE = 0.2;
+const MULT_GROW = 0.2;
+const MULT_MAX = 10.0;
+const MULT_MIN = 1.0;
+const MULT_DECAY_DELAY = 2.0;
+const MULT_DECAY_RATE = 0.5;
+const NEAR_MISS_BASE = 50;
+const DASH_BASE = 100;
+const NEAR_MISS_SPEED_THRESHOLD = 50;
+
+const SCORE_KEY_PREFIX = "dash-prototype:score:";
 
 type ConfigId = "Default" | "Easy" | "Normal" | "Hard" | null;
 
@@ -133,19 +144,19 @@ function configIdFromSettings(): ConfigId {
   return null;
 }
 
-function getBest(id: ConfigId): number | null {
+function getBestScore(id: ConfigId): number | null {
   if (!id) return null;
-  const v = localStorage.getItem(BEST_KEY_PREFIX + id);
+  const v = localStorage.getItem(SCORE_KEY_PREFIX + id);
   if (!v) return null;
   const n = Number.parseFloat(v);
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
-function setBestIfBetter(id: ConfigId, time: number): boolean {
+function setBestScoreIfBetter(id: ConfigId, score: number): boolean {
   if (!id) return false;
-  const current = getBest(id) ?? 0;
-  if (time > current) {
-    localStorage.setItem(BEST_KEY_PREFIX + id, String(time));
+  const current = getBestScore(id) ?? 0;
+  if (score > current) {
+    localStorage.setItem(SCORE_KEY_PREFIX + id, String(score));
     return true;
   }
   return false;
@@ -157,6 +168,54 @@ type Bullet = {
   vx: number;
   vy: number;
   bounces: boolean;
+  nearMissed: boolean;
+  dashedThroughId: number; // last dash session id this bullet was awarded for
+};
+
+type FloatingText = {
+  x: number;
+  y: number;
+  vy: number;
+  text: string;
+  size: number;
+  color: string;
+  age: number;
+  lifetime: number;
+};
+
+type Ring = {
+  x: number;
+  y: number;
+  age: number;
+  lifetime: number;
+  startR: number;
+  endR: number;
+  color: string;
+};
+
+type EndSnapshot = {
+  score: number;
+  bestMult: number;
+  survived: number;
+  configId: ConfigId;
+  bestScore: number | null;
+  newBest: boolean;
+};
+
+type GameRunState = {
+  runState: "running" | "ended";
+  endReason: "timeout" | "ko" | null;
+  timeLeft: number;
+  hp: number;
+  score: number;
+  multiplier: number;
+  multiplierTimer: number; // seconds since last style event
+  bestMultThisRun: number;
+  hitIframeTime: number;
+  hitVignetteTime: number;
+  dashId: number;
+  dashChain: number;
+  endSnapshot: EndSnapshot | null;
 };
 
 const player = {
@@ -167,34 +226,53 @@ const player = {
   facingX: 0,
   facingY: -1,
   dashTime: 0,
-  iframeTime: 0,
+  dashIframeTime: 0,
   cooldown: 0,
   dashDirX: 0,
   dashDirY: 0,
 };
 
+const state: GameRunState = {
+  runState: "running",
+  endReason: null,
+  timeLeft: RUN_DURATION,
+  hp: 3,
+  score: 0,
+  multiplier: 1.0,
+  multiplierTimer: 0,
+  bestMultThisRun: 1.0,
+  hitIframeTime: 0,
+  hitVignetteTime: 0,
+  dashId: 0,
+  dashChain: 0,
+  endSnapshot: null,
+};
+
 let bullets: Bullet[] = [];
 let spawnTimer = 0;
-let runTime = 0;
 let started = false;
 let initialFillDone = false;
+let floatingTexts: FloatingText[] = [];
+let rings: Ring[] = [];
 
-// snapshot taken at moment of death so the popup is stable even if the
-// menu is opened mid-pause and settings change
-let deathConfigId: ConfigId = null;
-let deathBest: number | null = null;
-let deathNewBest = false;
-let deathRunTime = 0;
-let deathButtonBounds: { x: number; y: number; w: number; h: number } | null =
-  null;
-
-type GameState = "alive" | "dying";
-let gameState: GameState = "alive";
-let dyingTime = 0;
+let endTryAgainBounds: Bounds | null = null;
+let endSettingsBounds: Bounds | null = null;
 
 function resetRun() {
-  gameState = "alive";
-  dyingTime = 0;
+  state.runState = "running";
+  state.endReason = null;
+  state.timeLeft = RUN_DURATION;
+  state.hp = 3;
+  state.score = 0;
+  state.multiplier = 1.0;
+  state.multiplierTimer = 0;
+  state.bestMultThisRun = 1.0;
+  state.hitIframeTime = 0;
+  state.hitVignetteTime = 0;
+  state.dashId = 0;
+  state.dashChain = 0;
+  state.endSnapshot = null;
+
   player.x = viewW / 2;
   player.y = viewH / 2;
   player.vx = 0;
@@ -202,13 +280,17 @@ function resetRun() {
   player.facingX = 0;
   player.facingY = -1;
   player.dashTime = 0;
-  player.iframeTime = 0;
+  player.dashIframeTime = 0;
   player.cooldown = 0;
+
   bullets = [];
   spawnTimer = 0;
-  runTime = 0;
   started = false;
   initialFillDone = false;
+  floatingTexts = [];
+  rings = [];
+  endTryAgainBounds = null;
+  endSettingsBounds = null;
 }
 resetRun();
 
@@ -258,10 +340,13 @@ function tryStartDash() {
   player.dashDirX = dx;
   player.dashDirY = dy;
   player.dashTime = settings.dash.durationMs / 1000;
-  player.iframeTime = settings.dash.iframesMs / 1000;
+  player.dashIframeTime = settings.dash.iframesMs / 1000;
   const v = dashSpeedNow();
   player.vx = dx * v;
   player.vy = dy * v;
+
+  state.dashId++;
+  state.dashChain = 0;
 }
 
 function spawnBullet() {
@@ -305,6 +390,8 @@ function spawnBullet() {
     vx: Math.cos(angle) * speed,
     vy: Math.sin(angle) * speed,
     bounces,
+    nearMissed: false,
+    dashedThroughId: -1,
   });
 }
 
@@ -316,18 +403,119 @@ function aabbHit(b: Bullet): boolean {
   );
 }
 
-function die() {
-  gameState = "dying";
-  dyingTime = DEATH_PAUSE;
-  deathRunTime = runTime;
-  deathConfigId = configIdFromSettings();
-  if (deathConfigId) {
-    deathNewBest = setBestIfBetter(deathConfigId, runTime);
-    deathBest = getBest(deathConfigId);
-  } else {
-    deathNewBest = false;
-    deathBest = null;
+function addFloatingText(
+  text: string,
+  x: number,
+  y: number,
+  opts: {
+    size?: number;
+    color?: string;
+    lifetime?: number;
+    vy?: number;
+  } = {},
+) {
+  floatingTexts.push({
+    x,
+    y,
+    vy: opts.vy ?? -55,
+    text,
+    size: opts.size ?? 20,
+    color: opts.color ?? "#ffffff",
+    age: 0,
+    lifetime: opts.lifetime ?? 0.5,
+  });
+}
+
+function addRing(
+  x: number,
+  y: number,
+  opts: {
+    startR?: number;
+    endR?: number;
+    color?: string;
+    lifetime?: number;
+  } = {},
+) {
+  rings.push({
+    x,
+    y,
+    age: 0,
+    lifetime: opts.lifetime ?? 0.1,
+    startR: opts.startR ?? settings.player.size / 2 + 4,
+    endR: opts.endR ?? settings.player.size / 2 + 30,
+    color: opts.color ?? "#facc15",
+  });
+}
+
+function bumpMultiplier() {
+  state.multiplier = Math.min(MULT_MAX, state.multiplier + MULT_GROW);
+  state.multiplierTimer = 0;
+  if (state.multiplier > state.bestMultThisRun) {
+    state.bestMultThisRun = state.multiplier;
   }
+}
+
+function awardDashThrough(b: Bullet) {
+  state.dashChain++;
+  const base = DASH_BASE * Math.pow(2, state.dashChain - 1);
+  const earned = Math.round(base * state.multiplier);
+  state.score += earned;
+  bumpMultiplier();
+  const size = 18 + state.dashChain * 6;
+  addFloatingText(`+${base}`, b.x, b.y - 10, {
+    size,
+    color: "#ffffff",
+    lifetime: 0.6,
+  });
+  addRing(b.x, b.y, {
+    startR: settings.bullets.size / 2 + 2,
+    endR: settings.bullets.size / 2 + 14,
+    color: "#ffffff",
+    lifetime: 0.18,
+  });
+}
+
+function awardNearMiss(b: Bullet) {
+  const earned = Math.round(NEAR_MISS_BASE * state.multiplier);
+  state.score += earned;
+  bumpMultiplier();
+  addFloatingText(`+${NEAR_MISS_BASE}`, b.x, b.y - 10, {
+    size: 16,
+    color: "#facc15",
+    lifetime: 0.45,
+  });
+  addRing(player.x, player.y, {
+    startR: settings.player.size / 2 + 6,
+    endR: settings.player.size / 2 + 28,
+    color: "#facc15",
+    lifetime: 0.1,
+  });
+}
+
+function hitPlayer() {
+  if (state.runState === "ended") return;
+  state.hp -= 1;
+  state.multiplier = MULT_MIN;
+  state.multiplierTimer = 0;
+  state.hitIframeTime = HIT_IFRAME;
+  state.hitVignetteTime = HIT_VIGNETTE;
+  if (state.hp <= 0) endRun("ko");
+}
+
+function endRun(reason: "timeout" | "ko") {
+  if (state.runState === "ended") return;
+  state.runState = "ended";
+  state.endReason = reason;
+  const id = configIdFromSettings();
+  const newBest = id ? setBestScoreIfBetter(id, state.score) : false;
+  state.endSnapshot = {
+    score: state.score,
+    bestMult: state.bestMultThisRun,
+    survived: RUN_DURATION - state.timeLeft,
+    configId: id,
+    bestScore: id ? getBestScore(id) : null,
+    newBest,
+  };
 }
 
 let lastTime = performance.now();
@@ -338,177 +526,242 @@ function frame(now: number) {
   if (dt > 0.05) dt = 0.05;
 
   if (menu.isOpen()) {
-    // freeze simulation; render so the canvas under the overlay stays consistent
     render();
     requestAnimationFrame(frame);
     return;
   }
 
-  if (gameState === "alive") {
-    if (!started) {
-      const probe = inputDir();
-      if (probe.x !== 0 || probe.y !== 0 || keys.has(settings.bindings.dash)) {
-        started = true;
-      }
-    }
-    if (started) runTime += dt;
+  // age floating texts and rings even after end so they fade out
+  for (const t of floatingTexts) {
+    t.age += dt;
+    t.y += t.vy * dt;
+  }
+  floatingTexts = floatingTexts.filter((t) => t.age < t.lifetime);
+  for (const r of rings) r.age += dt;
+  rings = rings.filter((r) => r.age < r.lifetime);
 
-    if (keys.has(settings.bindings.dash)) {
-      tryStartDash();
-      keys.delete(settings.bindings.dash);
-    }
+  if (state.runState === "ended") {
+    if (state.hitVignetteTime > 0)
+      state.hitVignetteTime = Math.max(0, state.hitVignetteTime - dt);
+    render();
+    requestAnimationFrame(frame);
+    return;
+  }
 
-    if (player.dashTime > 0) {
-      player.dashTime -= dt;
-      const v = dashSpeedNow();
-      player.vx = player.dashDirX * v;
-      player.vy = player.dashDirY * v;
-      if (player.dashTime <= 0) {
-        player.dashTime = 0;
-        player.cooldown = settings.dash.cooldownMs / 1000;
-        player.vx *= 0.35;
-        player.vy *= 0.35;
-      }
-    } else {
-      const input = inputDir();
-      if (input.x !== 0 || input.y !== 0) {
-        player.facingX = input.x;
-        player.facingY = input.y;
-      }
-      const accel = settings.player.maxSpeed * ACCEL_FACTOR;
-      player.vx += input.x * accel * dt;
-      player.vy += input.y * accel * dt;
-      const damp = Math.exp(-FRICTION * dt);
-      player.vx *= damp;
-      player.vy *= damp;
-      const maxSpeed = settings.player.maxSpeed;
-      const cap = keys.has(settings.bindings.walk)
-        ? maxSpeed * settings.player.walkFactor
-        : maxSpeed;
-      const sp = Math.hypot(player.vx, player.vy);
-      if (sp > cap) {
-        const k = cap / sp;
-        player.vx *= k;
-        player.vy *= k;
-      }
-    }
+  // === running state ===
 
-    if (player.iframeTime > 0)
-      player.iframeTime = Math.max(0, player.iframeTime - dt);
-    if (player.cooldown > 0)
-      player.cooldown = Math.max(0, player.cooldown - dt);
-
-    player.x += player.vx * dt;
-    player.y += player.vy * dt;
-
-    const half = settings.player.size / 2;
-    const minX = WALL_THICKNESS + half;
-    const maxX = viewW - WALL_THICKNESS - half;
-    const minY = WALL_THICKNESS + half;
-    const maxY = viewH - WALL_THICKNESS - half;
-    if (player.x < minX) {
-      player.x = minX;
-      player.vx = 0;
+  if (!started) {
+    const probe = inputDir();
+    if (probe.x !== 0 || probe.y !== 0 || keys.has(settings.bindings.dash)) {
+      started = true;
     }
-    if (player.y < minY) {
-      player.y = minY;
-      player.vy = 0;
+  }
+  if (started) {
+    state.timeLeft = Math.max(0, state.timeLeft - dt);
+    if (state.timeLeft <= 0) {
+      endRun("timeout");
     }
-    if (player.x > maxX) {
-      player.x = maxX;
-      player.vx = 0;
-    }
-    if (player.y > maxY) {
-      player.y = maxY;
-      player.vy = 0;
-    }
+  }
 
-    if (started) {
-      if (
-        !initialFillDone &&
-        bullets.length >= settings.bullets.maxBullets
-      ) {
-        initialFillDone = true;
-      }
-      const baseInterval = settings.bullets.spawnIntervalMs / 1000;
-      const filling =
-        !initialFillDone && bullets.length < settings.bullets.maxBullets;
-      const effInterval = filling ? 0.04 : baseInterval;
-      const perTick = filling ? 4 : 1;
-      spawnTimer += dt;
-      while (
-        spawnTimer >= effInterval &&
-        bullets.length < settings.bullets.maxBullets
-      ) {
-        spawnTimer -= effInterval;
-        for (
-          let i = 0;
-          i < perTick && bullets.length < settings.bullets.maxBullets;
-          i++
-        ) {
-          spawnBullet();
-        }
-      }
-    }
+  if (keys.has(settings.bindings.dash)) {
+    tryStartDash();
+    keys.delete(settings.bindings.dash);
+  }
 
-    const bh = settings.bullets.size / 2;
-    const minBx = WALL_THICKNESS + bh;
-    const maxBx = viewW - WALL_THICKNESS - bh;
-    const minBy = WALL_THICKNESS + bh;
-    const maxBy = viewH - WALL_THICKNESS - bh;
-    for (const b of bullets) {
-      const px = b.x;
-      const py = b.y;
-      b.x += b.vx * dt;
-      b.y += b.vy * dt;
-      if (b.bounces) {
-        if (b.x < minBx && px >= minBx && b.vx < 0) {
-          b.x = minBx;
-          b.vx = -b.vx;
-        }
-        if (b.x > maxBx && px <= maxBx && b.vx > 0) {
-          b.x = maxBx;
-          b.vx = -b.vx;
-        }
-        if (b.y < minBy && py >= minBy && b.vy < 0) {
-          b.y = minBy;
-          b.vy = -b.vy;
-        }
-        if (b.y > maxBy && py <= maxBy && b.vy > 0) {
-          b.y = maxBy;
-          b.vy = -b.vy;
-        }
-      }
-    }
-
-    bullets = bullets.filter(
-      (b) => b.x > -60 && b.x < viewW + 60 && b.y > -60 && b.y < viewH + 60,
-    );
-    while (bullets.length > settings.bullets.maxBullets) bullets.shift();
-
-    if (player.iframeTime <= 0) {
-      for (const b of bullets) {
-        if (aabbHit(b)) {
-          die();
-          break;
-        }
-      }
+  if (player.dashTime > 0) {
+    player.dashTime -= dt;
+    const v = dashSpeedNow();
+    player.vx = player.dashDirX * v;
+    player.vy = player.dashDirY * v;
+    if (player.dashTime <= 0) {
+      player.dashTime = 0;
+      player.cooldown = settings.dash.cooldownMs / 1000;
+      player.vx *= 0.35;
+      player.vy *= 0.35;
     }
   } else {
-    // dyingTime governs the burst animation only; popup stays until user
-    // presses Enter (or clicks the button)
-    if (dyingTime > 0) dyingTime = Math.max(0, dyingTime - dt);
+    const input = inputDir();
+    if (input.x !== 0 || input.y !== 0) {
+      player.facingX = input.x;
+      player.facingY = input.y;
+    }
+    const accel = settings.player.maxSpeed * ACCEL_FACTOR;
+    player.vx += input.x * accel * dt;
+    player.vy += input.y * accel * dt;
+    const damp = Math.exp(-FRICTION * dt);
+    player.vx *= damp;
+    player.vy *= damp;
+    const maxSpeed = settings.player.maxSpeed;
+    const cap = keys.has(settings.bindings.walk)
+      ? maxSpeed * settings.player.walkFactor
+      : maxSpeed;
+    const sp = Math.hypot(player.vx, player.vy);
+    if (sp > cap) {
+      const k = cap / sp;
+      player.vx *= k;
+      player.vy *= k;
+    }
+  }
+
+  if (player.dashIframeTime > 0)
+    player.dashIframeTime = Math.max(0, player.dashIframeTime - dt);
+  if (player.cooldown > 0)
+    player.cooldown = Math.max(0, player.cooldown - dt);
+  if (state.hitIframeTime > 0)
+    state.hitIframeTime = Math.max(0, state.hitIframeTime - dt);
+  if (state.hitVignetteTime > 0)
+    state.hitVignetteTime = Math.max(0, state.hitVignetteTime - dt);
+
+  // multiplier decay
+  state.multiplierTimer += dt;
+  if (state.multiplierTimer > MULT_DECAY_DELAY) {
+    state.multiplier = Math.max(
+      MULT_MIN,
+      state.multiplier - MULT_DECAY_RATE * dt,
+    );
+  }
+
+  player.x += player.vx * dt;
+  player.y += player.vy * dt;
+
+  const half = settings.player.size / 2;
+  const minX = WALL_THICKNESS + half;
+  const maxX = viewW - WALL_THICKNESS - half;
+  const minY = WALL_THICKNESS + half;
+  const maxY = viewH - WALL_THICKNESS - half;
+  if (player.x < minX) {
+    player.x = minX;
+    player.vx = 0;
+  }
+  if (player.y < minY) {
+    player.y = minY;
+    player.vy = 0;
+  }
+  if (player.x > maxX) {
+    player.x = maxX;
+    player.vx = 0;
+  }
+  if (player.y > maxY) {
+    player.y = maxY;
+    player.vy = 0;
+  }
+
+  // bullet spawn
+  if (started) {
+    if (
+      !initialFillDone &&
+      bullets.length >= settings.bullets.maxBullets
+    ) {
+      initialFillDone = true;
+    }
+    const baseInterval = settings.bullets.spawnIntervalMs / 1000;
+    const filling =
+      !initialFillDone && bullets.length < settings.bullets.maxBullets;
+    const effInterval = filling ? 0.04 : baseInterval;
+    const perTick = filling ? 4 : 1;
+    spawnTimer += dt;
+    while (
+      spawnTimer >= effInterval &&
+      bullets.length < settings.bullets.maxBullets
+    ) {
+      spawnTimer -= effInterval;
+      for (
+        let i = 0;
+        i < perTick && bullets.length < settings.bullets.maxBullets;
+        i++
+      ) {
+        spawnBullet();
+      }
+    }
+  }
+
+  // bullet movement & wall bounce
+  const bh = settings.bullets.size / 2;
+  const minBx = WALL_THICKNESS + bh;
+  const maxBx = viewW - WALL_THICKNESS - bh;
+  const minBy = WALL_THICKNESS + bh;
+  const maxBy = viewH - WALL_THICKNESS - bh;
+  for (const b of bullets) {
+    const px = b.x;
+    const py = b.y;
+    b.x += b.vx * dt;
+    b.y += b.vy * dt;
+    if (b.bounces) {
+      if (b.x < minBx && px >= minBx && b.vx < 0) {
+        b.x = minBx;
+        b.vx = -b.vx;
+      }
+      if (b.x > maxBx && px <= maxBx && b.vx > 0) {
+        b.x = maxBx;
+        b.vx = -b.vx;
+      }
+      if (b.y < minBy && py >= minBy && b.vy < 0) {
+        b.y = minBy;
+        b.vy = -b.vy;
+      }
+      if (b.y > maxBy && py <= maxBy && b.vy > 0) {
+        b.y = maxBy;
+        b.vy = -b.vy;
+      }
+    }
+  }
+
+  bullets = bullets.filter(
+    (b) => b.x > -60 && b.x < viewW + 60 && b.y > -60 && b.y < viewH + 60,
+  );
+  while (bullets.length > settings.bullets.maxBullets) bullets.shift();
+
+  // collisions: dash-through (i-frame) > hit-ignore > damage; near-miss otherwise
+  const playerSpeed = Math.hypot(player.vx, player.vy);
+  const nearRadius = settings.player.size + 20;
+  const inDash = player.dashIframeTime > 0;
+
+  for (const b of bullets) {
+    const aabb = aabbHit(b);
+    if (aabb) {
+      if (inDash) {
+        if (b.dashedThroughId !== state.dashId) {
+          b.dashedThroughId = state.dashId;
+          awardDashThrough(b);
+        }
+      } else if (state.hitIframeTime > 0) {
+        // immune from this hit but no scoring
+      } else {
+        hitPlayer();
+        if (state.hp <= 0) break;
+      }
+    } else if (
+      !b.nearMissed &&
+      playerSpeed > NEAR_MISS_SPEED_THRESHOLD &&
+      !inDash
+    ) {
+      const dx = b.x - player.x;
+      const dy = b.y - player.y;
+      if (dx * dx + dy * dy < nearRadius * nearRadius) {
+        b.nearMissed = true;
+        awardNearMiss(b);
+      }
+    }
   }
 
   render();
   requestAnimationFrame(frame);
 }
 
+function multColor(m: number): string {
+  if (m < 3) return "#ffffff";
+  const t = Math.min(1, (m - 3) / (MULT_MAX - 3));
+  // yellow (255,220,60) → red (255,40,0)
+  const r = 255;
+  const g = Math.round(220 * (1 - t) + 40 * t);
+  const b = Math.round(60 * (1 - t));
+  return `rgb(${r},${g},${b})`;
+}
+
 function render() {
   ctx.fillStyle = "#000";
   ctx.fillRect(0, 0, viewW, viewH);
 
-  // arena frame — drawn first so bullets/player visually sit on top of it
   ctx.save();
   ctx.strokeStyle = "rgba(255,255,255,0.6)";
   ctx.lineWidth = WALL_THICKNESS;
@@ -520,149 +773,275 @@ function render() {
   );
   ctx.restore();
 
+  // bullets
   const bSize = settings.bullets.size;
   ctx.fillStyle = settings.bullets.color;
   for (const b of bullets) {
     ctx.fillRect(b.x - bSize / 2, b.y - bSize / 2, bSize, bSize);
   }
 
+  // player
   const pSize = settings.player.size;
+  const dashing = player.dashTime > 0;
+  const dashIframe = player.dashIframeTime > 0;
+  const cooling = player.cooldown > 0;
+  const walking = keys.has(settings.bindings.walk);
 
-  if (gameState === "alive") {
-    const dashing = player.dashTime > 0;
-    const invuln = player.iframeTime > 0;
-    const cooling = player.cooldown > 0;
-    const walking = keys.has(settings.bindings.walk);
+  if (dashing && state.runState === "running") {
+    ctx.save();
+    ctx.globalAlpha = 0.35;
+    ctx.fillStyle = settings.player.colorDash;
+    const trailLen = pSize * 1.3;
+    ctx.fillRect(
+      player.x - pSize / 2 - player.dashDirX * trailLen,
+      player.y - pSize / 2 - player.dashDirY * trailLen,
+      pSize,
+      pSize,
+    );
+    ctx.restore();
+  }
 
-    if (dashing) {
-      ctx.save();
-      ctx.globalAlpha = 0.35;
-      ctx.fillStyle = settings.player.colorDash;
-      const trailLen = pSize * 1.3;
-      ctx.fillRect(
-        player.x - pSize / 2 - player.dashDirX * trailLen,
-        player.y - pSize / 2 - player.dashDirY * trailLen,
-        pSize,
-        pSize,
-      );
-      ctx.restore();
-    }
+  let drawPlayer = true;
+  if (state.hitIframeTime > 0) {
+    drawPlayer = Math.floor(state.hitIframeTime * 10) % 2 === 0;
+  }
 
+  if (drawPlayer) {
     let color: string;
-    if (dashing || invuln) color = settings.player.colorDash;
+    if (dashing || dashIframe) color = settings.player.colorDash;
     else if (walking) color = settings.player.colorWalk;
     else color = settings.player.colorIdle;
 
     ctx.fillStyle = color;
     ctx.fillRect(player.x - pSize / 2, player.y - pSize / 2, pSize, pSize);
+  }
 
-    if (cooling && !dashing) {
-      const r = pSize * 0.9;
-      const total = settings.dash.cooldownMs / 1000;
-      const t = total > 0 ? 1 - player.cooldown / total : 1;
-      ctx.strokeStyle = "rgba(170,170,170,0.85)";
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.arc(player.x, player.y, r, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * t);
-      ctx.stroke();
-    }
-  } else {
-    // burst effect plays only during the first DEATH_BURST seconds
-    const elapsed = DEATH_PAUSE - dyingTime;
-    const burstK = Math.max(0, 1 - elapsed / DEATH_BURST);
-    if (burstK > 0) {
-      ctx.save();
-      ctx.globalAlpha = 0.45 * burstK;
-      ctx.fillStyle = "#ef4444";
-      ctx.fillRect(0, 0, viewW, viewH);
-      ctx.restore();
+  if (cooling && !dashing) {
+    const r = pSize * 0.9;
+    const total = settings.dash.cooldownMs / 1000;
+    const t = total > 0 ? 1 - player.cooldown / total : 1;
+    ctx.strokeStyle = "rgba(170,170,170,0.85)";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(player.x, player.y, r, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * t);
+    ctx.stroke();
+  }
 
-      const burst = (1 - burstK) * pSize * 2.2;
-      ctx.save();
-      ctx.globalAlpha = burstK;
-      ctx.strokeStyle = "#fca5a5";
-      ctx.lineWidth = 3;
-      ctx.strokeRect(
-        player.x - pSize / 2 - burst / 2,
-        player.y - pSize / 2 - burst / 2,
-        pSize + burst,
-        pSize + burst,
-      );
-      ctx.restore();
-    }
+  // rings
+  for (const ring of rings) {
+    const t = ring.age / ring.lifetime;
+    const r = ring.startR + (ring.endR - ring.startR) * t;
+    const alpha = 1 - t;
+    ctx.save();
+    ctx.globalAlpha = Math.max(0, alpha);
+    ctx.strokeStyle = ring.color;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(ring.x, ring.y, r, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
 
-    drawDeathPopup();
+  // floating texts
+  for (const ft of floatingTexts) {
+    const alpha = 1 - ft.age / ft.lifetime;
+    ctx.save();
+    ctx.globalAlpha = Math.max(0, alpha);
+    ctx.fillStyle = ft.color;
+    ctx.font = `600 ${ft.size}px ui-monospace, SFMono-Regular, Menlo, monospace`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(ft.text, ft.x, ft.y);
+    ctx.restore();
+  }
+
+  // hit vignette
+  if (state.hitVignetteTime > 0) {
+    const t = state.hitVignetteTime / HIT_VIGNETTE;
+    const grad = ctx.createRadialGradient(
+      viewW / 2,
+      viewH / 2,
+      Math.min(viewW, viewH) * 0.25,
+      viewW / 2,
+      viewH / 2,
+      Math.max(viewW, viewH) * 0.65,
+    );
+    grad.addColorStop(0, "rgba(0,0,0,0)");
+    grad.addColorStop(1, `rgba(60,0,0,${0.7 * t})`);
+    ctx.save();
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, viewW, viewH);
+    ctx.restore();
+  }
+
+  drawHUD();
+
+  if (state.runState === "ended") {
+    drawEndOverlay();
   }
 }
 
-function drawDeathPopup() {
-  const popupW = 380;
-  const popupH = 230;
-  const popupX = Math.round((viewW - popupW) / 2);
-  const popupY = Math.round((viewH - popupH) / 2 - 30);
+function drawHUD() {
+  const x0 = 22;
+  const y0 = 22;
+  ctx.save();
+  ctx.textBaseline = "top";
+  ctx.textAlign = "left";
+
+  // labels row
+  ctx.font = "500 11px system-ui, -apple-system, sans-serif";
+  ctx.fillStyle = "#7d8590";
+  ctx.fillText("TIME", x0, y0);
+  ctx.fillText("HP", x0 + 220, y0);
+
+  // TIME value
+  ctx.font = "600 22px ui-monospace, SFMono-Regular, Menlo, monospace";
+  ctx.fillStyle = "#ffffff";
+  ctx.fillText(state.timeLeft.toFixed(1), x0, y0 + 14);
+
+  // hearts
+  let heartX = x0 + 220;
+  const heartY = y0 + 14;
+  ctx.font = "600 22px system-ui, -apple-system, sans-serif";
+  for (let i = 0; i < 3; i++) {
+    ctx.fillStyle = i < state.hp ? "#ef4444" : "rgba(239,68,68,0.18)";
+    ctx.fillText("♥", heartX, heartY);
+    heartX += 22;
+  }
+
+  // SCORE / MULT row
+  const row2y = y0 + 50;
+  ctx.font = "500 11px system-ui, -apple-system, sans-serif";
+  ctx.fillStyle = "#7d8590";
+  ctx.fillText("SCORE", x0, row2y);
+  ctx.fillText("MULT", x0 + 220, row2y);
+
+  ctx.font = "600 22px ui-monospace, SFMono-Regular, Menlo, monospace";
+  ctx.fillStyle = "#ffffff";
+  ctx.fillText(state.score.toLocaleString("en-US"), x0, row2y + 14);
+
+  const multStr = `×${state.multiplier.toFixed(1)}`;
+  const mc = multColor(state.multiplier);
+  if (state.multiplier >= 3) {
+    ctx.shadowColor = mc;
+    ctx.shadowBlur = 10;
+  }
+  ctx.fillStyle = mc;
+  ctx.fillText(multStr, x0 + 220, row2y + 14);
+  ctx.shadowBlur = 0;
+
+  // mult progress bar
+  const barX = x0 + 220;
+  const barY = row2y + 42;
+  const barW = 120;
+  const barH = 4;
+  ctx.fillStyle = "rgba(255,255,255,0.12)";
+  ctx.fillRect(barX, barY, barW, barH);
+  const t = (state.multiplier - MULT_MIN) / (MULT_MAX - MULT_MIN);
+  ctx.fillStyle = mc;
+  ctx.fillRect(barX, barY, barW * Math.max(0, Math.min(1, t)), barH);
+
+  ctx.restore();
+}
+
+function drawEndOverlay() {
+  const snap = state.endSnapshot;
+  if (!snap) return;
+
+  const w = 460;
+  const h = 360;
+  const x = Math.round((viewW - w) / 2);
+  const y = Math.round((viewH - h) / 2 - 30);
 
   ctx.save();
-  ctx.fillStyle = "rgba(15,15,18,0.94)";
-  ctx.fillRect(popupX, popupY, popupW, popupH);
+  ctx.fillStyle = "rgba(15,15,18,0.95)";
+  ctx.fillRect(x, y, w, h);
   ctx.strokeStyle = "rgba(255,255,255,0.18)";
   ctx.lineWidth = 1.5;
-  ctx.strokeRect(popupX + 0.5, popupY + 0.5, popupW - 1, popupH - 1);
+  ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
 
   ctx.textAlign = "center";
   ctx.textBaseline = "top";
 
-  ctx.fillStyle = "#ff8b8b";
-  ctx.font = "600 12px system-ui, -apple-system, sans-serif";
-  ctx.fillText("DEFEATED", popupX + popupW / 2, popupY + 20);
+  // header
+  const headerColor = state.endReason === "ko" ? "#ff8b8b" : "#facc15";
+  const headerText = state.endReason === "ko" ? "K.O." : "TIME'S UP";
+  ctx.fillStyle = headerColor;
+  ctx.font = "600 14px system-ui, -apple-system, sans-serif";
+  ctx.fillText(headerText, x + w / 2, y + 22);
 
-  ctx.fillStyle = "#ffffff";
-  ctx.font =
-    "600 36px ui-monospace, SFMono-Regular, Menlo, monospace";
-  ctx.fillText(
-    `${deathRunTime.toFixed(1)}s`,
-    popupX + popupW / 2,
-    popupY + 44,
-  );
-
+  // SCORE label
   ctx.fillStyle = "#7d8590";
   ctx.font = "500 11px system-ui, -apple-system, sans-serif";
-  ctx.fillText("RUN TIME", popupX + popupW / 2, popupY + 92);
+  ctx.fillText("SCORE", x + w / 2, y + 50);
 
-  if (deathConfigId) {
-    const bestText = deathBest != null ? `${deathBest.toFixed(1)}s` : "—";
-    ctx.fillStyle = deathNewBest ? "#facc15" : "#cccccc";
-    ctx.font = "500 14px system-ui, -apple-system, sans-serif";
-    const label = deathNewBest
-      ? `New best (${deathConfigId}): ${bestText}`
-      : `Best (${deathConfigId}): ${bestText}`;
-    ctx.fillText(label, popupX + popupW / 2, popupY + 124);
+  // big score
+  ctx.fillStyle = "#ffffff";
+  ctx.font = "600 48px ui-monospace, SFMono-Regular, Menlo, monospace";
+  ctx.fillText(snap.score.toLocaleString("en-US"), x + w / 2, y + 70);
+
+  // stats
+  ctx.font = "500 13px system-ui, -apple-system, sans-serif";
+  ctx.fillStyle = "#cccccc";
+  ctx.fillText(
+    `Best moment: ×${snap.bestMult.toFixed(1)}`,
+    x + w / 2,
+    y + 142,
+  );
+  ctx.fillText(
+    `Survived: ${snap.survived.toFixed(1)}s`,
+    x + w / 2,
+    y + 164,
+  );
+
+  if (snap.configId) {
+    const bestText =
+      snap.bestScore != null ? snap.bestScore.toLocaleString("en-US") : "—";
+    ctx.fillStyle = snap.newBest ? "#facc15" : "#cccccc";
+    ctx.font = "500 13px system-ui, -apple-system, sans-serif";
+    const label = snap.newBest
+      ? `New best (${snap.configId}): ${bestText}`
+      : `Best (${snap.configId}): ${bestText}`;
+    ctx.fillText(label, x + w / 2, y + 198);
   } else {
     ctx.fillStyle = "#7d8590";
     ctx.font = "italic 500 12px system-ui, -apple-system, sans-serif";
     ctx.fillText(
       "Custom settings — record disabled",
-      popupX + popupW / 2,
-      popupY + 126,
+      x + w / 2,
+      y + 200,
     );
   }
 
-  // ENTER button
-  const btnW = popupW - 100;
-  const btnH = 40;
-  const btnX = popupX + (popupW - btnW) / 2;
-  const btnY = popupY + 168;
-  deathButtonBounds = { x: btnX, y: btnY, w: btnW, h: btnH };
+  // buttons
+  const btnW = 160;
+  const btnH = 44;
+  const btnGap = 20;
+  const totalW = btnW * 2 + btnGap;
+  const btnY = y + h - 76;
+  const tryX = x + (w - totalW) / 2;
+  const setX = tryX + btnW + btnGap;
 
-  ctx.fillStyle = "rgba(255,255,255,0.10)";
-  ctx.fillRect(btnX, btnY, btnW, btnH);
-  ctx.strokeStyle = "rgba(255,255,255,0.40)";
-  ctx.lineWidth = 1;
-  ctx.strokeRect(btnX + 0.5, btnY + 0.5, btnW - 1, btnH - 1);
+  endTryAgainBounds = { x: tryX, y: btnY, w: btnW, h: btnH };
+  endSettingsBounds = { x: setX, y: btnY, w: btnW, h: btnH };
 
-  ctx.fillStyle = "#ffffff";
+  ctx.fillStyle = "rgba(0,229,255,0.18)";
+  ctx.fillRect(tryX, btnY, btnW, btnH);
+  ctx.strokeStyle = "rgba(0,229,255,0.7)";
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(tryX + 0.5, btnY + 0.5, btnW - 1, btnH - 1);
+  ctx.fillStyle = "#22d3ee";
+  ctx.font = "600 13px system-ui, -apple-system, sans-serif";
   ctx.textBaseline = "middle";
-  ctx.font = "600 14px system-ui, -apple-system, sans-serif";
-  ctx.fillText("PRESS ENTER ↵", btnX + btnW / 2, btnY + btnH / 2);
+  ctx.fillText("TRY AGAIN ↵", tryX + btnW / 2, btnY + btnH / 2);
+
+  ctx.fillStyle = "rgba(255,255,255,0.08)";
+  ctx.fillRect(setX, btnY, btnW, btnH);
+  ctx.strokeStyle = "rgba(255,255,255,0.4)";
+  ctx.lineWidth = 1;
+  ctx.strokeRect(setX + 0.5, btnY + 0.5, btnW - 1, btnH - 1);
+  ctx.fillStyle = "#ffffff";
+  ctx.fillText("SETTINGS", setX + btnW / 2, btnY + btnH / 2);
 
   ctx.restore();
 }
