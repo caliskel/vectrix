@@ -1017,6 +1017,20 @@ export function drawPlayerEye(
 
   ctx.save();
   ctx.translate(baseX, baseY);
+  // Smash applied at the world level — must come BEFORE lean rotate
+  // because the squash is axis-aligned to the wall and would otherwise
+  // get tilted by the player's lean. All walls in the game are
+  // axis-aligned, so we can pick the canvas axis from the dominant
+  // component of the surface normal.
+  if (hasSmash) {
+    if (Math.abs(p.smashNormalX) > Math.abs(p.smashNormalY)) {
+      // vertical wall: squash X, stretch Y
+      ctx.scale(smashAlong, smashPerp);
+    } else {
+      // horizontal wall: squash Y, stretch X
+      ctx.scale(smashPerp, smashAlong);
+    }
+  }
   ctx.scale(1, Math.max(0.001, eyeOpenY));
   if (p.tiltAngle !== 0) ctx.rotate(p.tiltAngle);
   if (bobOffsetY !== 0) ctx.translate(0, bobOffsetY);
@@ -1028,13 +1042,6 @@ export function drawPlayerEye(
     ctx.rotate(aniAngle);
     ctx.scale(1 + aniStrength, 1 - aniStrength);
     ctx.rotate(-aniAngle);
-  }
-  // smash impact — rotate to surface normal, scale, unrotate
-  if (hasSmash) {
-    const smashAngle = Math.atan2(p.smashNormalY, p.smashNormalX);
-    ctx.rotate(smashAngle);
-    ctx.scale(smashAlong, smashPerp);
-    ctx.rotate(-smashAngle);
   }
 
   // flinch translate — eye recoils away from the bullet that just
