@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Dash · Sandbox</title>
+    <style>
+      html, body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        background: #000;
+        overflow: hidden;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        color: #888;
+      }
+      #app {
+        position: fixed;
+        inset: 0;
+        display: block;
+      }
+      canvas {
+        display: block;
+        width: 100%;
+        height: 100%;
+      }
+      #hud {
+        position: fixed;
+        top: 12px;
+        left: 12px;
+        font-size: 12px;
+        line-height: 1.5;
+        pointer-events: none;
+        user-select: none;
+        opacity: 0.7;
+      }
+      #back {
+        position: fixed;
+        top: 12px;
+        right: 16px;
+        font-size: 12px;
+        text-decoration: none;
+        color: #94a3b8;
+        opacity: 0.55;
+        transition: opacity 0.15s, color 0.15s;
+      }
+      #back:hover {
+        opacity: 1;
+        color: #d8b4fe;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="app"></canvas>
+    <div id="hud">ESC or TAB — settings</div>
+    <a id="back" href="/">← menu</a>
+    <script type="module" src="/src/sandbox/main.ts"></script>
+  </body>
+</html>

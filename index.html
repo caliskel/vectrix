@@ -3,42 +3,127 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Dash Prototype</title>
+    <title>Dash</title>
     <style>
+      :root {
+        --bg: #0a0e1a;
+        --grid: #14192b;
+        --player: #a855f7;
+        --player-dash: #d8b4fe;
+        --bullet: #ff2d55;
+        --muted: #7d8590;
+        --text: #cbd5e1;
+      }
       html, body {
         margin: 0;
         padding: 0;
         height: 100%;
-        background: #000;
+        background: var(--bg);
+        font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        color: var(--text);
+        background-image:
+          linear-gradient(var(--grid) 1px, transparent 1px),
+          linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+        background-size: 60px 60px;
+        background-position: 0 0;
+      }
+      body {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-direction: column;
+        gap: 36px;
         overflow: hidden;
-        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-        color: #888;
       }
-      #app {
-        position: fixed;
-        inset: 0;
-        display: block;
-      }
-      canvas {
-        display: block;
-        width: 100%;
-        height: 100%;
-      }
-      #hud {
-        position: fixed;
-        top: 12px;
-        left: 12px;
-        font-size: 12px;
-        line-height: 1.5;
-        pointer-events: none;
+      .title {
+        font-size: clamp(72px, 14vw, 168px);
+        font-weight: 700;
+        letter-spacing: 0.18em;
+        margin: 0;
+        color: var(--player);
+        text-shadow:
+          0 0 8px var(--player),
+          0 0 24px var(--player),
+          0 0 56px rgba(168, 85, 247, 0.45);
         user-select: none;
+      }
+      .subtitle {
+        margin-top: -22px;
+        font-size: 13px;
+        letter-spacing: 0.5em;
+        text-transform: uppercase;
+        color: var(--muted);
         opacity: 0.7;
+      }
+      .modes {
+        display: flex;
+        gap: 24px;
+        flex-wrap: wrap;
+        justify-content: center;
+      }
+      .mode {
+        display: block;
+        text-decoration: none;
+        color: var(--text);
+        background: rgba(20, 25, 43, 0.65);
+        border: 1px solid rgba(216, 180, 254, 0.18);
+        border-radius: 10px;
+        padding: 22px 28px;
+        min-width: 220px;
+        transition: transform 0.15s, border-color 0.15s, box-shadow 0.15s;
+      }
+      .mode:hover {
+        transform: translateY(-2px);
+        border-color: var(--player-dash);
+        box-shadow: 0 0 0 1px rgba(216, 180, 254, 0.2),
+          0 18px 40px rgba(168, 85, 247, 0.18);
+      }
+      .mode .label {
+        font-size: 22px;
+        font-weight: 600;
+        letter-spacing: 0.2em;
+        color: var(--player-dash);
+        text-shadow: 0 0 12px rgba(216, 180, 254, 0.45);
+      }
+      .mode .desc {
+        margin-top: 8px;
+        font-size: 12px;
+        color: var(--muted);
+        letter-spacing: 0.04em;
+      }
+      .mode.disabled .label {
+        color: var(--muted);
+        text-shadow: none;
+      }
+      .mode.disabled:hover {
+        transform: none;
+        border-color: rgba(216, 180, 254, 0.18);
+        box-shadow: none;
+      }
+      .version {
+        position: fixed;
+        bottom: 14px;
+        right: 18px;
+        font-size: 11px;
+        color: var(--muted);
+        opacity: 0.6;
+        letter-spacing: 0.08em;
       }
     </style>
   </head>
   <body>
-    <canvas id="app"></canvas>
-    <div id="hud">ESC or TAB — settings</div>
-    <script type="module" src="/src/main.ts"></script>
+    <h1 class="title">DASH</h1>
+    <div class="subtitle">arcade prototype</div>
+    <nav class="modes">
+      <a class="mode" href="/sandbox.html">
+        <div class="label">SANDBOX</div>
+        <div class="desc">Endless practice mode</div>
+      </a>
+      <a class="mode" href="/rooms.html">
+        <div class="label">ROOMS</div>
+        <div class="desc">Story mode (in development)</div>
+      </a>
+    </nav>
+    <div class="version">v0.0.0</div>
   </body>
 </html>

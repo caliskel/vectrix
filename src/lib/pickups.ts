@@ -1,4 +1,4 @@
-import { PALETTE } from "./config";
+import { PALETTE } from "./palette";
 
 export type PickupType = "hp" | "shield" | "scoreBoost" | "breaker";
 

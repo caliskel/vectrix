@@ -17,9 +17,9 @@ import {
   loadSettings,
   saveSettings,
   type Settings,
-} from "./config";
-import { audio } from "./audio";
-import { createMenu } from "./menu";
+} from "../lib/config";
+import { audio } from "../lib/audio";
+import { createMenu } from "../lib/settings-menu";
 import {
   PICKUP_COLORS,
   PICKUP_HALF,
@@ -28,7 +28,7 @@ import {
   drawPickupIcon,
   rollPickupType,
   type Pickup,
-} from "./pickups";
+} from "../lib/pickups";
 
 const settings: Settings = loadSettings();
 const save = () => saveSettings(settings);
