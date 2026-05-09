@@ -102,14 +102,14 @@ export const PARTICLE_DRAG = 0.95;
 export const PALETTE = {
   bg: "#0a0e1a",
   bgGrid: "#14192b",
-  player: "#ffd60a",
+  player: "#a855f7",
   playerWalk: "#94a3b8",
-  playerDash: "#00e5ff",
+  playerDash: "#d8b4fe",
   // dedicated trail colors so the streak reads as light, not as a smear
   // of the body — each is a lighter cousin of its body color
-  playerTrail: "#ffe066",
+  playerTrail: "#d8b4fe",
   playerWalkTrail: "#cbd5e1",
-  playerDashTrail: "#66f9ff",
+  playerDashTrail: "#ede9fe",
   bullet: "#ff2d55",
   pickupHP: "#4ade80",
   pickupShield: "#60a5fa",
