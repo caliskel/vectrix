@@ -45,6 +45,7 @@ import {
   bulletInsideWall,
   drawWalls,
   resolvePlayerWallCollisions,
+  type Wall,
 } from "../lib/walls";
 import { buildRoom1, ROOM_H_PX, ROOM_W_PX } from "./room1";
 import { buildRoom2 } from "./room2";
@@ -91,9 +92,83 @@ function pointSegmentDistanceSq(
   return ex * ex + ey * ey;
 }
 
-const LASER_CHEVRON_COUNT = 4;
+const LASER_CHEVRON_SPACING_PX = 220; // density-based; one chevron per N px
 const LASER_CHEVRON_SPEED = 200; // px/s along the beam
 const LASER_CHEVRON_SIZE = 7;
+const LASER_IMPACT_RADIUS = 8;
+const LASER_RAYCAST_FALLBACK = 4000; // far enough to leave any plausible room
+
+// Cast a ray from (ox, oy) along `angle` and return the first wall AABB
+// intersection. Each wall contributes the standard slab-test t-interval;
+// the laser stops at the smallest positive t. Watcher always lives
+// inside the walled room so a hit is guaranteed in practice; the
+// fallback keeps the math defined if a ray ever escapes.
+function raycastWalls(
+  ox: number,
+  oy: number,
+  angle: number,
+  walls: Wall[],
+): { x: number; y: number } {
+  const cosA = Math.cos(angle);
+  const sinA = Math.sin(angle);
+  let bestT = Infinity;
+  for (const w of walls) {
+    const x1 = w.x;
+    const x2 = w.x + w.w;
+    const y1 = w.y;
+    const y2 = w.y + w.h;
+
+    let txMin: number;
+    let txMax: number;
+    if (Math.abs(cosA) < 1e-9) {
+      if (ox < x1 || ox > x2) continue;
+      txMin = -Infinity;
+      txMax = Infinity;
+    } else {
+      const tA = (x1 - ox) / cosA;
+      const tB = (x2 - ox) / cosA;
+      txMin = Math.min(tA, tB);
+      txMax = Math.max(tA, tB);
+    }
+
+    let tyMin: number;
+    let tyMax: number;
+    if (Math.abs(sinA) < 1e-9) {
+      if (oy < y1 || oy > y2) continue;
+      tyMin = -Infinity;
+      tyMax = Infinity;
+    } else {
+      const tA = (y1 - oy) / sinA;
+      const tB = (y2 - oy) / sinA;
+      tyMin = Math.min(tA, tB);
+      tyMax = Math.max(tA, tB);
+    }
+
+    const tEnter = Math.max(txMin, tyMin);
+    const tExit = Math.min(txMax, tyMax);
+    if (tEnter > tExit) continue;
+    if (tExit < 1e-6) continue;
+    // origin can be just inside a wall (Watcher near a wall); pick the
+    // exit if entry is non-positive
+    const t = tEnter > 1e-6 ? tEnter : tExit;
+    if (t < bestT) bestT = t;
+  }
+  if (!isFinite(bestT)) bestT = LASER_RAYCAST_FALLBACK;
+  return { x: ox + cosA * bestT, y: oy + sinA * bestT };
+}
+
+function refreshLaserEndpoints(lasers: Laser[], walls: Wall[]): void {
+  for (const l of lasers) {
+    const hit = raycastWalls(
+      l.ownerEnemy.x,
+      l.ownerEnemy.y,
+      l.aimAngle,
+      walls,
+    );
+    l.endX = hit.x;
+    l.endY = hit.y;
+  }
+}
 
 function drawLaser(ctx: CanvasRenderingContext2D, l: Laser): void {
   const charging = l.age < l.chargingDuration;
@@ -125,13 +200,15 @@ function drawLaser(ctx: CanvasRenderingContext2D, l: Laser): void {
     ctx.lineTo(l.endX, l.endY);
     ctx.stroke();
 
-    // chevrons sliding along the beam — tells the player the attack
-    // is loading rather than a static red line painted on the room
-    const spacing = lineLen / LASER_CHEVRON_COUNT;
+    // chevrons sliding along the beam — tells the player the attack is
+    // loading rather than a static red line. Density-based count so a
+    // long arena-spanning beam still feels populated.
+    const chevronCount = Math.max(2, Math.round(lineLen / LASER_CHEVRON_SPACING_PX));
+    const spacing = lineLen / chevronCount;
     const advance = (l.age * LASER_CHEVRON_SPEED) % spacing;
     ctx.fillStyle = PALETTE.bullet;
     ctx.globalAlpha = Math.max(0, Math.min(1, 0.6 + flicker * 0.5));
-    for (let i = 0; i < LASER_CHEVRON_COUNT; i++) {
+    for (let i = 0; i < chevronCount; i++) {
       const distAlong = i * spacing + advance;
       if (distAlong >= lineLen) continue;
       const cx = startX + dirX * distAlong;
@@ -170,6 +247,15 @@ function drawLaser(ctx: CanvasRenderingContext2D, l: Laser): void {
     ctx.moveTo(startX, startY);
     ctx.lineTo(l.endX, l.endY);
     ctx.stroke();
+
+    // impact glow at the wall hit point — sells the beam as a real ray
+    const pulse = 0.55 + Math.sin(l.age * 30) * 0.15;
+    ctx.globalAlpha = pulse;
+    ctx.fillStyle = PALETTE.bullet;
+    ctx.shadowBlur = 25;
+    ctx.beginPath();
+    ctx.arc(l.endX, l.endY, LASER_IMPACT_RADIUS, 0, Math.PI * 2);
+    ctx.fill();
   }
   ctx.restore();
 }
@@ -831,6 +917,12 @@ export function start(canvas: HTMLCanvasElement): void {
     lasers = lasers.filter(
       (l) => l.age < l.chargingDuration + l.firingDuration,
     );
+
+    // recompute laser endpoints from current owner position + fixed
+    // aimAngle, hitting the first wall along the ray. Has to run after
+    // enemy update (owner may have moved) and before hit detection +
+    // render (both consume endX/endY).
+    refreshLaserEndpoints(lasers, currentRoom.walls);
 
     // player vs lasers (only the firing window)
     if (state.runState === "playing") {

@@ -120,9 +120,9 @@ export class Watcher implements Enemy {
   private advancePhase(ctxRoom: EnemyContext): void {
     switch (this.phase) {
       case "idle": {
-        // Capture target — both pupil lock and laser endpoint freeze at
-        // the player's current world position. Watcher may still drift
-        // afterwards but the laser doesn't follow.
+        // Capture aim direction — the laser fires along this fixed
+        // angle. endX/endY are filled in by the room sim each frame
+        // via wall raycast, so the beam pierces the room.
         const px = ctxRoom.player.x;
         const py = ctxRoom.player.y;
         const dx = px - this.x;
@@ -133,6 +133,7 @@ export class Watcher implements Enemy {
         const laser: Laser = {
           ownerType: "watcher",
           ownerEnemy: this,
+          aimAngle: Math.atan2(dy, dx),
           endX: px,
           endY: py,
           age: 0,
