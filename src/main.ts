@@ -18,6 +18,7 @@ import {
   saveSettings,
   type Settings,
 } from "./config";
+import { audio } from "./audio";
 import { createMenu } from "./menu";
 import {
   PICKUP_COLORS,
@@ -31,6 +32,13 @@ import {
 
 const settings: Settings = loadSettings();
 const save = () => saveSettings(settings);
+
+// volumes are applied lazily — audio.init() runs on the first user gesture,
+// after which these calls take effect. Setting them up-front means the
+// engine immediately knows the right values when init does fire.
+audio.setMasterVolume(settings.audio.master);
+audio.setSfxVolume(settings.audio.sfx);
+audio.setMusicVolume(settings.audio.music);
 
 const canvas = document.getElementById("app") as HTMLCanvasElement;
 const ctx = canvas.getContext("2d")!;
@@ -124,6 +132,9 @@ function isBoundKey(k: string): boolean {
 }
 
 window.addEventListener("keydown", (e) => {
+  // Tone.js requires a user gesture to start the AudioContext.
+  // init() is idempotent — only the first call costs anything.
+  audio.init();
   const code = normalizeCode(e.code);
 
   if (menu.isCapturing()) {
@@ -162,6 +173,7 @@ window.addEventListener("keyup", (e) => {
 window.addEventListener("blur", () => keys.clear());
 
 canvas.addEventListener("click", (e) => {
+  audio.init();
   if (menu.isOpen()) return;
   if (state.runState !== "ended") return;
   const rect = canvas.getBoundingClientRect();
@@ -317,8 +329,11 @@ type GameRunState = {
   effects: ActiveEffects;
   passiveTimer: number; // accumulates dt while running, fires a passive pickup at every passiveInterval
   particleSpawnTimer: number; // accumulates dt for the player trail particle emitter
+  multTiersHit: Record<number, boolean>; // tracks 3/5/7/10 tiers crossed this run
   endSnapshot: EndSnapshot | null;
 };
+
+const MULT_TIER_PORTS = [3, 5, 7, 10];
 
 const player = {
   x: 0,
@@ -350,6 +365,7 @@ const state: GameRunState = {
   effects: { shield: null, scoreBoost: null, breaker: null },
   passiveTimer: 0,
   particleSpawnTimer: 0,
+  multTiersHit: {},
   endSnapshot: null,
 };
 
@@ -380,6 +396,7 @@ function resetRun() {
   state.dashChain = 0;
   state.effects = { shield: null, scoreBoost: null, breaker: null };
   state.passiveTimer = 0;
+  state.multTiersHit = {};
   state.endSnapshot = null;
 
   player.x = viewW / 2;
@@ -459,6 +476,7 @@ function tryStartDash() {
 
   state.dashId++;
   state.dashChain = 0;
+  audio.play.dash();
 }
 
 function spawnBullet() {
@@ -572,6 +590,12 @@ function bumpMultiplier() {
   if (state.multiplier > state.bestMultThisRun) {
     state.bestMultThisRun = state.multiplier;
   }
+  for (const tier of MULT_TIER_PORTS) {
+    if (state.multiplier >= tier && !state.multTiersHit[tier]) {
+      state.multTiersHit[tier] = true;
+      audio.play.multUp(tier);
+    }
+  }
 }
 
 function awardDashThrough(b: Bullet) {
@@ -580,6 +604,7 @@ function awardDashThrough(b: Bullet) {
   const earned = Math.round(base * state.multiplier);
   state.score += earned;
   bumpMultiplier();
+  audio.play.dashThrough(state.dashChain - 1);
   const size = 18 + state.dashChain * 6;
   addFloatingText(`+${base}`, b.x, b.y - 10, {
     size,
@@ -602,6 +627,7 @@ function awardDashThrough(b: Bullet) {
       age: 0,
       lifetime: settings.pickups.lifetime,
     });
+    audio.play.pickupSpawn();
   }
 }
 
@@ -612,6 +638,7 @@ function awardBulletBreak(b: Bullet) {
   const earned = Math.round(base * state.multiplier);
   state.score += earned;
   bumpMultiplier();
+  audio.play.bulletBreak();
   const size = 18 + state.dashChain * 6;
   addFloatingText(`+${base}`, b.x, b.y - 10, {
     size,
@@ -726,9 +753,11 @@ function spawnPassivePickup() {
     color: PICKUP_COLORS[type],
     lifetime: 0.4,
   });
+  audio.play.pickupSpawn();
 }
 
 function applyPickup(p: Pickup) {
+  audio.play.pickupGrab(p.type);
   const color = PICKUP_COLORS[p.type];
   const label = PICKUP_LABELS[p.type];
   switch (p.type) {
@@ -774,6 +803,13 @@ function applyPickup(p: Pickup) {
       state.effects.scoreBoost = { remaining: cfg.duration };
       if (state.multiplier > state.bestMultThisRun) {
         state.bestMultThisRun = state.multiplier;
+      }
+      // boost can vault past tier thresholds — fire the tier-up cue too
+      for (const tier of MULT_TIER_PORTS) {
+        if (state.multiplier >= tier && !state.multTiersHit[tier]) {
+          state.multTiersHit[tier] = true;
+          audio.play.multUp(tier);
+        }
       }
       addFloatingText(label, p.x, p.y - 18, {
         color,
@@ -822,6 +858,7 @@ function awardNearMiss(b: Bullet) {
 
 function hitPlayer() {
   if (state.runState === "ended") return;
+  audio.play.hit();
   state.hp -= 1;
   state.score -= HIT_PENALTY;
   addFloatingText(`-${HIT_PENALTY}`, player.x, player.y - settings.player.size, {
@@ -841,6 +878,7 @@ function endRun(reason: "timeout" | "ko") {
   if (state.runState === "ended") return;
   state.runState = "ended";
   state.endReason = reason;
+  audio.play.runEnd();
   const id = configIdFromSettings();
   const newBest = id ? setBestScoreIfBetter(id, state.score) : false;
   state.endSnapshot = {

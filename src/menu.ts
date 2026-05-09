@@ -1,3 +1,4 @@
+import { audio } from "./audio";
 import {
   DEFAULT_SETTINGS,
   PRESETS,
@@ -149,6 +150,7 @@ export function createMenu(
     panel.appendChild(makePlayer());
     panel.appendChild(makeDash());
     panel.appendChild(makePickups());
+    panel.appendChild(makeAudio());
     panel.appendChild(makePresets());
     root.appendChild(panel);
   }
@@ -469,6 +471,43 @@ export function createMenu(
             p.passiveInterval = v;
           },
         ),
+      ),
+    );
+    return s;
+  }
+
+  function makeAudio() {
+    const a = settings.audio;
+    const s = makeSection("Audio");
+    const fmt = (v: number) => `${Math.round(v * 100)}%`;
+    s.appendChild(
+      makeRow(
+        "Master",
+        makeSlider(0, 1, 0.05, a.master, fmt, (v) => {
+          a.master = v;
+          audio.init();
+          audio.setMasterVolume(v);
+        }),
+      ),
+    );
+    s.appendChild(
+      makeRow(
+        "SFX",
+        makeSlider(0, 1, 0.05, a.sfx, fmt, (v) => {
+          a.sfx = v;
+          audio.init();
+          audio.setSfxVolume(v);
+        }),
+      ),
+    );
+    s.appendChild(
+      makeRow(
+        "Music",
+        makeSlider(0, 1, 0.05, a.music, fmt, (v) => {
+          a.music = v;
+          audio.init();
+          audio.setMusicVolume(v);
+        }),
       ),
     );
     return s;

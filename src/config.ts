@@ -38,6 +38,12 @@ export type RunSettings = {
   durationSec: number; // 0 = infinite, otherwise hard time limit in seconds
 };
 
+export type AudioSettings = {
+  master: number; // 0..1
+  sfx: number;    // 0..1
+  music: number;  // 0..1 (no music routed yet — slot for future)
+};
+
 export type PickupsSettings = {
   dropChance: number;        // probability 0..1 of a dash-through bullet dropping a pickup
   lifetime: number;          // seconds before pickup expires
@@ -78,6 +84,7 @@ export type Settings = {
   dash: DashSettings;
   run: RunSettings;
   pickups: PickupsSettings;
+  audio: AudioSettings;
 };
 
 export const STORAGE_KEY = "dash-proto:settings:v3";
@@ -168,6 +175,11 @@ export const DEFAULT_SETTINGS: Settings = {
     scoreBoost: { duration: 6, bonus: 1.0 },
     breaker: { duration: 5, scoreBase: 150, particleCount: 8, glowBlur: 15 },
   },
+  audio: {
+    master: 0.8,
+    sfx: 0.6,
+    music: 0.8,
+  },
 };
 
 export type Preset = {
@@ -177,6 +189,7 @@ export type Preset = {
   bindings?: Partial<Bindings>;
   run?: Partial<RunSettings>;
   pickups?: Partial<PickupsSettings>;
+  audio?: Partial<AudioSettings>;
 };
 
 export const PRESETS: Record<"Easy" | "Normal" | "Hard", Preset> = {
