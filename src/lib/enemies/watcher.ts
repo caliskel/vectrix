@@ -14,7 +14,7 @@ import type { Enemy, EnemyContext, EnemyType, Laser } from "./types";
 // as depth rather than a target. Pupil is large and visibly black on
 // top of the burgundy core, with a tiny white catchlight.
 const WATCHER_RADIUS = 30;        // outer ring radius
-const OUTER_RING_W = 5;
+const OUTER_RING_W = 2.5;
 const IRIS_OUTER_R = 24;
 const IRIS_MID_R = 19;
 const IRIS_INNER_R = 14;
