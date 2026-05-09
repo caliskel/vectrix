@@ -144,18 +144,18 @@ export const IDLE_JITTER_AMPLITUDE = 0.5;
 // (vertical sway scaled by speed), a squash + stretch "pop" on a sharp
 // start, and a reverse squeeze on a sharp brake. Knobs are deliberately
 // generous so the deformation reads in motion.
-export const LEAN_MAX_HORIZONTAL_RAD = 0.45; // ~26°
-export const LEAN_MAX_DIAGONAL_RAD = 0.32;   // ~18°
+export const LEAN_MAX_HORIZONTAL_RAD = 0.32; // ~18°
+export const LEAN_MAX_DIAGONAL_RAD = 0.22;   // ~13°
 export const LEAN_VELOCITY_THRESHOLD = 50;
 export const LEAN_LERP = 0.18; // per-frame factor at 60 fps; lib derives
 // a rate (≈12 / s) from this so the lerp is frame-rate independent
-export const BOB_AMPLITUDE_PX = 8;
+export const BOB_AMPLITUDE_PX = 4;
 export const BOB_FREQUENCY_FACTOR = 140;
 // bob kicks in earlier than lean — even walk-speed body sways
 export const BOB_VELOCITY_THRESHOLD = 30;
 export const SQUASH_DURATION_MS = 180;
-export const SQUASH_Y = 0.72;
-export const STRETCH_X = 1.25;
+export const SQUASH_Y = 0.85;
+export const STRETCH_X = 1.12;
 // sharp-start trigger: speed jumps from below LOW to above HIGH inside
 // one frame (with our high acceleration this happens on a fresh keypress)
 export const START_SQUASH_PREV_MAX = 30;
@@ -176,9 +176,9 @@ export const BRAKE_DROP_TIME_MS = 100;            // ms
 // along the velocity direction (and squashes perpendicular) like a ball
 // running. Strength scales with speed above the threshold and clamps at
 // ANISOTROPIC_STRETCH_MAX. Skipped during dash.
-export const ANISOTROPIC_STRETCH_MAX = 0.3;
+export const ANISOTROPIC_STRETCH_MAX = 0.1;
 export const ANISOTROPIC_STRETCH_VELOCITY_THRESHOLD = 100;
-export const ANISOTROPIC_STRETCH_VELOCITY_FACTOR = 600;
+export const ANISOTROPIC_STRETCH_VELOCITY_FACTOR = 900;
 
 // Smash on collision — when the player slams into a wall (or stationary
 // enemy) the eye flattens against the surface, springs back past 1.0
