@@ -184,8 +184,8 @@ export class Watcher implements Enemy {
         ctx.stroke();
       },
       "#f8fafc",
-      22,
       8,
+      3,
     );
 
     // 2-4. Iris stack — three opaque solid discs. The illusion of depth
