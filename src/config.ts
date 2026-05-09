@@ -91,6 +91,11 @@ export const PALETTE = {
   player: "#ffd60a",
   playerWalk: "#94a3b8",
   playerDash: "#00e5ff",
+  // dedicated trail colors so the streak reads as light, not as a smear
+  // of the body — each is a lighter cousin of its body color
+  playerTrail: "#ffe066",
+  playerWalkTrail: "#cbd5e1",
+  playerDashTrail: "#66f9ff",
   bullet: "#ff2d55",
   pickupHP: "#4ade80",
   pickupShield: "#60a5fa",

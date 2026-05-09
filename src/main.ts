@@ -1246,47 +1246,71 @@ function render() {
   const cooling = player.cooldown > 0;
   const walking = keys.has(settings.bindings.walk);
 
-  // player trail — draw under the live player, color/density per state
+  // player trail — drawn under the live player. Trail is a separate
+  // palette color (lighter than the body) so the streak reads as light
+  // rather than as a smear of the player.
+  const isDashTrail = dashing || dashIframe;
   let trailColor: string;
   let trailBlurStrong: number;
   let trailAlphaLow: number;
   let trailAlphaHigh: number;
-  if (dashing || dashIframe) {
-    trailColor = settings.player.colorDash;
+  let trailSizeLow: number;
+  let trailSizeHigh: number;
+  let trailSkipEveryOther: boolean;
+  if (isDashTrail) {
+    // dash trail keeps the dense, full-size look — power moment
+    trailColor = PALETTE.playerDashTrail;
     trailBlurStrong = 20;
     trailAlphaLow = 0.2;
     trailAlphaHigh = 0.7;
+    trailSizeLow = 1.0;
+    trailSizeHigh = 1.0;
+    trailSkipEveryOther = false;
   } else if (walking) {
-    trailColor = settings.player.colorWalk;
+    trailColor = PALETTE.playerWalkTrail;
     trailBlurStrong = 10;
     trailAlphaLow = 0.05;
-    trailAlphaHigh = 0.3;
+    trailAlphaHigh = 0.35;
+    trailSizeLow = 0.3;
+    trailSizeHigh = 0.6;
+    trailSkipEveryOther = true;
   } else {
-    trailColor = settings.player.colorIdle;
+    trailColor = PALETTE.playerTrail;
     trailBlurStrong = 10;
     trailAlphaLow = 0.05;
-    trailAlphaHigh = 0.3;
+    trailAlphaHigh = 0.35;
+    trailSizeLow = 0.3;
+    trailSizeHigh = 0.6;
+    trailSkipEveryOther = true;
   }
 
-  if (playerTrailCount > 1) {
+  // walk/idle trail vanishes when the player is essentially still — keeps
+  // the streak from collapsing into a "blur blob" while standing
+  const playerSpeed = Math.hypot(player.vx, player.vy);
+  const trailVisible = isDashTrail || playerSpeed >= 80;
+
+  if (trailVisible && playerTrailCount > 1) {
     const start =
       playerTrailCount === PLAYER_TRAIL ? playerTrailIdx : 0;
-    // skip the very last sample because it's the current player position
-    const visible = playerTrailCount - 1;
+    const visible = playerTrailCount - 1; // exclude the live position
     for (let i = 0; i < visible; i++) {
+      // dotted look for non-dash trails — every other sample only
+      if (trailSkipEveryOther && (i & 1) === 1) continue;
       const j = (start + i) % PLAYER_TRAIL;
       const t = visible === 1 ? 1 : i / (visible - 1);
       const alpha = trailAlphaLow + (trailAlphaHigh - trailAlphaLow) * t;
+      const sizeFactor = trailSizeLow + (trailSizeHigh - trailSizeLow) * t;
+      const sz = pSize * sizeFactor;
       ctx.save();
       ctx.globalAlpha = alpha;
       drawNeon(
         () => {
           ctx.fillStyle = trailColor;
           ctx.fillRect(
-            playerTrailX[j] - pSize / 2,
-            playerTrailY[j] - pSize / 2,
-            pSize,
-            pSize,
+            playerTrailX[j] - sz / 2,
+            playerTrailY[j] - sz / 2,
+            sz,
+            sz,
           );
         },
         trailColor,
