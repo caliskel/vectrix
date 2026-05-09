@@ -323,11 +323,73 @@ Each room is rebuilt fresh by its `buildRoomN()` factory on
   which rebuilds bullets/rings/floating texts and respawns the player
   at the next room's spawn point.
 
-### Room 2 (placeholder)
+### Room 2
 
-- Closed border, no enemies, no door, `message: "Room 2 — coming
-  soon"` rendered as a centered neon string. Used to verify
-  transitions work end-to-end before real Room 2 content lands.
+- Player spawns at (150, 400). One **Watcher** at (950, 400). Right
+  wall has the same 80×120 door gap as Room 1; the door is closed
+  while the Watcher is alive and opens on clear with the same flash
+  + sting flow. Door leads to Room 3.
+
+### Room 3 (placeholder)
+
+- Closed border, no enemies, no door, `message: "Room 3 — coming
+  soon"`. Used to verify the Room 2 → Room 3 transition while
+  Room 3 content is in flight.
+
+### Watcher (`lib/enemies/watcher.ts`)
+
+Slow chasing eye that telegraphs a laser shot on a long beat.
+Fragile (HP 2) but dangerous at distance.
+
+- 60 px diameter — outer white ring + translucent red iris
+  (PALETTE.bullet @ 0.85α) + dark pupil + tiny highlight. Pupil
+  tracks the player smoothly during idle / cooldown and snaps to
+  the captured target during aiming / firing.
+- Movement: chases the player at 220 px/s (≈0.5× default
+  player.maxSpeed). Stops once within
+  WATCHER_RADIUS + playerHalf + 20 so it doesn't shove the player.
+  No wall collision yet — it can clip into walls (TODO).
+- State machine: idle 1.5 s → aiming 1.2 s → firing 0.25 s →
+  cooldown 0.8 s → idle. Audio cue (`audio.play.bulletBreak()`)
+  plays on aiming → firing.
+- Laser is spawned into the room's shared `lasers` array on
+  idle → aiming with `endX/endY` captured at that instant; the
+  beam doesn't follow the player. The laser self-expires after
+  chargingDuration + firingDuration.
+- HP 2; only damage path is dash-through during the dash i-frame
+  (one damage per dash session via `dashIdAlreadyDamaged`). Outside
+  the dash i-frame, contact deals normal player damage.
+- Death: +800 score, double ring (red outer + white inner), 12
+  particles split between PALETTE.bullet and white,
+  `bulletBreak` cue. `console.log("Watcher destroyed")` for tracing.
+
+### Lasers (`lib/enemies/types.ts`)
+
+Beam entities owned by the room, not by individual enemies, so any
+future enemy can stamp a laser. Self-expire by total age:
+
+```ts
+type Laser = {
+  ownerType: "turret" | "watcher";
+  startX, startY: number; // captured at spawn
+  endX, endY: number;     // captured at spawn
+  chargingDuration: number;
+  firingDuration: number;
+  age: number;
+  dodgedByDashId?: number;
+};
+```
+
+Render: charging draws a thin red line whose alpha + width grow
+with age and flicker via `sin(age * 15) * 0.1`; firing draws a
+12 px outer beam with a 4 px white-hot core and brighter glow.
+Collision is a point-to-segment distance check against the player
+center; only the firing window deals damage.
+
+- Player hit while not in any i-frame: `takeHit()` plus a 200 ms
+  4 px screen shake (room transform only, HUD is unaffected).
+- Player crosses laser during dash i-frame: no damage, +50 score
+  credited once per (laser × dash) pair via `dodgedByDashId`.
 
 ### Enemy interface (`src/lib/enemies/types.ts`)
 
@@ -396,6 +458,14 @@ settings overlay on Esc / Tab.
 
 ### TODO (rooms direction)
 
+- **Room 3** — currently a "coming soon" placeholder; needs real
+  content (probably the third enemy archetype + a small encounter).
+- **Laser sound** — Watcher reuses `audio.play.bulletBreak` for
+  the firing cue; needs its own dedicated synth (saw sweep + noise
+  burst would read cleanly).
+- **Watcher wall collision** — currently the eye walks straight
+  through wall AABBs. Needs the same `resolvePlayerWallCollisions`
+  treatment as the player.
 - **More rooms.** Authoring pattern: one `buildRoomN()` factory per
   room, registered in `rooms-game.ts`. Eventually a small data file
   describing pattern timelines.

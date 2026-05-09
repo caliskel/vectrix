@@ -2,6 +2,24 @@ import type { Bullet } from "../bullets";
 import type { FloatingText, Particle, Ring } from "../particles";
 import type { Player } from "../player";
 
+export type EnemyType = "turret" | "watcher";
+
+// Beam/laser entity owned by the room (not by any single enemy) so any
+// enemy can stamp one into the room state. Self-expires by age.
+export type Laser = {
+  ownerType: EnemyType;
+  startX: number;
+  startY: number;
+  endX: number;
+  endY: number;
+  chargingDuration: number; // seconds in charging phase (telegraph)
+  firingDuration: number;   // seconds in firing phase (the actual hit)
+  age: number;              // counts up; phase derived from this
+  /** Once a dashing player crosses a firing laser this is set so the
+   *  +50 dodge bonus only credits once per dash. */
+  dodgedByDashId?: number;
+};
+
 // Context handed to Enemy.update so each enemy can spawn bullets,
 // FX, etc. into the room's shared lists. No global state.
 export type EnemyContext = {
@@ -11,10 +29,13 @@ export type EnemyContext = {
   particles: Particle[];
   rings: Ring[];
   floatingTexts: FloatingText[];
+  lasers: Laser[];
   bulletsConfig: { speed: number; size: number; color: string };
+  playerHalfSize: number;
 };
 
 export interface Enemy {
+  type: EnemyType;
   x: number;
   y: number;
   hp: number;

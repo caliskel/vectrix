@@ -16,7 +16,7 @@ import {
   type Settings,
 } from "../lib/config";
 import { drawDoor, playerOverlapsDoor } from "../lib/door";
-import type { Enemy } from "../lib/enemies/types";
+import type { Enemy, Laser } from "../lib/enemies/types";
 import { drawNeon } from "../lib/neon";
 import { PALETTE } from "../lib/palette";
 import {
@@ -48,6 +48,7 @@ import {
 } from "../lib/walls";
 import { buildRoom1, ROOM_H_PX, ROOM_W_PX } from "./room1";
 import { buildRoom2 } from "./room2";
+import { buildRoom3 } from "./room3";
 import type { Room } from "./room";
 
 const ACCEL_FACTOR = 9;
@@ -55,9 +56,77 @@ const FRICTION = 8.0;
 const HIT_IFRAME = 1.0;
 const HIT_VIGNETTE = 0.2;
 const TURRET_KILL_SCORE = 500;
-const ROOM_TOTAL = 2;
+const WATCHER_KILL_SCORE = 800;
+const LASER_DODGE_SCORE = 50;
+const LASER_HIT_PADDING = 6; // px added to player half for laser collision
+const SCREEN_SHAKE_DURATION_SEC = 0.2;
+const SCREEN_SHAKE_PX = 4;
+const ROOM_TOTAL = 3;
 const ROOM_CLEAR_FLASH = 0.2;
 const ROOMS_BEST_KEY = "dash-proto:rooms-best";
+
+function pointSegmentDistanceSq(
+  px: number,
+  py: number,
+  x1: number,
+  y1: number,
+  x2: number,
+  y2: number,
+): number {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq === 0) {
+    const ex = px - x1;
+    const ey = py - y1;
+    return ex * ex + ey * ey;
+  }
+  let t = ((px - x1) * dx + (py - y1) * dy) / lenSq;
+  if (t < 0) t = 0;
+  else if (t > 1) t = 1;
+  const cx = x1 + t * dx;
+  const cy = y1 + t * dy;
+  const ex = px - cx;
+  const ey = py - cy;
+  return ex * ex + ey * ey;
+}
+
+function drawLaser(ctx: CanvasRenderingContext2D, l: Laser): void {
+  const charging = l.age < l.chargingDuration;
+  ctx.save();
+  if (charging) {
+    const p = l.age / l.chargingDuration;
+    const baseAlpha = 0.15 + (0.7 - 0.15) * p;
+    const flicker = Math.sin(l.age * 15) * 0.1;
+    ctx.globalAlpha = Math.max(0, Math.min(1, baseAlpha + flicker));
+    ctx.strokeStyle = PALETTE.bullet;
+    ctx.lineWidth = 1 + 3 * p;
+    ctx.shadowColor = PALETTE.bullet;
+    ctx.shadowBlur = 10;
+    ctx.beginPath();
+    ctx.moveTo(l.startX, l.startY);
+    ctx.lineTo(l.endX, l.endY);
+    ctx.stroke();
+  } else {
+    // firing — full bright beam with a hot inner core
+    ctx.shadowColor = PALETTE.bullet;
+    ctx.shadowBlur = 25;
+    ctx.strokeStyle = PALETTE.bullet;
+    ctx.lineWidth = 12;
+    ctx.beginPath();
+    ctx.moveTo(l.startX, l.startY);
+    ctx.lineTo(l.endX, l.endY);
+    ctx.stroke();
+    ctx.strokeStyle = "#fff5f5";
+    ctx.lineWidth = 4;
+    ctx.shadowBlur = 12;
+    ctx.beginPath();
+    ctx.moveTo(l.startX, l.startY);
+    ctx.lineTo(l.endX, l.endY);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
 
 type RunState = "playing" | "failed";
 
@@ -77,6 +146,7 @@ type GameState = {
   particleSpawnTimer: number;
   clearedRoomIds: Set<string>;
   clearFlash: number; // counts down 0.2 → 0 after a fresh clear
+  screenShake: number; // counts down for laser-hit shake
   failedSnapshot: FailedSnapshot | null;
 };
 
@@ -128,10 +198,12 @@ export function start(canvas: HTMLCanvasElement): void {
   let particles: Particle[] = [];
   let rings: Ring[] = [];
   let floatingTexts: FloatingText[] = [];
+  let lasers: Laser[] = [];
 
   const rooms = new Map<string, Room>();
   rooms.set("room1", buildRoom1());
   rooms.set("room2", buildRoom2());
+  rooms.set("room3", buildRoom3());
 
   const state: GameState = {
     runState: "playing",
@@ -143,6 +215,7 @@ export function start(canvas: HTMLCanvasElement): void {
     particleSpawnTimer: 0,
     clearedRoomIds: new Set(),
     clearFlash: 0,
+    screenShake: 0,
     failedSnapshot: null,
   };
 
@@ -169,6 +242,7 @@ export function start(canvas: HTMLCanvasElement): void {
   function rebuildAllRooms() {
     rooms.set("room1", buildRoom1());
     rooms.set("room2", buildRoom2());
+    rooms.set("room3", buildRoom3());
   }
 
   function restartRun() {
@@ -183,11 +257,13 @@ export function start(canvas: HTMLCanvasElement): void {
     state.particleSpawnTimer = 0;
     state.clearedRoomIds = new Set();
     state.clearFlash = 0;
+    state.screenShake = 0;
     state.failedSnapshot = null;
     bullets = [];
     particles = [];
     rings = [];
     floatingTexts = [];
+    lasers = [];
     tryAgainBounds = null;
     spawnPlayerInCurrentRoom();
     resetEyeState(player);
@@ -200,6 +276,7 @@ export function start(canvas: HTMLCanvasElement): void {
     bullets = [];
     rings = [];
     floatingTexts = [];
+    lasers = [];
     spawnPlayerInCurrentRoom();
   }
 
@@ -425,37 +502,90 @@ export function start(canvas: HTMLCanvasElement): void {
   }
 
   function destroyEnemy(enemy: Enemy) {
-    state.score += TURRET_KILL_SCORE;
     audio.play.bulletBreak();
-    addFloatingText(floatingTexts, `+${TURRET_KILL_SCORE}`, enemy.x, enemy.y - 18, {
-      size: 22,
-      color: PALETTE.playerDash,
-      lifetime: 0.7,
-    });
-    addRing(rings, enemy.x, enemy.y, {
-      startR: 8,
-      endR: 120,
-      color: PALETTE.playerDash,
-      lifetime: 0.4,
-    });
-    for (let i = 0; i < 16; i++) {
-      const a = Math.random() * Math.PI * 2;
-      const sp = 250 + Math.random() * 150;
-      particles.push({
-        x: enemy.x,
-        y: enemy.y,
-        vx: Math.cos(a) * sp,
-        vy: Math.sin(a) * sp,
-        initialSize: 4,
-        color: PALETTE.playerDash,
-        age: 0,
-        lifetime: 0.8,
-        glowStrong: 14,
-        glowSoft: 5,
-        drag: 0.96,
+    if (enemy.type === "watcher") {
+      state.score += WATCHER_KILL_SCORE;
+      addFloatingText(
+        floatingTexts,
+        `+${WATCHER_KILL_SCORE}`,
+        enemy.x,
+        enemy.y - 18,
+        {
+          size: 24,
+          color: PALETTE.bullet,
+          lifetime: 0.7,
+        },
+      );
+      // double ring — outer red, inner white
+      addRing(rings, enemy.x, enemy.y, {
+        startR: 8,
+        endR: 120,
+        color: PALETTE.bullet,
+        lifetime: 0.4,
       });
+      addRing(rings, enemy.x, enemy.y, {
+        startR: 6,
+        endR: 100,
+        color: "#ffffff",
+        lifetime: 0.45,
+      });
+      for (let i = 0; i < 12; i++) {
+        const a = Math.random() * Math.PI * 2;
+        const sp = 200 + Math.random() * 150;
+        const isRed = i % 2 === 0;
+        particles.push({
+          x: enemy.x,
+          y: enemy.y,
+          vx: Math.cos(a) * sp,
+          vy: Math.sin(a) * sp,
+          initialSize: 4,
+          color: isRed ? PALETTE.bullet : "#ffffff",
+          age: 0,
+          lifetime: 0.7,
+          glowStrong: 12,
+          glowSoft: 4,
+          drag: 0.96,
+        });
+      }
+      console.log("Watcher destroyed");
+    } else {
+      state.score += TURRET_KILL_SCORE;
+      addFloatingText(
+        floatingTexts,
+        `+${TURRET_KILL_SCORE}`,
+        enemy.x,
+        enemy.y - 18,
+        {
+          size: 22,
+          color: PALETTE.playerDash,
+          lifetime: 0.7,
+        },
+      );
+      addRing(rings, enemy.x, enemy.y, {
+        startR: 8,
+        endR: 120,
+        color: PALETTE.playerDash,
+        lifetime: 0.4,
+      });
+      for (let i = 0; i < 16; i++) {
+        const a = Math.random() * Math.PI * 2;
+        const sp = 250 + Math.random() * 150;
+        particles.push({
+          x: enemy.x,
+          y: enemy.y,
+          vx: Math.cos(a) * sp,
+          vy: Math.sin(a) * sp,
+          initialSize: 4,
+          color: PALETTE.playerDash,
+          age: 0,
+          lifetime: 0.8,
+          glowStrong: 14,
+          glowSoft: 5,
+          drag: 0.96,
+        });
+      }
+      console.log("Turret destroyed");
     }
-    console.log("Turret destroyed");
   }
 
   function aliveEnemies(): Enemy[] {
@@ -579,6 +709,8 @@ export function start(canvas: HTMLCanvasElement): void {
       state.hitIframe = Math.max(0, state.hitIframe - dt);
     if (state.hitVignette > 0)
       state.hitVignette = Math.max(0, state.hitVignette - dt);
+    if (state.screenShake > 0)
+      state.screenShake = Math.max(0, state.screenShake - dt);
 
     player.x += player.vx * dt;
     player.y += player.vy * dt;
@@ -637,13 +769,65 @@ export function start(canvas: HTMLCanvasElement): void {
       particles,
       rings,
       floatingTexts,
+      lasers,
       bulletsConfig: {
         speed: settings.bullets.speed,
         size: settings.bullets.size,
         color: settings.bullets.color,
       },
+      playerHalfSize: settings.player.size / 2,
     };
     for (const e of currentRoom.enemies) e.update(enemyCtx);
+
+    // age + cull lasers (self-expire by total duration)
+    for (const l of lasers) l.age += dt;
+    lasers = lasers.filter(
+      (l) => l.age < l.chargingDuration + l.firingDuration,
+    );
+
+    // player vs lasers (only the firing window)
+    if (state.runState === "playing") {
+      const halfPlus = settings.player.size / 2 + LASER_HIT_PADDING;
+      const halfPlus2 = halfPlus * halfPlus;
+      for (const l of lasers) {
+        if (l.age < l.chargingDuration) continue;
+        if (l.age >= l.chargingDuration + l.firingDuration) continue;
+        const d2 = pointSegmentDistanceSq(
+          player.x,
+          player.y,
+          l.startX,
+          l.startY,
+          l.endX,
+          l.endY,
+        );
+        if (d2 >= halfPlus2) continue;
+        if (player.dashIframeTime > 0) {
+          // dashed through the beam — credit a one-time dodge bonus per
+          // laser, no damage
+          if (l.dodgedByDashId !== state.dashId) {
+            l.dodgedByDashId = state.dashId;
+            state.score += LASER_DODGE_SCORE;
+            addFloatingText(
+              floatingTexts,
+              `+${LASER_DODGE_SCORE}`,
+              player.x,
+              player.y - settings.player.size,
+              {
+                size: 16,
+                color: "#facc15",
+                lifetime: 0.5,
+              },
+            );
+          }
+        } else if (state.hitIframe > 0) {
+          // already in post-hit i-frame, ignore
+        } else {
+          state.screenShake = SCREEN_SHAKE_DURATION_SEC;
+          takeHit();
+          break;
+        }
+      }
+    }
 
     // bullet movement + wall expiry (no bouncing in rooms)
     for (const b of bullets) {
@@ -729,7 +913,22 @@ export function start(canvas: HTMLCanvasElement): void {
     ctx.fillStyle = PALETTE.bg;
     ctx.fillRect(0, 0, viewW, viewH);
 
-    ctx.setTransform(scale * dpr, 0, 0, scale * dpr, offsetX * dpr, offsetY * dpr);
+    // screen shake — applied to the room transform only so HUD stays put
+    let shakeX = 0;
+    let shakeY = 0;
+    if (state.screenShake > 0) {
+      const t = state.screenShake / SCREEN_SHAKE_DURATION_SEC;
+      shakeX = (Math.random() * 2 - 1) * SCREEN_SHAKE_PX * t;
+      shakeY = (Math.random() * 2 - 1) * SCREEN_SHAKE_PX * t;
+    }
+    ctx.setTransform(
+      scale * dpr,
+      0,
+      0,
+      scale * dpr,
+      (offsetX + shakeX) * dpr,
+      (offsetY + shakeY) * dpr,
+    );
 
     // room background (slightly lighter so the play field stands apart
     // from letterbox bars)
@@ -738,6 +937,9 @@ export function start(canvas: HTMLCanvasElement): void {
 
     drawWalls(ctx, currentRoom.walls);
     if (currentRoom.door) drawDoor(ctx, currentRoom.door);
+
+    // lasers (under enemies so the beam appears to emerge from behind)
+    for (const l of lasers) drawLaser(ctx, l);
 
     // enemies
     for (const e of currentRoom.enemies) e.draw(ctx);
@@ -954,7 +1156,14 @@ export function start(canvas: HTMLCanvasElement): void {
 
     ctx.font = "600 22px ui-monospace, SFMono-Regular, Menlo, monospace";
     ctx.fillStyle = "#ffffff";
-    const roomNum = currentRoom.id === "room1" ? 1 : currentRoom.id === "room2" ? 2 : 1;
+    const roomNum =
+      currentRoom.id === "room1"
+        ? 1
+        : currentRoom.id === "room2"
+          ? 2
+          : currentRoom.id === "room3"
+            ? 3
+            : 1;
     ctx.fillText(`${roomNum} / ${ROOM_TOTAL}`, colA, y0 + 14);
 
     const alive = aliveEnemies().length;

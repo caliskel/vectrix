@@ -1,7 +1,7 @@
 import { makeBullet } from "../bullets";
 import { drawNeon } from "../neon";
 import { PALETTE } from "../palette";
-import type { Enemy, EnemyContext } from "./types";
+import type { Enemy, EnemyContext, EnemyType } from "./types";
 
 const TURRET_RADIUS = 25;
 const TURRET_BARREL_LEN = 28;
@@ -12,6 +12,7 @@ const AIM_LERP_RATE = 10; // frame-rate-independent (1 - exp(-rate*dt))
 const TURRET_HP_MAX = 3;
 
 export class Turret implements Enemy {
+  readonly type: EnemyType = "turret";
   x: number;
   y: number;
   hp: number;
