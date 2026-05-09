@@ -4,6 +4,7 @@ import {
   BLINK_INTERVAL_MIN_MS,
   BLINK_OPEN_DURATION_MS,
   BREATH_AMPLITUDE,
+  BREATH_INHALE_FRACTION,
   BREATH_PERIOD_MS,
   DASH_GHOST_INITIAL_ALPHA,
   DASH_GHOST_INTERVAL_MS,
@@ -402,6 +403,22 @@ function dashStretchX(
     return DASH_STRETCH_X + (DASH_STRETCH_END_X - DASH_STRETCH_X) * t;
   }
   return DASH_STRETCH_X;
+}
+
+// Asymmetric breathing curve. Returns 0..1 across phase 0..2π:
+//   inhale (first BREATH_INHALE_FRACTION of cycle): ease-out, fast
+//     intake decelerating to the peak.
+//   exhale (the rest): smoothstep ease-in-out from peak back to rest.
+// The factor is multiplied by BREATH_AMPLITUDE in the renderer, so the
+// scale stays at 1 (rest) and grows to 1 + AMP (peak inhale).
+function breathFactor(phase: number): number {
+  const t = phase / (Math.PI * 2);
+  if (t < BREATH_INHALE_FRACTION) {
+    const u = t / BREATH_INHALE_FRACTION;
+    return 1 - (1 - u) * (1 - u);
+  }
+  const u = (t - BREATH_INHALE_FRACTION) / (1 - BREATH_INHALE_FRACTION);
+  return 1 - u * u * (3 - 2 * u);
 }
 
 function currentBlinkDurations(p: Player): { close: number; open: number } {
@@ -872,7 +889,7 @@ export function drawPlayerEye(
   // own deformation owns the look) and during a blink (lid squash makes
   // the breath read as a glitch).
   if (!isDashing && !p.blinkActive) {
-    const breathScale = 1 + Math.sin(p.breathPhase) * BREATH_AMPLITUDE;
+    const breathScale = 1 + breathFactor(p.breathPhase) * BREATH_AMPLITUDE;
     ctx.scale(breathScale, breathScale);
   }
 

@@ -173,8 +173,11 @@ export const BRAKE_CUR_MAX = 60;
 // of the existing lean/bob/dash deformations and are applied in
 // lib/player.ts so all three modes (sandbox, rooms, landing preview)
 // share the behavior.
-export const BREATH_PERIOD_MS = 4000;
-export const BREATH_AMPLITUDE = 0.012;
+export const BREATH_PERIOD_MS = 3200;
+export const BREATH_AMPLITUDE = 0.04;
+// Inhale phase fraction (the rest is exhale). Real breathing is
+// asymmetric — quick intake, slower release.
+export const BREATH_INHALE_FRACTION = 0.4;
 export const PUPIL_DILATION_MIN = 0.6;
 export const PUPIL_DILATION_MAX = 1.3;
 export const PUPIL_DILATION_LERP = 0.04;
