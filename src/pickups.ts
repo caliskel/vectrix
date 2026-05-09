@@ -1,10 +1,10 @@
-export type PickupType = "hp" | "shield" | "scoreBoost" | "dashRush";
+export type PickupType = "hp" | "shield" | "scoreBoost" | "breaker";
 
 export const PICKUP_TYPES: PickupType[] = [
   "hp",
   "shield",
   "scoreBoost",
-  "dashRush",
+  "breaker",
 ];
 
 export type Pickup = {
@@ -19,14 +19,14 @@ export const PICKUP_COLORS: Record<PickupType, string> = {
   hp: "#4ade80",
   shield: "#60a5fa",
   scoreBoost: "#c084fc",
-  dashRush: "#fb923c",
+  breaker: "#fb923c",
 };
 
 export const PICKUP_LABELS: Record<PickupType, string> = {
   hp: "+1 HP",
   shield: "SHIELD",
   scoreBoost: "MULT BOOST",
-  dashRush: "DASH RUSH",
+  breaker: "BULLET BREAKER",
 };
 
 // rendered radius (half size) of pickup shapes; used both for drawing
@@ -128,7 +128,7 @@ export function drawPickup(
     case "scoreBoost":
       drawDiamond(ctx, p.x, p.y, color);
       break;
-    case "dashRush":
+    case "breaker":
       drawTriangleUp(ctx, p.x, p.y, color);
       break;
   }
@@ -169,7 +169,7 @@ export function drawPickupIcon(
       ctx.closePath();
       ctx.stroke();
       break;
-    case "dashRush":
+    case "breaker":
       ctx.beginPath();
       ctx.moveTo(x, y - r);
       ctx.lineTo(x + r, y + r * 0.85);

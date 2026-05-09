@@ -202,6 +202,17 @@ type Ring = {
   color: string;
 };
 
+type Particle = {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  size: number;
+  color: string;
+  age: number;
+  lifetime: number;
+};
+
 type EndSnapshot = {
   score: number;
   bestMult: number;
@@ -213,12 +224,12 @@ type EndSnapshot = {
 
 type ShieldState = { remaining: number; charges: number };
 type ScoreBoostState = { remaining: number };
-type DashRushState = { remaining: number };
+type BreakerState = { remaining: number };
 
 type ActiveEffects = {
   shield: ShieldState | null;
   scoreBoost: ScoreBoostState | null;
-  dashRush: DashRushState | null;
+  breaker: BreakerState | null;
 };
 
 type GameRunState = {
@@ -235,6 +246,7 @@ type GameRunState = {
   dashId: number;
   dashChain: number;
   effects: ActiveEffects;
+  passiveTimer: number; // accumulates dt while running, fires a passive pickup at every passiveInterval
   endSnapshot: EndSnapshot | null;
 };
 
@@ -265,7 +277,8 @@ const state: GameRunState = {
   hitVignetteTime: 0,
   dashId: 0,
   dashChain: 0,
-  effects: { shield: null, scoreBoost: null, dashRush: null },
+  effects: { shield: null, scoreBoost: null, breaker: null },
+  passiveTimer: 0,
   endSnapshot: null,
 };
 
@@ -276,6 +289,7 @@ let started = false;
 let initialFillDone = false;
 let floatingTexts: FloatingText[] = [];
 let rings: Ring[] = [];
+let particles: Particle[] = [];
 
 let endTryAgainBounds: Bounds | null = null;
 let endSettingsBounds: Bounds | null = null;
@@ -293,7 +307,8 @@ function resetRun() {
   state.hitVignetteTime = 0;
   state.dashId = 0;
   state.dashChain = 0;
-  state.effects = { shield: null, scoreBoost: null, dashRush: null };
+  state.effects = { shield: null, scoreBoost: null, breaker: null };
+  state.passiveTimer = 0;
   state.endSnapshot = null;
 
   player.x = viewW / 2;
@@ -313,6 +328,7 @@ function resetRun() {
   initialFillDone = false;
   floatingTexts = [];
   rings = [];
+  particles = [];
   endTryAgainBounds = null;
   endSettingsBounds = null;
 }
@@ -513,6 +529,72 @@ function awardDashThrough(b: Bullet) {
   }
 }
 
+function awardBulletBreak(b: Bullet) {
+  state.dashChain++;
+  const cfg = settings.pickups.breaker;
+  const base = cfg.scoreBase * Math.pow(2, state.dashChain - 1);
+  const earned = Math.round(base * state.multiplier);
+  state.score += earned;
+  bumpMultiplier();
+  const size = 18 + state.dashChain * 6;
+  addFloatingText(`+${base}`, b.x, b.y - 10, {
+    size,
+    color: "#ffffff",
+    lifetime: 0.55,
+  });
+  // white flash (radius ~2× bullet size)
+  addRing(b.x, b.y, {
+    startR: settings.bullets.size * 0.6,
+    endR: settings.bullets.size * 2,
+    color: "#ffffff",
+    lifetime: 0.06,
+  });
+  // bullet-color expanding ring (diameter → 3× diameter over 60ms)
+  addRing(b.x, b.y, {
+    startR: settings.bullets.size / 2,
+    endR: settings.bullets.size * 1.5,
+    color: settings.bullets.color,
+    lifetime: 0.06,
+  });
+  // particles
+  for (let i = 0; i < cfg.particleCount; i++) {
+    const angle = Math.random() * Math.PI * 2;
+    const speed = 200 + Math.random() * 200;
+    particles.push({
+      x: b.x,
+      y: b.y,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      size: 3,
+      color: settings.bullets.color,
+      age: 0,
+      lifetime: 0.4,
+    });
+  }
+  // broken bullets do NOT drop pickups (intentional — would create a feedback loop)
+}
+
+function spawnPassivePickup() {
+  const inset = WALL_THICKNESS + PICKUP_HALF + 16;
+  const x = inset + Math.random() * Math.max(0, viewW - 2 * inset);
+  const y = inset + Math.random() * Math.max(0, viewH - 2 * inset);
+  const type = rollPickupType(settings.pickups.weights);
+  pickups.push({
+    x,
+    y,
+    type,
+    age: 0,
+    lifetime: settings.pickups.lifetime,
+  });
+  // gentle "appear" cue so the player notices it
+  addRing(x, y, {
+    startR: 6,
+    endR: 30,
+    color: PICKUP_COLORS[type],
+    lifetime: 0.4,
+  });
+}
+
 function applyPickup(p: Pickup) {
   const color = PICKUP_COLORS[p.type];
   const label = PICKUP_LABELS[p.type];
@@ -567,11 +649,10 @@ function applyPickup(p: Pickup) {
       });
       break;
     }
-    case "dashRush": {
-      state.effects.dashRush = {
-        remaining: settings.pickups.dashRush.duration,
+    case "breaker": {
+      state.effects.breaker = {
+        remaining: settings.pickups.breaker.duration,
       };
-      player.cooldown = 0;
       addFloatingText(label, p.x, p.y - 18, {
         color,
         size: 18,
@@ -652,7 +733,7 @@ function frame(now: number) {
     return;
   }
 
-  // age floating texts and rings even after end so they fade out
+  // age floating texts, rings, particles even after end so they finish out
   for (const t of floatingTexts) {
     t.age += dt;
     t.y += t.vy * dt;
@@ -660,6 +741,12 @@ function frame(now: number) {
   floatingTexts = floatingTexts.filter((t) => t.age < t.lifetime);
   for (const r of rings) r.age += dt;
   rings = rings.filter((r) => r.age < r.lifetime);
+  for (const p of particles) {
+    p.age += dt;
+    p.x += p.vx * dt;
+    p.y += p.vy * dt;
+  }
+  particles = particles.filter((p) => p.age < p.lifetime);
 
   if (state.runState === "ended") {
     if (state.hitVignetteTime > 0)
@@ -683,6 +770,17 @@ function frame(now: number) {
     if (limit > 0 && state.elapsed >= limit) {
       endRun("timeout");
     }
+    // passive pickup timer
+    const passive = settings.pickups.passiveInterval;
+    if (passive > 0) {
+      state.passiveTimer += dt;
+      while (state.passiveTimer >= passive) {
+        state.passiveTimer -= passive;
+        spawnPassivePickup();
+      }
+    } else {
+      state.passiveTimer = 0;
+    }
   }
 
   if (keys.has(settings.bindings.dash)) {
@@ -697,9 +795,7 @@ function frame(now: number) {
     player.vy = player.dashDirY * v;
     if (player.dashTime <= 0) {
       player.dashTime = 0;
-      player.cooldown = state.effects.dashRush
-        ? 0
-        : settings.dash.cooldownMs / 1000;
+      player.cooldown = settings.dash.cooldownMs / 1000;
       player.vx *= 0.35;
       player.vy *= 0.35;
     }
@@ -757,10 +853,10 @@ function frame(now: number) {
       state.multiplierTimer = 0;
     }
   }
-  if (state.effects.dashRush) {
-    state.effects.dashRush.remaining -= dt;
-    if (state.effects.dashRush.remaining <= 0) {
-      state.effects.dashRush = null;
+  if (state.effects.breaker) {
+    state.effects.breaker.remaining -= dt;
+    if (state.effects.breaker.remaining <= 0) {
+      state.effects.breaker = null;
     }
   }
 
@@ -878,7 +974,12 @@ function frame(now: number) {
       if (inDash) {
         if (b.dashedThroughId !== state.dashId) {
           b.dashedThroughId = state.dashId;
-          awardDashThrough(b);
+          if (state.effects.breaker) {
+            awardBulletBreak(b);
+            consumedBullets.push(b);
+          } else {
+            awardDashThrough(b);
+          }
         }
       } else if (state.hitIframeTime > 0) {
         // immune from this hit but no scoring
@@ -996,6 +1097,18 @@ function render() {
     drawPickup(ctx, p, settings.pickups.blinkDuration);
   }
 
+  // particles (between bullets/pickups and the player so player stays on top)
+  for (const p of particles) {
+    const t = p.age / p.lifetime;
+    const alpha = Math.max(0, 1 - t);
+    const sz = Math.max(0.5, p.size * (1 - t * 0.6));
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = p.color;
+    ctx.fillRect(p.x - sz / 2, p.y - sz / 2, sz, sz);
+    ctx.restore();
+  }
+
   // player
   const pSize = settings.player.size;
   const dashing = player.dashTime > 0;
@@ -1028,8 +1141,17 @@ function render() {
     else if (walking) color = settings.player.colorWalk;
     else color = settings.player.colorIdle;
 
-    ctx.fillStyle = color;
-    ctx.fillRect(player.x - pSize / 2, player.y - pSize / 2, pSize, pSize);
+    if (state.effects.breaker) {
+      ctx.save();
+      ctx.shadowColor = "#fb923c";
+      ctx.shadowBlur = settings.pickups.breaker.glowBlur;
+      ctx.fillStyle = color;
+      ctx.fillRect(player.x - pSize / 2, player.y - pSize / 2, pSize, pSize);
+      ctx.restore();
+    } else {
+      ctx.fillStyle = color;
+      ctx.fillRect(player.x - pSize / 2, player.y - pSize / 2, pSize, pSize);
+    }
   }
 
   if (cooling && !dashing) {
@@ -1121,6 +1243,22 @@ function render() {
   }
 
   drawHUD();
+
+  // bullet-breaker bottom progress bar — full-width "you're in power mode" cue
+  if (state.effects.breaker) {
+    const cfg = settings.pickups.breaker;
+    const t = Math.max(0, Math.min(1, state.effects.breaker.remaining / cfg.duration));
+    const margin = 24;
+    const barH = 4;
+    const fullW = viewW - margin * 2;
+    const barY = viewH - margin;
+    ctx.save();
+    ctx.fillStyle = "rgba(251,146,60,0.18)";
+    ctx.fillRect(margin, barY, fullW, barH);
+    ctx.fillStyle = "#fb923c";
+    ctx.fillRect(margin, barY, fullW * t, barH);
+    ctx.restore();
+  }
 
   if (state.runState === "ended") {
     drawEndOverlay();
@@ -1223,11 +1361,11 @@ function drawHUD() {
     );
     effY += 20;
   }
-  if (state.effects.dashRush) {
-    drawPickupIcon(ctx, x0 + 8, effY + 6, "dashRush");
-    ctx.fillStyle = PICKUP_COLORS.dashRush;
+  if (state.effects.breaker) {
+    drawPickupIcon(ctx, x0 + 8, effY + 6, "breaker");
+    ctx.fillStyle = PICKUP_COLORS.breaker;
     ctx.fillText(
-      `DASH ${state.effects.dashRush.remaining.toFixed(1)}s`,
+      `BREAK ${state.effects.breaker.remaining.toFixed(1)}s`,
       x0 + 22,
       effY,
     );

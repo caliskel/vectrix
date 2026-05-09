@@ -148,6 +148,7 @@ export function createMenu(
     panel.appendChild(makeBullets());
     panel.appendChild(makePlayer());
     panel.appendChild(makeDash());
+    panel.appendChild(makePickups());
     panel.appendChild(makePresets());
     root.appendChild(panel);
   }
@@ -432,6 +433,42 @@ export function createMenu(
         makeSlider(100, 1500, 25, d.cooldownMs, (v) => `${v} ms`, (v) => {
           d.cooldownMs = v;
         }),
+      ),
+    );
+    return s;
+  }
+
+  function makePickups() {
+    const p = settings.pickups;
+    const s = makeSection("Pickups");
+    s.appendChild(
+      makeRow(
+        "Drop chance",
+        makeSlider(
+          0,
+          100,
+          1,
+          Math.round(p.dropChance * 100),
+          (v) => `${v}%`,
+          (v) => {
+            p.dropChance = v / 100;
+          },
+        ),
+      ),
+    );
+    s.appendChild(
+      makeRow(
+        "Passive drops",
+        makeSlider(
+          0,
+          60,
+          1,
+          p.passiveInterval,
+          (v) => (v === 0 ? "off" : `every ${v}s`),
+          (v) => {
+            p.passiveInterval = v;
+          },
+        ),
       ),
     );
     return s;

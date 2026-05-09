@@ -43,11 +43,12 @@ export type PickupsSettings = {
   lifetime: number;          // seconds before pickup expires
   blinkDuration: number;     // seconds at the tail of life when pickup blinks
   pickupRadiusMul: number;   // pickup hitbox radius multiplier vs visual half-size
+  passiveInterval: number;   // seconds between passive arena drops; 0 disables
   weights: {
     hp: number;
     shield: number;
     scoreBoost: number;
-    dashRush: number;
+    breaker: number;
   };
   heal: {
     scoreOnFull: number;     // score given if HP already at max
@@ -62,8 +63,11 @@ export type PickupsSettings = {
     duration: number;        // seconds
     bonus: number;           // added to current multiplier when activated
   };
-  dashRush: {
-    duration: number;        // seconds of cooldown-free dashing
+  breaker: {
+    duration: number;        // seconds the bullet-breaker effect lasts
+    scoreBase: number;       // base score per broken bullet (chained ×2 per kill in one dash)
+    particleCount: number;   // particles spawned when a bullet breaks
+    glowBlur: number;        // shadowBlur on the player while active
   };
 };
 
@@ -122,11 +126,12 @@ export const DEFAULT_SETTINGS: Settings = {
     lifetime: 5,
     blinkDuration: 1.5,
     pickupRadiusMul: 1.5,
-    weights: { hp: 25, shield: 25, scoreBoost: 25, dashRush: 25 },
+    passiveInterval: 20,
+    weights: { hp: 25, shield: 25, scoreBoost: 25, breaker: 25 },
     heal: { scoreOnFull: 500 },
     shield: { duration: 8, charges: 2, hitboxMul: 1.5, scoreOnBlock: 200 },
     scoreBoost: { duration: 6, bonus: 1.0 },
-    dashRush: { duration: 3 },
+    breaker: { duration: 5, scoreBase: 150, particleCount: 8, glowBlur: 15 },
   },
 };
 
@@ -174,11 +179,29 @@ function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value));
 }
 
+function migrate(parsed: unknown): unknown {
+  if (!parsed || typeof parsed !== "object") return parsed;
+  const p = parsed as Record<string, any>;
+  // dashRush → breaker (effect was replaced with Bullet Breaker; keep
+  // weights mapping but drop the old effect block so new defaults apply)
+  if (p.pickups && typeof p.pickups === "object") {
+    if (p.pickups.weights && typeof p.pickups.weights === "object") {
+      const w = p.pickups.weights;
+      if (w.dashRush !== undefined && w.breaker === undefined) {
+        w.breaker = w.dashRush;
+      }
+      delete w.dashRush;
+    }
+    delete p.pickups.dashRush;
+  }
+  return p;
+}
+
 export function loadSettings(): Settings {
   const base = clone(DEFAULT_SETTINGS);
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) deepAssign(base, JSON.parse(raw));
+    if (raw) deepAssign(base, migrate(JSON.parse(raw)));
   } catch {
     // fall back to defaults
   }
