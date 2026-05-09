@@ -97,6 +97,7 @@ export const PRESETS: Record<"Easy" | "Normal" | "Hard", Preset> = {
   },
   Hard: {
     bullets: { spawnIntervalMs: 500, speed: 380, bounceChance: 100, maxBullets: 80, size: 7 },
+    player: { size: 16 },
   },
 };
 

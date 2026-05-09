@@ -1,4 +1,11 @@
-import { loadSettings, saveSettings, type Settings } from "./config";
+import {
+  DEFAULT_SETTINGS,
+  PRESETS,
+  deepAssign,
+  loadSettings,
+  saveSettings,
+  type Settings,
+} from "./config";
 import { createMenu } from "./menu";
 
 const settings: Settings = loadSettings();
@@ -72,6 +79,15 @@ window.addEventListener("keydown", (e) => {
     return;
   }
 
+  if (gameState === "dying") {
+    // popup waits for explicit user input — only Enter closes it
+    if (code === "Enter") {
+      e.preventDefault();
+      resetRun();
+    }
+    return;
+  }
+
   keys.add(code);
   if (isBoundKey(code)) e.preventDefault();
 });
@@ -81,14 +97,59 @@ window.addEventListener("keyup", (e) => {
 });
 window.addEventListener("blur", () => keys.clear());
 
+canvas.addEventListener("click", (e) => {
+  if (menu.isOpen()) return;
+  if (gameState !== "dying") return;
+  if (!deathButtonBounds) return;
+  const rect = canvas.getBoundingClientRect();
+  const x = e.clientX - rect.left;
+  const y = e.clientY - rect.top;
+  const b = deathButtonBounds;
+  if (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) {
+    resetRun();
+  }
+});
+
 // ACCEL is derived from maxSpeed so the friction-determined natural cap
 // stays slightly above maxSpeed and the cap clamp actually engages.
 const ACCEL_FACTOR = 9;
 const FRICTION = 8.0;
 const SPAWN_ANGLE_SPREAD = Math.PI / 3;
-const DEATH_PAUSE = 0.5;
+const DEATH_PAUSE = 2.0;
+const DEATH_BURST = 0.5; // visual burst plays during the first slice of the pause
 const WALL_THICKNESS = 6;
-const BEST_KEY = "dash-prototype:best";
+const BEST_KEY_PREFIX = "dash-prototype:best:";
+
+type ConfigId = "Default" | "Easy" | "Normal" | "Hard" | null;
+
+function configIdFromSettings(): ConfigId {
+  const current = JSON.stringify(settings);
+  if (current === JSON.stringify(DEFAULT_SETTINGS)) return "Default";
+  for (const name of ["Easy", "Normal", "Hard"] as const) {
+    const candidate: Settings = JSON.parse(JSON.stringify(DEFAULT_SETTINGS));
+    deepAssign(candidate, PRESETS[name]);
+    if (JSON.stringify(candidate) === current) return name;
+  }
+  return null;
+}
+
+function getBest(id: ConfigId): number | null {
+  if (!id) return null;
+  const v = localStorage.getItem(BEST_KEY_PREFIX + id);
+  if (!v) return null;
+  const n = Number.parseFloat(v);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+function setBestIfBetter(id: ConfigId, time: number): boolean {
+  if (!id) return false;
+  const current = getBest(id) ?? 0;
+  if (time > current) {
+    localStorage.setItem(BEST_KEY_PREFIX + id, String(time));
+    return true;
+  }
+  return false;
+}
 
 type Bullet = {
   x: number;
@@ -117,13 +178,23 @@ let spawnTimer = 0;
 let runTime = 0;
 let started = false;
 let initialFillDone = false;
-let best = Number.parseFloat(localStorage.getItem(BEST_KEY) ?? "0") || 0;
+
+// snapshot taken at moment of death so the popup is stable even if the
+// menu is opened mid-pause and settings change
+let deathConfigId: ConfigId = null;
+let deathBest: number | null = null;
+let deathNewBest = false;
+let deathRunTime = 0;
+let deathButtonBounds: { x: number; y: number; w: number; h: number } | null =
+  null;
 
 type GameState = "alive" | "dying";
 let gameState: GameState = "alive";
 let dyingTime = 0;
 
 function resetRun() {
+  gameState = "alive";
+  dyingTime = 0;
   player.x = viewW / 2;
   player.y = viewH / 2;
   player.vx = 0;
@@ -248,9 +319,14 @@ function aabbHit(b: Bullet): boolean {
 function die() {
   gameState = "dying";
   dyingTime = DEATH_PAUSE;
-  if (runTime > best) {
-    best = runTime;
-    localStorage.setItem(BEST_KEY, String(best));
+  deathRunTime = runTime;
+  deathConfigId = configIdFromSettings();
+  if (deathConfigId) {
+    deathNewBest = setBestIfBetter(deathConfigId, runTime);
+    deathBest = getBest(deathConfigId);
+  } else {
+    deathNewBest = false;
+    deathBest = null;
   }
 }
 
@@ -419,11 +495,9 @@ function frame(now: number) {
       }
     }
   } else {
-    dyingTime -= dt;
-    if (dyingTime <= 0) {
-      gameState = "alive";
-      resetRun();
-    }
+    // dyingTime governs the burst animation only; popup stays until user
+    // presses Enter (or clicks the button)
+    if (dyingTime > 0) dyingTime = Math.max(0, dyingTime - dt);
   }
 
   render();
@@ -493,36 +567,103 @@ function render() {
       ctx.stroke();
     }
   } else {
-    const k = dyingTime / DEATH_PAUSE;
-    ctx.save();
-    ctx.globalAlpha = 0.45 * k;
-    ctx.fillStyle = "#ef4444";
-    ctx.fillRect(0, 0, viewW, viewH);
-    ctx.restore();
+    // burst effect plays only during the first DEATH_BURST seconds
+    const elapsed = DEATH_PAUSE - dyingTime;
+    const burstK = Math.max(0, 1 - elapsed / DEATH_BURST);
+    if (burstK > 0) {
+      ctx.save();
+      ctx.globalAlpha = 0.45 * burstK;
+      ctx.fillStyle = "#ef4444";
+      ctx.fillRect(0, 0, viewW, viewH);
+      ctx.restore();
 
-    const burst = (1 - k) * pSize * 2.2;
-    ctx.save();
-    ctx.globalAlpha = k;
-    ctx.strokeStyle = "#fca5a5";
-    ctx.lineWidth = 3;
-    ctx.strokeRect(
-      player.x - pSize / 2 - burst / 2,
-      player.y - pSize / 2 - burst / 2,
-      pSize + burst,
-      pSize + burst,
-    );
-    ctx.restore();
+      const burst = (1 - burstK) * pSize * 2.2;
+      ctx.save();
+      ctx.globalAlpha = burstK;
+      ctx.strokeStyle = "#fca5a5";
+      ctx.lineWidth = 3;
+      ctx.strokeRect(
+        player.x - pSize / 2 - burst / 2,
+        player.y - pSize / 2 - burst / 2,
+        pSize + burst,
+        pSize + burst,
+      );
+      ctx.restore();
+    }
+
+    drawDeathPopup();
   }
+}
+
+function drawDeathPopup() {
+  const popupW = 380;
+  const popupH = 230;
+  const popupX = Math.round((viewW - popupW) / 2);
+  const popupY = Math.round((viewH - popupH) / 2 - 30);
 
   ctx.save();
+  ctx.fillStyle = "rgba(15,15,18,0.94)";
+  ctx.fillRect(popupX, popupY, popupW, popupH);
+  ctx.strokeStyle = "rgba(255,255,255,0.18)";
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(popupX + 0.5, popupY + 0.5, popupW - 1, popupH - 1);
+
   ctx.textAlign = "center";
   ctx.textBaseline = "top";
-  ctx.font = "600 22px ui-monospace, SFMono-Regular, Menlo, monospace";
+
+  ctx.fillStyle = "#ff8b8b";
+  ctx.font = "600 12px system-ui, -apple-system, sans-serif";
+  ctx.fillText("DEFEATED", popupX + popupW / 2, popupY + 20);
+
   ctx.fillStyle = "#ffffff";
-  ctx.fillText(`Time: ${runTime.toFixed(1)}s`, viewW / 2, 16);
-  ctx.font = "500 14px ui-monospace, SFMono-Regular, Menlo, monospace";
-  ctx.fillStyle = "#9ca3af";
-  ctx.fillText(`Best: ${best.toFixed(1)}s`, viewW / 2, 44);
+  ctx.font =
+    "600 36px ui-monospace, SFMono-Regular, Menlo, monospace";
+  ctx.fillText(
+    `${deathRunTime.toFixed(1)}s`,
+    popupX + popupW / 2,
+    popupY + 44,
+  );
+
+  ctx.fillStyle = "#7d8590";
+  ctx.font = "500 11px system-ui, -apple-system, sans-serif";
+  ctx.fillText("RUN TIME", popupX + popupW / 2, popupY + 92);
+
+  if (deathConfigId) {
+    const bestText = deathBest != null ? `${deathBest.toFixed(1)}s` : "—";
+    ctx.fillStyle = deathNewBest ? "#facc15" : "#cccccc";
+    ctx.font = "500 14px system-ui, -apple-system, sans-serif";
+    const label = deathNewBest
+      ? `New best (${deathConfigId}): ${bestText}`
+      : `Best (${deathConfigId}): ${bestText}`;
+    ctx.fillText(label, popupX + popupW / 2, popupY + 124);
+  } else {
+    ctx.fillStyle = "#7d8590";
+    ctx.font = "italic 500 12px system-ui, -apple-system, sans-serif";
+    ctx.fillText(
+      "Custom settings — record disabled",
+      popupX + popupW / 2,
+      popupY + 126,
+    );
+  }
+
+  // ENTER button
+  const btnW = popupW - 100;
+  const btnH = 40;
+  const btnX = popupX + (popupW - btnW) / 2;
+  const btnY = popupY + 168;
+  deathButtonBounds = { x: btnX, y: btnY, w: btnW, h: btnH };
+
+  ctx.fillStyle = "rgba(255,255,255,0.10)";
+  ctx.fillRect(btnX, btnY, btnW, btnH);
+  ctx.strokeStyle = "rgba(255,255,255,0.40)";
+  ctx.lineWidth = 1;
+  ctx.strokeRect(btnX + 0.5, btnY + 0.5, btnW - 1, btnH - 1);
+
+  ctx.fillStyle = "#ffffff";
+  ctx.textBaseline = "middle";
+  ctx.font = "600 14px system-ui, -apple-system, sans-serif";
+  ctx.fillText("PRESS ENTER ↵", btnX + btnW / 2, btnY + btnH / 2);
+
   ctx.restore();
 }
 

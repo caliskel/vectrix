@@ -425,6 +425,9 @@ export function createMenu(
       b.type = "button";
       b.textContent = name;
       b.addEventListener("click", () => {
+        // reset to defaults first, then overlay preset, so configId reliably
+        // matches the preset (custom field carryovers would break that)
+        deepAssign(settings, DEFAULT_SETTINGS);
         deepAssign(settings, PRESETS[name]);
         save();
         rebuild();
