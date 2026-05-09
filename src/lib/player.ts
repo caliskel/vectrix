@@ -938,26 +938,34 @@ export function drawPlayerEye(
   // translate(0, bobY) → scale (squash) → draw layers inside.
   const bobOffsetY =
     BOB_AMPLITUDE_PX * Math.sin(p.bobPhase) * (isDashing ? 0 : 1);
-  // start pop and brake squeeze are mutually exclusive (each clears the
-  // other on trigger). Brake holds at full squeeze for BRAKE_DURATION
-  // then eases back to neutral over BRAKE_RECOVERY.
-  let squashSx = 1;
-  let squashSy = 1;
+  // Start-pop (fresh keypress) — applied in the leaned frame so it
+  // tracks the player's posture; small uniform scale follows the body
+  // tilt. Mutually exclusive with brake (each clears the other).
+  let popSx = 1;
+  let popSy = 1;
   if (p.squashTime > 0) {
     const t = p.squashTime / SQUASH_DURATION_SEC;
-    squashSx = 1 + (STRETCH_X - 1) * t;
-    squashSy = 1 + (SQUASH_Y - 1) * t;
-  } else if (p.brakeAge >= 0) {
+    popSx = 1 + (STRETCH_X - 1) * t;
+    popSy = 1 + (SQUASH_Y - 1) * t;
+  }
+  // Brake squeeze — axis-aligned to the canvas (world frame). Held at
+  // full squeeze for BRAKE_DURATION, then eases to neutral over
+  // BRAKE_RECOVERY. Lives BEFORE the lean rotate so it doesn't twist
+  // with the player's tilt during a high-speed stop.
+  let brakeSx = 1;
+  let brakeSy = 1;
+  if (p.brakeAge >= 0) {
     if (p.brakeAge < BRAKE_DURATION_SEC) {
-      squashSx = BRAKE_SQUASH_X;
-      squashSy = BRAKE_STRETCH_Y;
+      brakeSx = BRAKE_SQUASH_X;
+      brakeSy = BRAKE_STRETCH_Y;
     } else {
       const t = (p.brakeAge - BRAKE_DURATION_SEC) / BRAKE_RECOVERY_SEC;
-      squashSx = BRAKE_SQUASH_X + (1 - BRAKE_SQUASH_X) * t;
-      squashSy = BRAKE_STRETCH_Y + (1 - BRAKE_STRETCH_Y) * t;
+      brakeSx = BRAKE_SQUASH_X + (1 - BRAKE_SQUASH_X) * t;
+      brakeSy = BRAKE_STRETCH_Y + (1 - BRAKE_STRETCH_Y) * t;
     }
   }
-  const hasSquash = squashSx !== 1 || squashSy !== 1;
+  const hasPop = popSx !== 1 || popSy !== 1;
+  const hasBrake = brakeSx !== 1 || brakeSy !== 1;
 
   // Anisotropic stretch — continuous deformation along the velocity
   // vector while running. Strength scales with speed above the
@@ -1017,11 +1025,22 @@ export function drawPlayerEye(
 
   ctx.save();
   ctx.translate(baseX, baseY);
-  // Smash applied at the world level — must come BEFORE lean rotate
-  // because the squash is axis-aligned to the wall and would otherwise
-  // get tilted by the player's lean. All walls in the game are
-  // axis-aligned, so we can pick the canvas axis from the dominant
-  // component of the surface normal.
+  // Transform stack — order is critical because ctx2d composes
+  // post-multiplicatively (the FIRST scale call applies LAST to a local
+  // point, i.e. it's the OUTER container). Effects that must stay
+  // axis-aligned to the canvas (smash + brake squeeze on collisions /
+  // hard stops) live BEFORE the lean rotate so they aren't twisted by
+  // the player's tilt.
+  //
+  //   1. Smash      — axis-aligned, world frame
+  //   2. Brake      — axis-aligned, world frame
+  //   3. Eye close  — Y squeeze (death animation)
+  //   4. Lean       — rotate
+  //   5. Bob        — translate Y
+  //   6. Start-pop  — uniform scale in leaned frame
+  //   7. Anisotropic stretch (motion-aligned)
+  //   8. Flinch translate / squash
+  //   9. Breath     — uniform pulse
   if (hasSmash) {
     if (Math.abs(p.smashNormalX) > Math.abs(p.smashNormalY)) {
       // vertical wall: squash X, stretch Y
@@ -1031,10 +1050,11 @@ export function drawPlayerEye(
       ctx.scale(smashPerp, smashAlong);
     }
   }
+  if (hasBrake) ctx.scale(brakeSx, brakeSy);
   ctx.scale(1, Math.max(0.001, eyeOpenY));
   if (p.tiltAngle !== 0) ctx.rotate(p.tiltAngle);
   if (bobOffsetY !== 0) ctx.translate(0, bobOffsetY);
-  if (hasSquash) ctx.scale(squashSx, squashSy);
+  if (hasPop) ctx.scale(popSx, popSy);
   // anisotropic running stretch — rotate to motion direction, scale
   // (along, perpendicular), unrotate so subsequent transforms stay in
   // the eye's natural frame.
