@@ -810,7 +810,7 @@ export function start(canvas: HTMLCanvasElement): void {
         ringColor,
         glowColor: ringColor,
         pupilColor,
-        ghostColor: settings.player.colorDash,
+        ghostColor: profile.dashColor,
         dashDurationSec: settings.dash.durationMs / 1000,
         profile,
       });

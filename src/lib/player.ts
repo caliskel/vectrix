@@ -62,12 +62,14 @@ export type PlayerProfile = {
   outerRing: string;
   iris: string;
   pupil: string;
+  dashColor: string;
 };
 
 export const DEFAULT_PLAYER_PROFILE: PlayerProfile = {
   outerRing: "#ffffff",
   iris: "#0a0e1a",
   pupil: "#ffffff",
+  dashColor: "#00e5ff",
 };
 
 export const PLAYER_PROFILE_KEY = "dash-proto:player-profile";
@@ -90,6 +92,10 @@ export function loadPlayerProfile(): PlayerProfile {
           typeof parsed.pupil === "string"
             ? parsed.pupil
             : DEFAULT_PLAYER_PROFILE.pupil,
+        dashColor:
+          typeof parsed.dashColor === "string"
+            ? parsed.dashColor
+            : DEFAULT_PLAYER_PROFILE.dashColor,
       };
     }
   } catch {
@@ -495,15 +501,35 @@ export function drawPlayerEye(
   const baseX = p.x + sx;
   const baseY = p.y + sy;
 
-  // resolve final colors with profile precedence
-  const ringColor = opts.profile?.outerRing ?? opts.ringColor;
-  const pupilColor = opts.profile?.pupil ?? opts.pupilColor;
+  // Resolve final colors. Profile overrides direct opts; while in a dash
+  // (or its post-dash i-frame), profile.dashColor takes over for the ring,
+  // pupil and glow so the customized "locked-on" cue still reads.
+  const inDashColorState = isDashing || p.dashIframeTime > 0;
+  let ringColor: string;
+  let pupilColor: string;
+  let glowColor: string;
+  if (opts.profile) {
+    if (inDashColorState) {
+      ringColor = opts.profile.dashColor;
+      pupilColor = opts.profile.dashColor;
+      glowColor = opts.profile.dashColor;
+    } else {
+      ringColor = opts.profile.outerRing;
+      pupilColor = opts.profile.pupil;
+      glowColor = opts.profile.outerRing;
+    }
+  } else {
+    ringColor = opts.ringColor;
+    pupilColor = opts.pupilColor;
+    glowColor = opts.glowColor;
+  }
   const irisColor = opts.profile?.iris ?? opts.irisColor ?? PALETTE.bg;
-  const glowColor = opts.profile?.outerRing ?? opts.glowColor;
+  // ghost color follows the dash color so the trail matches the dash flash
+  const ghostColor = opts.profile?.dashColor ?? opts.ghostColor;
 
   // ===== ghosts (drawn first, behind the live eye) =====
   if (p.dashGhosts.length > 0) {
-    drawDashGhosts(ctx, p.dashGhosts, opts.ghostColor, eyeOpenY);
+    drawDashGhosts(ctx, p.dashGhosts, ghostColor, eyeOpenY);
   }
 
   // ===== outer ring (deformed in dash) =====

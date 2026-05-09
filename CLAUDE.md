@@ -210,6 +210,7 @@ type PlayerProfile = {
   outerRing: string; // default #ffffff
   iris: string;      // default #0a0e1a (PALETTE.bg)
   pupil: string;     // default #ffffff
+  dashColor: string; // default #00e5ff — used during dash + dash i-frame
 };
 ```
 
@@ -222,8 +223,12 @@ Helpers in `lib/player.ts`:
 
 `drawPlayerEye` accepts an optional `profile` in its opts. When set
 it overrides `ringColor` / `pupilColor` / `irisColor` (default
-`PALETTE.bg`) — the eye reads as the player's customization
-regardless of dash/walk state.
+`PALETTE.bg`) with profile values. While the player is in a dash
+(or its post-dash i-frame), `profile.dashColor` takes over for
+ring + pupil + glow + ghost trail so the customized "locked-on"
+cue still reads. Outside of dash the profile uses
+`outerRing` / `pupil` / `iris` — the eye reads as the player's
+customization regardless of walk state.
 
 - **Rooms** loads the profile once at `start()` and forwards it on
   every player render. So Rooms reflects the customization.

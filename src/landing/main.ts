@@ -71,11 +71,21 @@ const previewCanvas = need<HTMLCanvasElement>("#preview-canvas");
 const pickerOuter = need<HTMLInputElement>("#picker-outer");
 const pickerIris = need<HTMLInputElement>("#picker-iris");
 const pickerPupil = need<HTMLInputElement>("#picker-pupil");
+const pickerDash = need<HTMLInputElement>("#picker-dash");
 const swatchOuter = need<HTMLElement>("#swatch-outer");
 const swatchIris = need<HTMLElement>("#swatch-iris");
 const swatchPupil = need<HTMLElement>("#swatch-pupil");
+const swatchDash = need<HTMLElement>("#swatch-dash");
 const resetBtn = need<HTMLButtonElement>("#profile-reset");
 const saveBtn = need<HTMLButtonElement>("#profile-save");
+
+// Dash-demo state — every DEMO_INTERVAL the preview eye flashes its
+// dash color for DEMO_DURATION so the user can see the configured
+// dash color in context.
+const DEMO_INTERVAL = 3.0;
+const DEMO_DURATION = 0.2;
+let demoTime = 0;
+let demoCooldown = DEMO_INTERVAL;
 
 (function initPreviewCanvas() {
   const dpr = window.devicePixelRatio || 1;
@@ -91,6 +101,7 @@ function applyProfileToPickers(profile: PlayerProfile) {
   pickerOuter.value = profile.outerRing;
   pickerIris.value = profile.iris;
   pickerPupil.value = profile.pupil;
+  pickerDash.value = profile.dashColor;
   refreshSwatches();
 }
 
@@ -98,9 +109,10 @@ function refreshSwatches() {
   swatchOuter.style.background = pickerOuter.value;
   swatchIris.style.background = pickerIris.value;
   swatchPupil.style.background = pickerPupil.value;
+  swatchDash.style.background = pickerDash.value;
 }
 
-[pickerOuter, pickerIris, pickerPupil].forEach((p) =>
+[pickerOuter, pickerIris, pickerPupil, pickerDash].forEach((p) =>
   p.addEventListener("input", refreshSwatches),
 );
 
@@ -113,6 +125,7 @@ saveBtn.addEventListener("click", () => {
     outerRing: pickerOuter.value,
     iris: pickerIris.value,
     pupil: pickerPupil.value,
+    dashColor: pickerDash.value,
   };
   savePlayerProfile(profile);
   setOverlay(null);
@@ -137,6 +150,10 @@ function onPlayerOpen() {
   previewPlayer.ghostSpawnTimer = 0;
   previewPlayer.isClosing = false;
   previewPlayer.closeAmount = 0;
+  // start the dash-demo with a small initial cooldown so it triggers
+  // soon after open, not on the first frame
+  demoTime = 0;
+  demoCooldown = 1.2;
   previewLast = performance.now();
   if (previewRafId === null) {
     previewRafId = requestAnimationFrame(previewFrame);
@@ -161,15 +178,30 @@ function previewFrame(now: number) {
     dashDurationSec: FAKE_DASH_DURATION_SEC,
   });
 
+  // tick the dash-demo schedule — a brief color flash so the user can see
+  // the dash color in context without simulating actual movement
+  if (demoTime > 0) {
+    demoTime = Math.max(0, demoTime - dt);
+  } else {
+    demoCooldown -= dt;
+    if (demoCooldown <= 0) {
+      demoTime = DEMO_DURATION;
+      demoCooldown = DEMO_INTERVAL;
+    }
+  }
+  const inDemo = demoTime > 0;
+  const ringColor = inDemo ? pickerDash.value : pickerOuter.value;
+  const pupilColor = inDemo ? pickerDash.value : pickerPupil.value;
+
   const ctx = previewCanvas.getContext("2d");
   if (ctx) {
     ctx.clearRect(0, 0, PREVIEW_CANVAS_SIZE, PREVIEW_CANVAS_SIZE);
     drawPlayerEye(ctx, previewPlayer, PREVIEW_PLAYER_SIZE, {
-      ringColor: pickerOuter.value,
-      glowColor: pickerOuter.value,
-      pupilColor: pickerPupil.value,
+      ringColor,
+      glowColor: ringColor,
+      pupilColor,
       irisColor: pickerIris.value,
-      ghostColor: pickerOuter.value,
+      ghostColor: pickerDash.value,
       dashDurationSec: FAKE_DASH_DURATION_SEC,
     });
   }
