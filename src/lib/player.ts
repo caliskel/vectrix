@@ -1019,42 +1019,15 @@ export function drawPlayerEye(
     }
   }
   const hasSmash = p.smashAge >= 0;
-  // smashIntensity: 1 during the held squash, fading to 0 across the
-  // overshoot+settle window. Used to gate lean and anisotropic stretch
-  // (the only transforms that introduce a non-canvas axis) so they
-  // don't twist the smash but still ease back smoothly when it ends.
-  let smashIntensity = 0;
-  if (hasSmash) {
-    if (p.smashAge < SMASH_DURATION_SEC) {
-      smashIntensity = 1;
-    } else {
-      const recoverElapsed = p.smashAge - SMASH_DURATION_SEC;
-      const recoverDuration = SMASH_TOTAL_SEC - SMASH_DURATION_SEC;
-      smashIntensity = recoverDuration > 0
-        ? Math.max(0, 1 - recoverElapsed / recoverDuration)
-        : 0;
-    }
-  }
-  const smashInverse = 1 - smashIntensity;
 
   ctx.save();
   ctx.translate(baseX, baseY);
-  // Transform stack — order is critical because ctx2d composes
-  // post-multiplicatively (the FIRST scale call applies LAST to a local
-  // point, i.e. it's the OUTER container). Effects that must stay
-  // axis-aligned to the canvas (smash + brake squeeze on collisions /
-  // hard stops) live BEFORE the lean rotate so they aren't twisted by
-  // the player's tilt.
-  //
-  //   1. Smash      — axis-aligned, world frame
-  //   2. Brake      — axis-aligned, world frame
-  //   3. Eye close  — Y squeeze (death animation)
-  //   4. Lean       — rotate
-  //   5. Bob        — translate Y
-  //   6. Start-pop  — uniform scale in leaned frame
-  //   7. Anisotropic stretch (motion-aligned)
-  //   8. Flinch translate / squash
-  //   9. Breath     — uniform pulse
+  // Transform stack: clean binary split. While a smash is active we
+  // apply ONLY the wall-aligned squash + the eye-close (death) Y
+  // squeeze; every other micro-animation (lean, bob, start-pop, brake,
+  // anisotropic stretch, flinch, breathing) is suppressed so it can't
+  // accumulate on top of the smash and warp its axis. As soon as
+  // smashAge ends and falls back to -1, the normal stack runs again.
   if (hasSmash) {
     if (Math.abs(p.smashNormalX) > Math.abs(p.smashNormalY)) {
       // vertical wall: squash X, stretch Y
@@ -1063,48 +1036,35 @@ export function drawPlayerEye(
       // horizontal wall: squash Y, stretch X
       ctx.scale(smashPerp, smashAlong);
     }
-  }
-  if (hasBrake) ctx.scale(brakeSx, brakeSy);
-  ctx.scale(1, Math.max(0.001, eyeOpenY));
-  // Lean and anisotropic stretch are the only steps that rotate the
-  // coordinate frame — they'd warp the wall-aligned smash. Multiplying
-  // by smashInverse fades them out during the hold and back in during
-  // the recovery so the transition is smooth, not a hard cut.
-  const effectiveTilt = p.tiltAngle * smashInverse;
-  if (effectiveTilt !== 0) ctx.rotate(effectiveTilt);
-  if (bobOffsetY !== 0) ctx.translate(0, bobOffsetY);
-  if (hasPop) ctx.scale(popSx, popSy);
-  // anisotropic running stretch — rotate to motion direction, scale
-  // (along, perpendicular), unrotate so subsequent transforms stay in
-  // the eye's natural frame.
-  const effectiveAni = aniStrength * smashInverse;
-  if (effectiveAni > 0) {
-    ctx.rotate(aniAngle);
-    ctx.scale(1 + effectiveAni, 1 - effectiveAni);
-    ctx.rotate(-aniAngle);
-  }
-
-  // flinch translate — eye recoils away from the bullet that just
-  // crossed; offset eases back to 0 over FLINCH_DURATION
-  if (p.flinchTime > 0) {
-    const t = p.flinchTime / FLINCH_DURATION_SEC;
-    ctx.translate(
-      p.flinchDirX * FLINCH_OFFSET_PX * t,
-      p.flinchDirY * FLINCH_OFFSET_PX * t,
-    );
-  }
-  // flinch vertical squeeze — short impact compression
-  if (p.flinchSquashTime > 0) {
-    const t = p.flinchSquashTime / FLINCH_SQUASH_SEC;
-    const sy = 1 + (FLINCH_SQUASH_Y - 1) * t;
-    ctx.scale(1, sy);
-  }
-  // breathing — uniform sin pulse on the orb. Skipped during dash (its
-  // own deformation owns the look) and during a blink (lid squash makes
-  // the breath read as a glitch).
-  if (!isDashing && !p.blinkActive) {
-    const breathScale = 1 + breathFactor(p.breathPhase) * BREATH_AMPLITUDE;
-    ctx.scale(breathScale, breathScale);
+    ctx.scale(1, Math.max(0.001, eyeOpenY));
+  } else {
+    if (hasBrake) ctx.scale(brakeSx, brakeSy);
+    ctx.scale(1, Math.max(0.001, eyeOpenY));
+    if (p.tiltAngle !== 0) ctx.rotate(p.tiltAngle);
+    if (bobOffsetY !== 0) ctx.translate(0, bobOffsetY);
+    if (hasPop) ctx.scale(popSx, popSy);
+    if (aniStrength > 0) {
+      ctx.rotate(aniAngle);
+      ctx.scale(1 + aniStrength, 1 - aniStrength);
+      ctx.rotate(-aniAngle);
+    }
+    if (p.flinchTime > 0) {
+      const t = p.flinchTime / FLINCH_DURATION_SEC;
+      ctx.translate(
+        p.flinchDirX * FLINCH_OFFSET_PX * t,
+        p.flinchDirY * FLINCH_OFFSET_PX * t,
+      );
+    }
+    if (p.flinchSquashTime > 0) {
+      const t = p.flinchSquashTime / FLINCH_SQUASH_SEC;
+      const sy = 1 + (FLINCH_SQUASH_Y - 1) * t;
+      ctx.scale(1, sy);
+    }
+    if (!isDashing && !p.blinkActive) {
+      const breathScale =
+        1 + breathFactor(p.breathPhase) * BREATH_AMPLITUDE;
+      ctx.scale(breathScale, breathScale);
+    }
   }
 
   // ===== outer ring (deformed in dash) =====
