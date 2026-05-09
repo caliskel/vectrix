@@ -97,8 +97,12 @@ const LASER_CHEVRON_SIZE = 7;
 
 function drawLaser(ctx: CanvasRenderingContext2D, l: Laser): void {
   const charging = l.age < l.chargingDuration;
-  const dx = l.endX - l.startX;
-  const dy = l.endY - l.startY;
+  // Origin tracks the owner each frame so a moving Watcher's beam stays
+  // rooted in the eye; end is fixed at aim time.
+  const startX = l.ownerEnemy.x;
+  const startY = l.ownerEnemy.y;
+  const dx = l.endX - startX;
+  const dy = l.endY - startY;
   const lineLen = Math.hypot(dx, dy);
   if (lineLen <= 0) return;
   const dirX = dx / lineLen;
@@ -117,7 +121,7 @@ function drawLaser(ctx: CanvasRenderingContext2D, l: Laser): void {
     ctx.shadowColor = PALETTE.bullet;
     ctx.shadowBlur = 10;
     ctx.beginPath();
-    ctx.moveTo(l.startX, l.startY);
+    ctx.moveTo(startX, startY);
     ctx.lineTo(l.endX, l.endY);
     ctx.stroke();
 
@@ -130,8 +134,8 @@ function drawLaser(ctx: CanvasRenderingContext2D, l: Laser): void {
     for (let i = 0; i < LASER_CHEVRON_COUNT; i++) {
       const distAlong = i * spacing + advance;
       if (distAlong >= lineLen) continue;
-      const cx = l.startX + dirX * distAlong;
-      const cy = l.startY + dirY * distAlong;
+      const cx = startX + dirX * distAlong;
+      const cy = startY + dirY * distAlong;
       const tipX = cx + dirX * LASER_CHEVRON_SIZE;
       const tipY = cy + dirY * LASER_CHEVRON_SIZE;
       const baseLeftX =
@@ -156,14 +160,14 @@ function drawLaser(ctx: CanvasRenderingContext2D, l: Laser): void {
     ctx.strokeStyle = PALETTE.bullet;
     ctx.lineWidth = 14;
     ctx.beginPath();
-    ctx.moveTo(l.startX, l.startY);
+    ctx.moveTo(startX, startY);
     ctx.lineTo(l.endX, l.endY);
     ctx.stroke();
     ctx.strokeStyle = "#ffffff";
     ctx.lineWidth = 4;
     ctx.shadowBlur = 18;
     ctx.beginPath();
-    ctx.moveTo(l.startX, l.startY);
+    ctx.moveTo(startX, startY);
     ctx.lineTo(l.endX, l.endY);
     ctx.stroke();
   }
@@ -838,8 +842,8 @@ export function start(canvas: HTMLCanvasElement): void {
         const d2 = pointSegmentDistanceSq(
           player.x,
           player.y,
-          l.startX,
-          l.startY,
+          l.ownerEnemy.x,
+          l.ownerEnemy.y,
           l.endX,
           l.endY,
         );

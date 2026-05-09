@@ -116,8 +116,7 @@ export class Watcher implements Enemy {
         this.pupilLockY = dy * inv * MAX_PUPIL_OFFSET;
         const laser: Laser = {
           ownerType: "watcher",
-          startX: this.x,
-          startY: this.y,
+          ownerEnemy: this,
           endX: px,
           endY: py,
           age: 0,

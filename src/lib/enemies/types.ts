@@ -6,10 +6,15 @@ export type EnemyType = "turret" | "watcher";
 
 // Beam/laser entity owned by the room (not by any single enemy) so any
 // enemy can stamp one into the room state. Self-expires by age.
+//
+// Origin tracks the owner enemy live (so a moving Watcher's beam stays
+// rooted in the eye), while endX/endY are captured at aim time — that's
+// the dodge window. Owner is referenced by object identity so even if
+// the enemy is removed from `room.enemies`, the laser keeps reading its
+// last position.
 export type Laser = {
   ownerType: EnemyType;
-  startX: number;
-  startY: number;
+  ownerEnemy: Enemy;
   endX: number;
   endY: number;
   chargingDuration: number; // seconds in charging phase (telegraph)
