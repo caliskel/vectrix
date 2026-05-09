@@ -29,9 +29,8 @@ class AudioEngine {
   private sfx?: Gain;
   private music?: Gain; // reserved for future, no synths route through it yet
 
-  // Sound 1: dash
-  private dashSynth?: Synth;
-  private dashFilter?: Filter;
+  // Sound 1: dash (white-noise breath, no pitch sweep, no reverb)
+  private dashNoise?: NoiseSynth;
 
   // Sound 2: dash through (with duck-on-rapid-retrigger)
   private dashThroughSynth?: Synth;
@@ -93,18 +92,24 @@ class AudioEngine {
   }
 
   private setupDash(): void {
-    const reverb = new Reverb({ decay: 0.4, wet: 0.15 }).connect(this.sfx!);
-    void reverb.generate();
-    const filter = new Filter({
+    // Tactile "hsh" — short breath of air. Two filters in series
+    // (highpass then lowpass) shape the noise; no pitch movement,
+    // no reverb. Synth volume is intentionally quiet so the cue
+    // sits under everything else, since dashes happen often.
+    const lowpass = new Filter({
       type: "lowpass",
-      frequency: 2000,
-      Q: 6,
-    }).connect(reverb);
-    this.dashFilter = filter;
-    this.dashSynth = new Synth({
-      oscillator: { type: "sawtooth" },
-      envelope: { attack: 0, decay: 0.08, sustain: 0, release: 0.05 },
-    }).connect(filter);
+      frequency: 600,
+      Q: 1,
+    }).connect(this.sfx!);
+    const highpass = new Filter({
+      type: "highpass",
+      frequency: 200,
+    }).connect(lowpass);
+    this.dashNoise = new NoiseSynth({
+      noise: { type: "white" },
+      envelope: { attack: 0.005, decay: 0.08, sustain: 0, release: 0.02 },
+      volume: -22,
+    }).connect(highpass);
   }
 
   private setupDashThrough(): void {
@@ -247,16 +252,9 @@ class AudioEngine {
   };
 
   private playDash(): void {
-    if (!this.dashSynth || !this.dashFilter) return;
-    const t = toneNow();
+    if (!this.dashNoise) return;
     try {
-      this.dashSynth.frequency.cancelScheduledValues(t);
-      this.dashSynth.frequency.setValueAtTime(800, t);
-      this.dashSynth.frequency.exponentialRampToValueAtTime(200, t + 0.08);
-      this.dashFilter.frequency.cancelScheduledValues(t);
-      this.dashFilter.frequency.setValueAtTime(2000, t);
-      this.dashFilter.frequency.exponentialRampToValueAtTime(400, t + 0.08);
-      this.dashSynth.triggerAttackRelease(800, 0.08, t);
+      this.dashNoise.triggerAttackRelease(0.08, toneNow());
     } catch {}
   }
 
