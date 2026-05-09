@@ -150,21 +150,138 @@ Source: `src/lib/config.ts` and `src/lib/score.ts`.
 Storage key: `dash-proto:settings:v3`. Per-config best-score keys:
 `dash-prototype:score:Default|Easy|Normal|Hard`.
 
-## TODO
+## Rooms mode
 
-Near-term (Rooms direction):
+Story / scripted-encounter mode. First playable iteration: one real
+room with a single turret, a locked door that opens on clear, and a
+placeholder "Room 2 — coming soon" beyond it.
 
-- **First room** — define the Room data shape (intro, scripted bullet
-  patterns, exit conditions). Probably JSON-ish authored in TS.
-- **Pattern primitives** — wave, ring burst, sweep, aimed shot. Each
-  parametric, composable on a timeline.
-- **Turret entity** — stationary spawner that fires patterns; first
-  hostile that's more than a wall.
-- **Main menu / room select** — replace the placeholder rooms stub with
-  a chooser; keep the global landing for switching between sandbox /
-  rooms (and later a settings page).
+### Layout
 
-Polish backlog (sandbox):
+- Logical room is **1200 × 800** in `src/rooms/room1.ts`.
+- The screen letterboxes onto the room: `scale = min(viewW/1200,
+  viewH/800)`, centered, dark bars where the window is wider/taller
+  than the room aspect.
+- Outer walls are 30 px thick (`PALETTE.bgGrid` fill, faint
+  `PALETTE.player` outline). Bullets in rooms **do not bounce** — they
+  expire on wall contact (different from sandbox by design, simpler
+  threat reading for the first encounter).
+
+### `Room` shape (`src/rooms/room.ts`)
+
+```ts
+type Room = {
+  id: string;
+  walls: Wall[];      // AABB rectangles
+  enemies: Enemy[];   // implements lib/enemies/types.ts
+  door: Door | null;  // optional exit
+  nextRoomId: string | null;
+  spawnX: number;
+  spawnY: number;
+  message?: string;   // overlay text (used by Room 2 placeholder)
+};
+```
+
+Each room is rebuilt fresh by its `buildRoomN()` factory on
+`restartRun`, so enemies/door state always reset cleanly.
+
+### Room 1
+
+- Player spawns at (150, 400), facing right.
+- One **Turret** at (600, 400). 50 px diameter neon-cyan body with a
+  rotating barrel that aims at the player (lerp rate 10/s,
+  frame-rate independent).
+- Turret fires every 1.4 s — the last 0.3 s before a shot brightens
+  the barrel as a telegraph. Bullet uses sandbox-shared
+  `lib/bullets.ts` (size/speed/color from `settings.bullets`,
+  `bounces=false`).
+- Turret HP = 3. Player damages it only when their AABB overlaps the
+  turret body **during a dash i-frame**. Each dash session can deal
+  at most one damage (`dashIdAlreadyDamaged` per turret).
+- Outside dash, the turret hits the player on contact (same as a
+  bullet hit).
+- Right wall has a 80 × 120 gap at (1200, 400). The wall is split
+  around the gap; the gap is occupied by a `Door` entity.
+- Door starts **closed** — drawn as a wall-tinted rect with a neon
+  red `×`, blocks the player like any wall and aborts a dash on
+  contact. When the last enemy in the room dies:
+  - The door switches to **open** (pulsing neon arrow `→`).
+  - A 0.2 s green flash plays over the screen at 0.15 alpha.
+  - `audio.play.multUp(5)` rings as a placeholder room-cleared sting
+    (will get its own cue later).
+- Stepping into the open door triggers `transitionToRoom(nextRoomId)`,
+  which rebuilds bullets/rings/floating texts and respawns the player
+  at the next room's spawn point.
+
+### Room 2 (placeholder)
+
+- Closed border, no enemies, no door, `message: "Room 2 — coming
+  soon"` rendered as a centered neon string. Used to verify
+  transitions work end-to-end before real Room 2 content lands.
+
+### Enemy interface (`src/lib/enemies/types.ts`)
+
+```ts
+interface Enemy {
+  x: number;
+  y: number;
+  hp: number;
+  isDead(): boolean;
+  takeDamage(amount: number): void;
+  update(ctx: EnemyContext): void;       // sees dt, player, bullets, FX lists
+  draw(ctx: CanvasRenderingContext2D): void;
+  overlapsPlayer(px, py, half): boolean; // contact damage check
+  tryDashDamage(dashId, px, py, half): boolean; // dedupes per dash
+}
+```
+
+`Turret` is the first implementation. Future enemies (sweeper,
+ring-burst, aimed-shot, etc.) plug into the same interface.
+
+### Run state (rooms-game.ts)
+
+- HP starts at 3, +1 second i-frames after a hit, 200 ms red corner
+  vignette. No multiplier and no near-miss / dash-through scoring in
+  rooms — score is intentionally rare here.
+- Score events: turret kill = `+500` (constant in
+  `rooms-game.ts:TURRET_KILL_SCORE`).
+- Run ends only on `hp <= 0` (no timer). End overlay shows score,
+  best-this-mode, and a `TRY AGAIN ↵` button. Best is stored under
+  `dash-proto:rooms-best` (separate from sandbox per-config bests).
+- Esc / Tab opens the shared settings menu; "Restart run" in the menu
+  also routes to `restartRun()` for rooms.
+
+### What's done
+
+- Room 1 with one turret, closed door, clear → open → transition.
+- Room 2 placeholder.
+- Walls (`lib/walls.ts`), Door (`lib/door.ts`), Enemy interface +
+  Turret (`lib/enemies/`).
+- Bullet trail + neon player rendering reused from the sandbox path.
+- Hit / dash / dash-through audio cues reused; placeholder
+  room-cleared sting via `audio.play.multUp(5)`.
+- Failed-run overlay + Try Again, best score persisted.
+
+### TODO (rooms direction)
+
+- **More rooms.** Authoring pattern: one `buildRoomN()` factory per
+  room, registered in `rooms-game.ts`. Eventually a small data file
+  describing pattern timelines.
+- **Pattern primitives** as Enemy variants or shared helpers: wave,
+  ring burst, sweep, aimed shot. Compose into "encounters" that the
+  turret-style entity replays.
+- **More enemy types**: sweeper (linear path), spinner (rotates and
+  fires from multiple barrels), boss with phase changes.
+- **Real room-cleared sting** — not the multiplier-up cue.
+- **Room intros / outros** — short pre-fight beat instead of "fight
+  starts when the door slides shut".
+- **HUD polish**: reads as a sandbox-style block right now; rooms
+  could use a slimmer one (no MULT, no TIME).
+- **Sandbox + rooms shared particle helpers**: rooms-game has its own
+  inline trail / FX update + render; once both are stable, lift the
+  shared parts into `lib/particles.ts`.
+
+### TODO (sandbox direction)
 
 - Audio: real music channel + adaptive layering on multiplier tier.
 - HUD pass once the visuals settle (currently deliberately untouched
@@ -173,6 +290,12 @@ Polish backlog (sandbox):
 - Wider settings menu coverage for the new tunables (run duration is
   surfaced; some breaker / shield internals aren't yet).
 - Performance: spatial hash if `maxBullets` regularly exceeds ~150.
+
+### TODO (project)
+
+- Main menu / mode select polish (currently a static landing).
+- Migrate the rooms inline particle/render helpers into `lib/` once
+  sandbox is willing to use them too.
 
 ## Working rules
 
