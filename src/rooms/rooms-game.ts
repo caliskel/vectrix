@@ -13,7 +13,6 @@ import {
   PARTICLE_SPAWN_INTERVAL_MS,
   PARTICLE_TRAIL_MIN_SPEED,
   loadSettings,
-  saveSettings,
   type Settings,
 } from "../lib/config";
 import { drawDoor, playerOverlapsDoor } from "../lib/door";
@@ -40,7 +39,7 @@ import {
   resetEyeState,
   updateEye,
 } from "../lib/player";
-import { createMenu } from "../lib/settings-menu";
+import { createPauseMenu } from "./pause-menu";
 import { type Bounds, hitBounds } from "../lib/types";
 import {
   bulletInsideWall,
@@ -87,7 +86,6 @@ export function start(canvas: HTMLCanvasElement): void {
   const ctx: CanvasRenderingContext2D = rawCtx;
 
   const settings: Settings = loadSettings();
-  const save = () => saveSettings(settings);
 
   audio.setMasterVolume(settings.audio.master);
   audio.setSfxVolume(settings.audio.sfx);
@@ -208,8 +206,22 @@ export function start(canvas: HTMLCanvasElement): void {
   // ------- input / menu -------
 
   const keys = new Set<string>();
-  const menu = createMenu(settings, save, () => {
-    restartRun();
+  // Rooms uses a pause menu instead of the settings overlay. Settings live
+  // in the sandbox build only — see the Settings only available in Sandbox
+  // mode footer in the pause panel.
+  const menu = createPauseMenu({
+    onResume: () => {
+      // dt is recomputed each frame from lastTime; setting it to "now"
+      // prevents a deltaTime jump after a long pause
+      lastTime = performance.now();
+    },
+    onRestart: () => {
+      restartRun();
+      lastTime = performance.now();
+    },
+    onQuit: () => {
+      window.location.href = "/";
+    },
   });
 
   function normalizeCode(code: string): string {
@@ -239,19 +251,15 @@ export function start(canvas: HTMLCanvasElement): void {
     audio.init();
     const code = normalizeCode(e.code);
 
-    if (menu.isCapturing()) {
-      e.preventDefault();
-      if (code === "Escape") menu.cancelCapture();
-      else menu.acceptCapturedKey(code);
-      return;
-    }
-
+    // Pause menu has no key-rebinding capture flow (settings live in
+    // sandbox), so we go straight to the toggle test.
     if (
       code === settings.bindings.menu1 ||
       code === settings.bindings.menu2
     ) {
       e.preventDefault();
       menu.toggle();
+      if (!menu.isOpen()) lastTime = performance.now();
       keys.clear();
       return;
     }

@@ -334,8 +334,30 @@ ring-burst, aimed-shot, etc.) plug into the same interface.
 - Run ends only on `hp <= 0` (no timer). End overlay shows score,
   best-this-mode, and a `TRY AGAIN ↵` button. Best is stored under
   `dash-proto:rooms-best` (separate from sandbox per-config bests).
-- Esc / Tab opens the shared settings menu; "Restart run" in the menu
-  also routes to `restartRun()` for rooms.
+- Esc / Tab opens the rooms-only **pause menu** (see below).
+  Settings live in the sandbox build only — rooms doesn't expose
+  the settings overlay.
+
+### Pause menu (rooms only)
+
+`src/rooms/pause-menu.ts` — DOM overlay independent of the sandbox
+settings overlay. Triggered by Esc / Tab via the existing menu1 /
+menu2 bindings. Three buttons:
+
+- `RESUME` — closes the overlay, resets `lastTime` to
+  `performance.now()` so the deltaTime doesn't jump after a long
+  pause.
+- `RESTART` — closes the overlay, calls `restartRun()`, also resets
+  `lastTime`.
+- `QUIT TO MENU` — `window.location.href = "/"` back to the
+  landing page.
+
+While the overlay is open the rooms frame loop short-circuits — no
+sim updates, no enemy fire, no bullet movement, audio events stop
+firing on their own (no `Tone.Transport`-style pause is needed).
+Footer text: "Settings only available in Sandbox mode" so the
+absence is explicit. Sandbox is untouched and keeps the full
+settings overlay on Esc / Tab.
 
 ### What's done
 
