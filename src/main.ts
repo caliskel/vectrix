@@ -1,6 +1,17 @@
 import {
   DEFAULT_SETTINGS,
   PALETTE,
+  PARTICLE_BASE_SPEED_MAX,
+  PARTICLE_BASE_SPEED_MIN,
+  PARTICLE_DASH_SPAWN_INTERVAL_MS,
+  PARTICLE_DASH_SPEED_MULTIPLIER,
+  PARTICLE_DRAG,
+  PARTICLE_LATERAL_JITTER,
+  PARTICLE_LIFETIME_MS,
+  PARTICLE_SIZE_MAX_FACTOR,
+  PARTICLE_SIZE_MIN_FACTOR,
+  PARTICLE_SPAWN_INTERVAL_MS,
+  PARTICLE_TRAIL_MIN_SPEED,
   PRESETS,
   deepAssign,
   loadSettings,
@@ -220,7 +231,6 @@ function setBestScoreIfBetter(id: ConfigId, score: number): boolean {
 }
 
 const BULLET_TRAIL = 5;
-const PLAYER_TRAIL = 8;
 
 type Bullet = {
   x: number;
@@ -263,10 +273,13 @@ type Particle = {
   y: number;
   vx: number;
   vy: number;
-  size: number;
+  initialSize: number;
   color: string;
   age: number;
   lifetime: number;
+  glowStrong: number;
+  glowSoft: number;
+  drag: number; // applied per second-equivalent multiplier (frame-rate independent)
 };
 
 type EndSnapshot = {
@@ -303,6 +316,7 @@ type GameRunState = {
   dashChain: number;
   effects: ActiveEffects;
   passiveTimer: number; // accumulates dt while running, fires a passive pickup at every passiveInterval
+  particleSpawnTimer: number; // accumulates dt for the player trail particle emitter
   endSnapshot: EndSnapshot | null;
 };
 
@@ -335,6 +349,7 @@ const state: GameRunState = {
   dashChain: 0,
   effects: { shield: null, scoreBoost: null, breaker: null },
   passiveTimer: 0,
+  particleSpawnTimer: 0,
   endSnapshot: null,
 };
 
@@ -346,12 +361,6 @@ let initialFillDone = false;
 let floatingTexts: FloatingText[] = [];
 let rings: Ring[] = [];
 let particles: Particle[] = [];
-
-// player trail (circular buffer)
-const playerTrailX = new Float32Array(PLAYER_TRAIL);
-const playerTrailY = new Float32Array(PLAYER_TRAIL);
-let playerTrailIdx = 0;
-let playerTrailCount = 0;
 
 let endTryAgainBounds: Bounds | null = null;
 let endSettingsBounds: Bounds | null = null;
@@ -391,8 +400,7 @@ function resetRun() {
   floatingTexts = [];
   rings = [];
   particles = [];
-  playerTrailIdx = 0;
-  playerTrailCount = 0;
+  state.particleSpawnTimer = 0;
   endTryAgainBounds = null;
   endSettingsBounds = null;
 }
@@ -633,13 +641,70 @@ function awardBulletBreak(b: Bullet) {
       y: b.y,
       vx: Math.cos(angle) * speed,
       vy: Math.sin(angle) * speed,
-      size: 3,
+      initialSize: 3,
       color: settings.bullets.color,
       age: 0,
       lifetime: 0.4,
+      glowStrong: 10,
+      glowSoft: 4,
+      drag: 1.0,
     });
   }
   // broken bullets do NOT drop pickups (intentional — would create a feedback loop)
+}
+
+function spawnTrailParticles(speed: number, isDash: boolean) {
+  // direction opposite to player motion + perpendicular axis for jitter
+  const dirX = speed > 0 ? -player.vx / speed : 0;
+  const dirY = speed > 0 ? -player.vy / speed : 0;
+  const perpX = -dirY;
+  const perpY = dirX;
+
+  // current player render color
+  let color: string;
+  if (player.dashTime > 0 || player.dashIframeTime > 0) {
+    color = settings.player.colorDash;
+  } else if (keys.has(settings.bindings.walk)) {
+    color = settings.player.colorWalk;
+  } else {
+    color = settings.player.colorIdle;
+  }
+
+  const speedMul = isDash ? PARTICLE_DASH_SPEED_MULTIPLIER : 1;
+  const baseMin = PARTICLE_BASE_SPEED_MIN * speedMul;
+  const baseRange = (PARTICLE_BASE_SPEED_MAX - PARTICLE_BASE_SPEED_MIN) * speedMul;
+  const lateralMag = PARTICLE_LATERAL_JITTER * speedMul;
+
+  // count: walk/idle 1-2, dash 2-3
+  const count = isDash
+    ? 2 + Math.floor(Math.random() * 2)
+    : 1 + Math.floor(Math.random() * 2);
+
+  const lifetime = PARTICLE_LIFETIME_MS / 1000;
+
+  for (let i = 0; i < count; i++) {
+    const back = baseMin + Math.random() * baseRange;
+    const lateral = (Math.random() * 2 - 1) * lateralMag;
+    const upDrift = -(20 + Math.random() * 30); // -20..-50
+    const vx = dirX * back + perpX * lateral;
+    const vy = dirY * back + perpY * lateral + upDrift;
+    const sizeFactor =
+      PARTICLE_SIZE_MIN_FACTOR +
+      Math.random() * (PARTICLE_SIZE_MAX_FACTOR - PARTICLE_SIZE_MIN_FACTOR);
+    particles.push({
+      x: player.x,
+      y: player.y,
+      vx,
+      vy,
+      initialSize: settings.player.size * sizeFactor,
+      color,
+      age: 0,
+      lifetime,
+      glowStrong: isDash ? 15 : 8,
+      glowSoft: isDash ? 6 : 3,
+      drag: PARTICLE_DRAG,
+    });
+  }
 }
 
 function spawnPassivePickup() {
@@ -813,6 +878,12 @@ function frame(now: number) {
     p.age += dt;
     p.x += p.vx * dt;
     p.y += p.vy * dt;
+    if (p.drag !== 1) {
+      // frame-rate-independent decay so a 30 fps and 60 fps tick agree
+      const k = Math.pow(p.drag, dt * 60);
+      p.vx *= k;
+      p.vy *= k;
+    }
   }
   particles = particles.filter((p) => p.age < p.lifetime);
 
@@ -1029,11 +1100,27 @@ function frame(now: number) {
     if (b.trailCount < BULLET_TRAIL) b.trailCount++;
   }
 
-  // record player trail
-  playerTrailX[playerTrailIdx] = player.x;
-  playerTrailY[playerTrailIdx] = player.y;
-  playerTrailIdx = (playerTrailIdx + 1) % PLAYER_TRAIL;
-  if (playerTrailCount < PLAYER_TRAIL) playerTrailCount++;
+  // player trail — emitted as independent particles, replacing the old
+  // ghost-square trail. Spawn rate and speed multiplier ramp up while
+  // dashing; a hard speed gate prevents particles from leaking out while
+  // the player is essentially still.
+  {
+    const speed = Math.hypot(player.vx, player.vy);
+    const isDash = player.dashTime > 0;
+    if (!isDash && speed < PARTICLE_TRAIL_MIN_SPEED) {
+      state.particleSpawnTimer = 0;
+    } else {
+      const intervalMs = isDash
+        ? PARTICLE_DASH_SPAWN_INTERVAL_MS
+        : PARTICLE_SPAWN_INTERVAL_MS;
+      const interval = intervalMs / 1000;
+      state.particleSpawnTimer += dt;
+      while (state.particleSpawnTimer >= interval) {
+        state.particleSpawnTimer -= interval;
+        spawnTrailParticles(speed, isDash);
+      }
+    }
+  }
 
   bullets = bullets.filter(
     (b) => b.x > -60 && b.x < viewW + 60 && b.y > -60 && b.y < viewH + 60,
@@ -1218,8 +1305,9 @@ function render() {
   const particlesGetNeon = particles.length < 50;
   for (const p of particles) {
     const t = p.age / p.lifetime;
-    const alpha = Math.max(0, 1 - t);
-    const sz = Math.max(0.5, p.size * (1 - t * 0.6));
+    // first half stays at full alpha, then linearly fades to 0
+    const alpha = t < 0.5 ? 1 : Math.max(0, 1 - (t - 0.5) * 2);
+    const sz = Math.max(0.5, p.initialSize * (1 - t));
     ctx.save();
     ctx.globalAlpha = alpha;
     if (particlesGetNeon) {
@@ -1229,8 +1317,8 @@ function render() {
           ctx.fillRect(p.x - sz / 2, p.y - sz / 2, sz, sz);
         },
         p.color,
-        10,
-        4,
+        p.glowStrong,
+        p.glowSoft,
       );
     } else {
       ctx.fillStyle = p.color;
@@ -1245,81 +1333,6 @@ function render() {
   const dashIframe = player.dashIframeTime > 0;
   const cooling = player.cooldown > 0;
   const walking = keys.has(settings.bindings.walk);
-
-  // player trail — drawn under the live player. Trail is a separate
-  // palette color (lighter than the body) so the streak reads as light
-  // rather than as a smear of the player.
-  const isDashTrail = dashing || dashIframe;
-  let trailColor: string;
-  let trailBlurStrong: number;
-  let trailAlphaLow: number;
-  let trailAlphaHigh: number;
-  let trailSizeLow: number;
-  let trailSizeHigh: number;
-  let trailSkipEveryOther: boolean;
-  if (isDashTrail) {
-    // dash trail keeps the dense, full-size look — power moment
-    trailColor = PALETTE.playerDashTrail;
-    trailBlurStrong = 20;
-    trailAlphaLow = 0.2;
-    trailAlphaHigh = 0.7;
-    trailSizeLow = 1.0;
-    trailSizeHigh = 1.0;
-    trailSkipEveryOther = false;
-  } else if (walking) {
-    trailColor = PALETTE.playerWalkTrail;
-    trailBlurStrong = 10;
-    trailAlphaLow = 0.05;
-    trailAlphaHigh = 0.35;
-    trailSizeLow = 0.3;
-    trailSizeHigh = 0.6;
-    trailSkipEveryOther = true;
-  } else {
-    trailColor = PALETTE.playerTrail;
-    trailBlurStrong = 10;
-    trailAlphaLow = 0.05;
-    trailAlphaHigh = 0.35;
-    trailSizeLow = 0.3;
-    trailSizeHigh = 0.6;
-    trailSkipEveryOther = true;
-  }
-
-  // walk/idle trail vanishes when the player is essentially still — keeps
-  // the streak from collapsing into a "blur blob" while standing
-  const playerSpeed = Math.hypot(player.vx, player.vy);
-  const trailVisible = isDashTrail || playerSpeed >= 80;
-
-  if (trailVisible && playerTrailCount > 1) {
-    const start =
-      playerTrailCount === PLAYER_TRAIL ? playerTrailIdx : 0;
-    const visible = playerTrailCount - 1; // exclude the live position
-    for (let i = 0; i < visible; i++) {
-      // dotted look for non-dash trails — every other sample only
-      if (trailSkipEveryOther && (i & 1) === 1) continue;
-      const j = (start + i) % PLAYER_TRAIL;
-      const t = visible === 1 ? 1 : i / (visible - 1);
-      const alpha = trailAlphaLow + (trailAlphaHigh - trailAlphaLow) * t;
-      const sizeFactor = trailSizeLow + (trailSizeHigh - trailSizeLow) * t;
-      const sz = pSize * sizeFactor;
-      ctx.save();
-      ctx.globalAlpha = alpha;
-      drawNeon(
-        () => {
-          ctx.fillStyle = trailColor;
-          ctx.fillRect(
-            playerTrailX[j] - sz / 2,
-            playerTrailY[j] - sz / 2,
-            sz,
-            sz,
-          );
-        },
-        trailColor,
-        trailBlurStrong,
-        Math.max(2, trailBlurStrong * 0.4),
-      );
-      ctx.restore();
-    }
-  }
 
   let drawPlayer = true;
   if (state.hitIframeTime > 0) {

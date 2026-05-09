@@ -82,6 +82,20 @@ export type Settings = {
 
 export const STORAGE_KEY = "dash-proto:settings:v3";
 
+// Player particle trail tuning. Plain constants (not in Settings) — these
+// are feel parameters that don't need a menu surface yet.
+export const PARTICLE_SPAWN_INTERVAL_MS = 40;
+export const PARTICLE_DASH_SPAWN_INTERVAL_MS = 15;
+export const PARTICLE_LIFETIME_MS = 600;
+export const PARTICLE_BASE_SPEED_MIN = 30;
+export const PARTICLE_BASE_SPEED_MAX = 80;
+export const PARTICLE_SIZE_MIN_FACTOR = 0.25;
+export const PARTICLE_SIZE_MAX_FACTOR = 0.4;
+export const PARTICLE_DASH_SPEED_MULTIPLIER = 2.0;
+export const PARTICLE_TRAIL_MIN_SPEED = 80;
+export const PARTICLE_LATERAL_JITTER = 60;
+export const PARTICLE_DRAG = 0.95;
+
 // Single source of truth for the neon-arcade palette. Game-object colors in
 // DEFAULT_SETTINGS reference these so a future palette tweak only happens
 // here. Existing users who've customized colors keep their picks.
