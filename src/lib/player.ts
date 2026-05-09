@@ -62,14 +62,16 @@ export type PlayerProfile = {
   outerRing: string;
   iris: string;
   pupil: string;
-  dashColor: string;
+  /** Color of the sparks emitted while dashing. Doesn't recolor the eye
+   *  itself — the dash-state ring/pupil/glow stay on PALETTE.playerDash. */
+  dashParticles: string;
 };
 
 export const DEFAULT_PLAYER_PROFILE: PlayerProfile = {
   outerRing: "#ffffff",
   iris: "#0a0e1a",
   pupil: "#ffffff",
-  dashColor: "#00e5ff",
+  dashParticles: "#00e5ff",
 };
 
 export const PLAYER_PROFILE_KEY = "dash-proto:player-profile";
@@ -79,6 +81,16 @@ export function loadPlayerProfile(): PlayerProfile {
     const raw = localStorage.getItem(PLAYER_PROFILE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw) as Partial<PlayerProfile>;
+      // soft migration: profiles saved before this rename used `dashColor`
+      // for the same purpose; treat it as a fallback so existing players
+      // keep their pick.
+      const legacyDash = (parsed as Record<string, unknown>).dashColor;
+      const dashParticlesRaw =
+        typeof parsed.dashParticles === "string"
+          ? parsed.dashParticles
+          : typeof legacyDash === "string"
+            ? legacyDash
+            : DEFAULT_PLAYER_PROFILE.dashParticles;
       return {
         outerRing:
           typeof parsed.outerRing === "string"
@@ -92,10 +104,7 @@ export function loadPlayerProfile(): PlayerProfile {
           typeof parsed.pupil === "string"
             ? parsed.pupil
             : DEFAULT_PLAYER_PROFILE.pupil,
-        dashColor:
-          typeof parsed.dashColor === "string"
-            ? parsed.dashColor
-            : DEFAULT_PLAYER_PROFILE.dashColor,
+        dashParticles: dashParticlesRaw,
       };
     }
   } catch {
@@ -501,31 +510,24 @@ export function drawPlayerEye(
   const baseX = p.x + sx;
   const baseY = p.y + sy;
 
-  // Resolve final colors. Profile overrides direct opts; while in a dash
-  // (or its post-dash i-frame), profile.dashColor takes over for the ring,
-  // pupil and glow so the customized "locked-on" cue still reads.
+  // Resolve final colors. Profile takes over for outer ring + pupil only
+  // when the eye is in its idle/walk state — during a dash (or its i-frame)
+  // we keep the original opts values (mode passes settings.player.colorDash)
+  // so the "locked-on" dash cue and ghost trail stay on the canonical
+  // dash color, regardless of customization. Iris always follows profile.
   const inDashColorState = isDashing || p.dashIframeTime > 0;
-  let ringColor: string;
-  let pupilColor: string;
-  let glowColor: string;
-  if (opts.profile) {
-    if (inDashColorState) {
-      ringColor = opts.profile.dashColor;
-      pupilColor = opts.profile.dashColor;
-      glowColor = opts.profile.dashColor;
-    } else {
-      ringColor = opts.profile.outerRing;
-      pupilColor = opts.profile.pupil;
-      glowColor = opts.profile.outerRing;
-    }
-  } else {
-    ringColor = opts.ringColor;
-    pupilColor = opts.pupilColor;
-    glowColor = opts.glowColor;
-  }
+  const useProfileForBody = !!opts.profile && !inDashColorState;
+  const ringColor = useProfileForBody
+    ? (opts.profile as PlayerProfile).outerRing
+    : opts.ringColor;
+  const pupilColor = useProfileForBody
+    ? (opts.profile as PlayerProfile).pupil
+    : opts.pupilColor;
+  const glowColor = useProfileForBody
+    ? (opts.profile as PlayerProfile).outerRing
+    : opts.glowColor;
   const irisColor = opts.profile?.iris ?? opts.irisColor ?? PALETTE.bg;
-  // ghost color follows the dash color so the trail matches the dash flash
-  const ghostColor = opts.profile?.dashColor ?? opts.ghostColor;
+  const ghostColor = opts.ghostColor;
 
   // ===== ghosts (drawn first, behind the live eye) =====
   if (p.dashGhosts.length > 0) {

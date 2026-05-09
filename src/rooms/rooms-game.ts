@@ -346,7 +346,9 @@ export function start(canvas: HTMLCanvasElement): void {
 
     let color: string;
     if (player.dashTime > 0 || player.dashIframeTime > 0) {
-      color = settings.player.colorDash;
+      // dash sparks pull from the player's profile (the only customization
+      // path that actually changes during dash); idle/walk stay on settings.
+      color = profile.dashParticles;
     } else if (keys.has(settings.bindings.walk)) {
       color = settings.player.colorWalk;
     } else {
@@ -818,7 +820,7 @@ export function start(canvas: HTMLCanvasElement): void {
         ringColor,
         glowColor: ringColor,
         pupilColor,
-        ghostColor: profile.dashColor,
+        ghostColor: settings.player.colorDash,
         dashDurationSec: settings.dash.durationMs / 1000,
         profile,
       });

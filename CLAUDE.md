@@ -207,10 +207,10 @@ button. Static — no animation, no state.
 
 ```ts
 type PlayerProfile = {
-  outerRing: string; // default #ffffff
-  iris: string;      // default #0a0e1a (PALETTE.bg)
-  pupil: string;     // default #ffffff
-  dashColor: string; // default #00e5ff — used during dash + dash i-frame
+  outerRing: string;     // default #ffffff
+  iris: string;          // default #0a0e1a (PALETTE.bg)
+  pupil: string;         // default #ffffff
+  dashParticles: string; // default #00e5ff — color of sparks during dash
 };
 ```
 
@@ -223,12 +223,22 @@ Helpers in `lib/player.ts`:
 
 `drawPlayerEye` accepts an optional `profile` in its opts. When set
 it overrides `ringColor` / `pupilColor` / `irisColor` (default
-`PALETTE.bg`) with profile values. While the player is in a dash
-(or its post-dash i-frame), `profile.dashColor` takes over for
-ring + pupil + glow + ghost trail so the customized "locked-on"
-cue still reads. Outside of dash the profile uses
-`outerRing` / `pupil` / `iris` — the eye reads as the player's
-customization regardless of walk state.
+`PALETTE.bg`) with profile values **only outside of a dash**. While
+the player is dashing (or in the post-dash i-frame), the eye
+ring + pupil + glow + ghost trail stay on whatever the mode passes
+in opts (sandbox + rooms both pass `settings.player.colorDash`,
+defaulting to `PALETTE.playerDash`). The customizable "in dash"
+cue is the **particle trail** — see `dashParticles` below — not
+the orb itself.
+
+`profile.dashParticles` is read by the rooms `spawnTrailParticles`
+helper: while dashing, sparks emitted from the player are tinted
+with this color (and their neon glow follows). Sandbox keeps using
+`settings.player.colorDash` for its trail particles since the
+sandbox menu allows tuning that color directly. Saves still under
+`dash-proto:player-profile`; profiles written before this rename
+used `dashColor` and load with that as a fallback for
+`dashParticles`.
 
 - **Rooms** loads the profile once at `start()` and forwards it on
   every player render. So Rooms reflects the customization.
