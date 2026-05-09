@@ -12,6 +12,15 @@ import {
   DASH_STRETCH_PEAK_X,
   DASH_STRETCH_X,
   DASH_STRETCH_Y,
+  IDLE_JITTER_AMPLITUDE,
+  IDLE_LOOK_CALM_DOWN_MS,
+  IDLE_LOOK_CENTER_CHANCE,
+  IDLE_LOOK_FAR_DIST_RATIO,
+  IDLE_LOOK_INTERVAL_MAX_MS,
+  IDLE_LOOK_INTERVAL_MIN_MS,
+  IDLE_LOOK_MID_DIST_RATIO,
+  IDLE_LOOK_NEAR_DIST_RATIO,
+  IDLE_LOOK_QUICK_DART_CHANCE,
   type Bindings,
 } from "./config";
 import { drawNeon } from "./neon";
@@ -33,6 +42,12 @@ const DASH_GHOST_INTERVAL_SEC = DASH_GHOST_INTERVAL_MS / 1000;
 const DASH_GHOST_LIFETIME_SEC = DASH_GHOST_LIFETIME_MS / 1000;
 const DASH_PEAK_SEC = DASH_STRETCH_PEAK_PHASE_MS / 1000;
 const DASH_END_SEC = DASH_STRETCH_END_PHASE_MS / 1000;
+const IDLE_CALM_DOWN_SEC = IDLE_LOOK_CALM_DOWN_MS / 1000;
+const IDLE_INTERVAL_MIN_SEC = IDLE_LOOK_INTERVAL_MIN_MS / 1000;
+const IDLE_INTERVAL_MAX_SEC = IDLE_LOOK_INTERVAL_MAX_MS / 1000;
+const IDLE_QUICK_DART_MIN_SEC = 0.3;
+const IDLE_QUICK_DART_MAX_SEC = 0.5;
+const IDLE_TIER_JITTER = 0.1; // ± around tier center, gives e.g. 0.2..0.4 for "near"
 
 function randomBlinkInterval(): number {
   return (
@@ -80,6 +95,11 @@ export type Player = {
   // dash ghost trail — captured stamps of the outer ring
   dashGhosts: DashGhost[];
   ghostSpawnTimer: number;
+  // idle-look — pupil glances around when no threat is present
+  idleTargetX: number;
+  idleTargetY: number;
+  nextIdleSwitchAt: number; // seconds (performance-clock-aligned)
+  lastSawDangerAt: number;  // seconds (-Infinity = never)
 };
 
 export function createPlayer(): Player {
@@ -106,6 +126,10 @@ export function createPlayer(): Player {
     closeAmount: 0,
     dashGhosts: [],
     ghostSpawnTimer: 0,
+    idleTargetX: 0,
+    idleTargetY: 0,
+    nextIdleSwitchAt: 0,
+    lastSawDangerAt: Number.NEGATIVE_INFINITY,
   };
 }
 
@@ -121,6 +145,10 @@ export function resetEyeState(p: Player): void {
   p.closeAmount = 0;
   p.dashGhosts = [];
   p.ghostSpawnTimer = 0;
+  p.idleTargetX = 0;
+  p.idleTargetY = 0;
+  p.nextIdleSwitchAt = 0;
+  p.lastSawDangerAt = Number.NEGATIVE_INFINITY;
 }
 
 export function eyeOnHit(p: Player): void {
@@ -290,24 +318,70 @@ export function updateEye(
   const irisR = options.size * 0.42;
   const pupilR = options.size * 0.18;
   const maxOffset = (irisR - pupilR) * 0.7;
+  const nowMs = performance.now();
+  const nowSec = nowMs / 1000;
 
   let dx = 0;
   let dy = 0;
+
   if (isDashing) {
     const len = Math.hypot(p.dashDirX, p.dashDirY) || 1;
     dx = (p.dashDirX / len) * maxOffset;
     dy = (p.dashDirY / len) * maxOffset;
   } else if (options.threat) {
+    p.lastSawDangerAt = nowSec;
     const tdx = options.threat.x - p.x;
     const tdy = options.threat.y - p.y;
     const tlen = Math.hypot(tdx, tdy) || 1;
     dx = (tdx / tlen) * maxOffset;
     dy = (tdy / tlen) * maxOffset;
+  } else {
+    const sinceDanger = nowSec - p.lastSawDangerAt;
+    if (sinceDanger >= IDLE_CALM_DOWN_SEC) {
+      // idle-look: glance around with weighted distance + occasional darts
+      if (nowSec >= p.nextIdleSwitchAt) {
+        pickIdleTarget(p, maxOffset);
+        const quick = Math.random() < IDLE_LOOK_QUICK_DART_CHANCE;
+        const dur = quick
+          ? IDLE_QUICK_DART_MIN_SEC +
+            Math.random() * (IDLE_QUICK_DART_MAX_SEC - IDLE_QUICK_DART_MIN_SEC)
+          : IDLE_INTERVAL_MIN_SEC +
+            Math.random() * (IDLE_INTERVAL_MAX_SEC - IDLE_INTERVAL_MIN_SEC);
+        p.nextIdleSwitchAt = nowSec + dur;
+      }
+      // micro jitter so the pupil never sits perfectly still
+      const jx = Math.sin(nowMs * 0.003) * IDLE_JITTER_AMPLITUDE;
+      const jy = Math.cos(nowMs * 0.0027) * IDLE_JITTER_AMPLITUDE;
+      dx = p.idleTargetX + jx;
+      dy = p.idleTargetY + jy;
+    }
+    // sinceDanger < calm-down → target stays at (0, 0): "settling" forward
   }
 
   const k = 1 - Math.exp(-PUPIL_LERP_RATE * dt);
   p.pupilOffsetX += (dx - p.pupilOffsetX) * k;
   p.pupilOffsetY += (dy - p.pupilOffsetY) * k;
+}
+
+function pickIdleTarget(p: Player, maxOffset: number): void {
+  if (Math.random() < IDLE_LOOK_CENTER_CHANCE) {
+    p.idleTargetX = 0;
+    p.idleTargetY = 0;
+    return;
+  }
+  const tier = Math.random();
+  let center: number;
+  if (tier < 0.6) center = IDLE_LOOK_NEAR_DIST_RATIO;
+  else if (tier < 0.9) center = IDLE_LOOK_MID_DIST_RATIO;
+  else center = IDLE_LOOK_FAR_DIST_RATIO;
+  const ratio = Math.max(
+    0,
+    Math.min(1, center + (Math.random() * 2 - 1) * IDLE_TIER_JITTER),
+  );
+  const angle = Math.random() * Math.PI * 2;
+  const dist = ratio * maxOffset;
+  p.idleTargetX = Math.cos(angle) * dist;
+  p.idleTargetY = Math.sin(angle) * dist;
 }
 
 export type EyeRenderOpts = {

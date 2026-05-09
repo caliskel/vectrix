@@ -126,6 +126,20 @@ export const BLINK_INTERVAL_MAX_MS = 7000;
 export const BLINK_CLOSE_DURATION_MS = 70;
 export const BLINK_OPEN_DURATION_MS = 130;
 
+// Idle-look — when there's no threat to track, the pupil periodically
+// "glances around". Tier ratios pick the new offset distance with a
+// 60/30/10 weighting (near / mid / far), within the iris's available
+// travel.
+export const IDLE_LOOK_CALM_DOWN_MS = 800;
+export const IDLE_LOOK_INTERVAL_MIN_MS = 800;
+export const IDLE_LOOK_INTERVAL_MAX_MS = 2400;
+export const IDLE_LOOK_QUICK_DART_CHANCE = 0.1;
+export const IDLE_LOOK_CENTER_CHANCE = 0.15;
+export const IDLE_LOOK_NEAR_DIST_RATIO = 0.3;
+export const IDLE_LOOK_MID_DIST_RATIO = 0.6;
+export const IDLE_LOOK_FAR_DIST_RATIO = 0.9;
+export const IDLE_JITTER_AMPLITUDE = 0.5;
+
 // Bindings store KeyboardEvent.code values (layout-independent). Modifier
 // codes are normalized to drop the Left/Right side suffix (see normalizeCode
 // in main.ts) so either Shift key counts as "Shift", etc.
