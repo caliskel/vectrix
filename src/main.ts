@@ -1,3 +1,9 @@
+import { loadSettings, saveSettings, type Settings } from "./config";
+import { createMenu } from "./menu";
+
+const settings: Settings = loadSettings();
+const save = () => saveSettings(settings);
+
 const canvas = document.getElementById("app") as HTMLCanvasElement;
 const ctx = canvas.getContext("2d")!;
 
@@ -17,13 +23,39 @@ resize();
 window.addEventListener("resize", resize);
 
 const keys = new Set<string>();
+const menu = createMenu(settings, save);
+
+function isBoundKey(k: string): boolean {
+  for (const v of Object.values(settings.bindings)) if (v === k) return true;
+  return false;
+}
+
 window.addEventListener("keydown", (e) => {
   const k = e.key.toLowerCase();
-  keys.add(k);
-  if (k === "w" || k === "a" || k === "s" || k === "d") {
+
+  if (menu.isCapturing()) {
     e.preventDefault();
+    if (k === "escape") menu.cancelCapture();
+    else menu.acceptCapturedKey(k);
+    return;
   }
+
+  if (k === settings.bindings.menu1 || k === settings.bindings.menu2) {
+    e.preventDefault();
+    menu.toggle();
+    keys.clear();
+    return;
+  }
+
+  if (menu.isOpen()) {
+    // game input ignored while paused; let the DOM handle keys for inputs
+    return;
+  }
+
+  keys.add(k);
+  if (isBoundKey(k)) e.preventDefault();
 });
+
 window.addEventListener("keyup", (e) => {
   keys.delete(e.key.toLowerCase());
 });
@@ -31,28 +63,18 @@ window.addEventListener("blur", () => keys.clear());
 
 const ACCEL = 2400;
 const MAX_SPEED = 440;
-const WALK_FACTOR = 0.3;
 const FRICTION = 8.0;
-const DASH_SPEED = 950;
-const DASH_DURATION = 0.09;
-const DASH_IFRAMES = 0.11;
-const DASH_COOLDOWN = 0.40;
-const PLAYER_SIZE = 28;
-
-const BULLET_SIZE = 6;
-const BULLET_SPEED_MIN = 170;
-const BULLET_SPEED_MAX = 380;
-const BULLETS_PER_SPAWN = 2;
-const SPAWN_ANGLE_SPREAD = Math.PI / 3; // ±60° from inward perpendicular
-const BOUNCE_CHANCE = 0.8;
-const SPAWN_INTERVAL_INITIAL = 0.8;
-const SPAWN_INTERVAL_MIN = 0.2;
-const RAMP_DURATION = 10;
+const SPAWN_ANGLE_SPREAD = Math.PI / 3;
 const DEATH_PAUSE = 0.5;
-
 const BEST_KEY = "dash-prototype:best";
 
-type Bullet = { x: number; y: number; vx: number; vy: number };
+type Bullet = {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  bounces: boolean;
+};
 
 const player = {
   x: 0,
@@ -69,14 +91,13 @@ const player = {
 };
 
 let bullets: Bullet[] = [];
-let spawnInterval = SPAWN_INTERVAL_INITIAL;
 let spawnTimer = 0;
 let runTime = 0;
 let started = false;
 let best = Number.parseFloat(localStorage.getItem(BEST_KEY) ?? "0") || 0;
 
-type State = "alive" | "dying";
-let state: State = "alive";
+type GameState = "alive" | "dying";
+let gameState: GameState = "alive";
 let dyingTime = 0;
 
 function resetRun() {
@@ -90,7 +111,6 @@ function resetRun() {
   player.iframeTime = 0;
   player.cooldown = 0;
   bullets = [];
-  spawnInterval = SPAWN_INTERVAL_INITIAL;
   spawnTimer = 0;
   runTime = 0;
   started = false;
@@ -100,10 +120,10 @@ resetRun();
 function inputDir(): { x: number; y: number } {
   let x = 0;
   let y = 0;
-  if (keys.has("a") || keys.has("arrowleft")) x -= 1;
-  if (keys.has("d") || keys.has("arrowright")) x += 1;
-  if (keys.has("w") || keys.has("arrowup")) y -= 1;
-  if (keys.has("s") || keys.has("arrowdown")) y += 1;
+  if (keys.has(settings.bindings.left)) x -= 1;
+  if (keys.has(settings.bindings.right)) x += 1;
+  if (keys.has(settings.bindings.up)) y -= 1;
+  if (keys.has(settings.bindings.down)) y += 1;
   const len = Math.hypot(x, y);
   if (len > 0) {
     x /= len;
@@ -112,13 +132,17 @@ function inputDir(): { x: number; y: number } {
   return { x, y };
 }
 
+function dashSpeedNow(): number {
+  const dur = settings.dash.durationMs / 1000;
+  return dur > 0 ? settings.dash.distance / dur : 0;
+}
+
 function tryStartDash() {
   if (player.dashTime > 0 || player.cooldown > 0) return;
 
   const input = inputDir();
   let dx: number;
   let dy: number;
-
   if (input.x !== 0 || input.y !== 0) {
     dx = input.x;
     dy = input.y;
@@ -132,25 +156,26 @@ function tryStartDash() {
       dy = player.facingY;
     }
   }
-
   const len = Math.hypot(dx, dy) || 1;
   dx /= len;
   dy /= len;
 
   player.dashDirX = dx;
   player.dashDirY = dy;
-  player.dashTime = DASH_DURATION;
-  player.iframeTime = DASH_IFRAMES;
-  player.vx = dx * DASH_SPEED;
-  player.vy = dy * DASH_SPEED;
+  player.dashTime = settings.dash.durationMs / 1000;
+  player.iframeTime = settings.dash.iframesMs / 1000;
+  const v = dashSpeedNow();
+  player.vx = dx * v;
+  player.vy = dy * v;
 }
 
 function spawnBullet() {
+  const sz = settings.bullets.size;
+  const h = sz / 2;
   const edge = Math.floor(Math.random() * 4);
-  const h = BULLET_SIZE / 2;
   let x = 0;
   let y = 0;
-  let nx = 0; // inward perpendicular (unit)
+  let nx = 0;
   let ny = 0;
   if (edge === 0) {
     x = Math.random() * viewW;
@@ -172,30 +197,29 @@ function spawnBullet() {
   const baseAngle = Math.atan2(ny, nx);
   const offset = (Math.random() * 2 - 1) * SPAWN_ANGLE_SPREAD;
   const angle = baseAngle + offset;
-  const speed = BULLET_SPEED_MIN + Math.random() * (BULLET_SPEED_MAX - BULLET_SPEED_MIN);
+  const speed = settings.bullets.speed;
+  const bounces = Math.random() < settings.bullets.bounceChance / 100;
+
+  while (bullets.length >= settings.bullets.maxBullets) bullets.shift();
   bullets.push({
     x,
     y,
     vx: Math.cos(angle) * speed,
     vy: Math.sin(angle) * speed,
+    bounces,
   });
 }
 
-function updateRampDifficulty() {
-  const t = Math.min(runTime / RAMP_DURATION, 1);
-  const eased = t * t; // ease-in: calm start, sharper ramp toward the end
-  spawnInterval =
-    SPAWN_INTERVAL_INITIAL + (SPAWN_INTERVAL_MIN - SPAWN_INTERVAL_INITIAL) * eased;
-}
-
 function aabbHit(b: Bullet): boolean {
-  const ph = PLAYER_SIZE / 2;
-  const bh = BULLET_SIZE / 2;
-  return Math.abs(b.x - player.x) < ph + bh && Math.abs(b.y - player.y) < ph + bh;
+  const ph = settings.player.size / 2;
+  const bh = settings.bullets.size / 2;
+  return (
+    Math.abs(b.x - player.x) < ph + bh && Math.abs(b.y - player.y) < ph + bh
+  );
 }
 
 function die() {
-  state = "dying";
+  gameState = "dying";
   dyingTime = DEATH_PAUSE;
   if (runTime > best) {
     best = runTime;
@@ -210,28 +234,35 @@ function frame(now: number) {
   lastTime = now;
   if (dt > 0.05) dt = 0.05;
 
-  if (state === "alive") {
+  if (menu.isOpen()) {
+    // freeze simulation; render so the canvas under the overlay stays consistent
+    render();
+    requestAnimationFrame(frame);
+    return;
+  }
+
+  if (gameState === "alive") {
     if (!started) {
       const probe = inputDir();
-      if (probe.x !== 0 || probe.y !== 0 || keys.has("x")) started = true;
+      if (probe.x !== 0 || probe.y !== 0 || keys.has(settings.bindings.dash)) {
+        started = true;
+      }
     }
-    if (started) {
-      runTime += dt;
-      updateRampDifficulty();
-    }
+    if (started) runTime += dt;
 
-    if (keys.has("x")) {
+    if (keys.has(settings.bindings.dash)) {
       tryStartDash();
-      keys.delete("x");
+      keys.delete(settings.bindings.dash);
     }
 
     if (player.dashTime > 0) {
       player.dashTime -= dt;
-      player.vx = player.dashDirX * DASH_SPEED;
-      player.vy = player.dashDirY * DASH_SPEED;
+      const v = dashSpeedNow();
+      player.vx = player.dashDirX * v;
+      player.vy = player.dashDirY * v;
       if (player.dashTime <= 0) {
         player.dashTime = 0;
-        player.cooldown = DASH_COOLDOWN;
+        player.cooldown = settings.dash.cooldownMs / 1000;
         player.vx *= 0.35;
         player.vy *= 0.35;
       }
@@ -246,7 +277,9 @@ function frame(now: number) {
       const damp = Math.exp(-FRICTION * dt);
       player.vx *= damp;
       player.vy *= damp;
-      const cap = keys.has("shift") ? MAX_SPEED * WALK_FACTOR : MAX_SPEED;
+      const cap = keys.has(settings.bindings.walk)
+        ? MAX_SPEED * settings.player.walkFactor
+        : MAX_SPEED;
       const sp = Math.hypot(player.vx, player.vy);
       if (sp > cap && (input.x !== 0 || input.y !== 0)) {
         const k = cap / sp;
@@ -255,54 +288,71 @@ function frame(now: number) {
       }
     }
 
-    if (player.iframeTime > 0) player.iframeTime = Math.max(0, player.iframeTime - dt);
-    if (player.cooldown > 0) player.cooldown = Math.max(0, player.cooldown - dt);
+    if (player.iframeTime > 0)
+      player.iframeTime = Math.max(0, player.iframeTime - dt);
+    if (player.cooldown > 0)
+      player.cooldown = Math.max(0, player.cooldown - dt);
 
     player.x += player.vx * dt;
     player.y += player.vy * dt;
 
-    const half = PLAYER_SIZE / 2;
-    if (player.x < half) { player.x = half; player.vx = 0; }
-    if (player.y < half) { player.y = half; player.vy = 0; }
-    if (player.x > viewW - half) { player.x = viewW - half; player.vx = 0; }
-    if (player.y > viewH - half) { player.y = viewH - half; player.vy = 0; }
+    const half = settings.player.size / 2;
+    if (player.x < half) {
+      player.x = half;
+      player.vx = 0;
+    }
+    if (player.y < half) {
+      player.y = half;
+      player.vy = 0;
+    }
+    if (player.x > viewW - half) {
+      player.x = viewW - half;
+      player.vx = 0;
+    }
+    if (player.y > viewH - half) {
+      player.y = viewH - half;
+      player.vy = 0;
+    }
 
     if (started) {
+      const interval = settings.bullets.spawnIntervalMs / 1000;
       spawnTimer += dt;
-      while (spawnTimer >= spawnInterval) {
-        spawnTimer -= spawnInterval;
-        for (let i = 0; i < BULLETS_PER_SPAWN; i++) spawnBullet();
+      while (spawnTimer >= interval) {
+        spawnTimer -= interval;
+        spawnBullet();
       }
     }
 
-    const bh = BULLET_SIZE / 2;
+    const bh = settings.bullets.size / 2;
     for (const b of bullets) {
       const px = b.x;
       const py = b.y;
       b.x += b.vx * dt;
       b.y += b.vy * dt;
-      // rising-edge bounce: only roll on the frame the bullet crosses the edge
-      if (b.x < bh && px >= bh && b.vx < 0 && Math.random() < BOUNCE_CHANCE) {
-        b.x = bh;
-        b.vx = -b.vx;
-      }
-      if (b.x > viewW - bh && px <= viewW - bh && b.vx > 0 && Math.random() < BOUNCE_CHANCE) {
-        b.x = viewW - bh;
-        b.vx = -b.vx;
-      }
-      if (b.y < bh && py >= bh && b.vy < 0 && Math.random() < BOUNCE_CHANCE) {
-        b.y = bh;
-        b.vy = -b.vy;
-      }
-      if (b.y > viewH - bh && py <= viewH - bh && b.vy > 0 && Math.random() < BOUNCE_CHANCE) {
-        b.y = viewH - bh;
-        b.vy = -b.vy;
+      if (b.bounces) {
+        if (b.x < bh && px >= bh && b.vx < 0) {
+          b.x = bh;
+          b.vx = -b.vx;
+        }
+        if (b.x > viewW - bh && px <= viewW - bh && b.vx > 0) {
+          b.x = viewW - bh;
+          b.vx = -b.vx;
+        }
+        if (b.y < bh && py >= bh && b.vy < 0) {
+          b.y = bh;
+          b.vy = -b.vy;
+        }
+        if (b.y > viewH - bh && py <= viewH - bh && b.vy > 0) {
+          b.y = viewH - bh;
+          b.vy = -b.vy;
+        }
       }
     }
 
     bullets = bullets.filter(
       (b) => b.x > -60 && b.x < viewW + 60 && b.y > -60 && b.y < viewH + 60,
     );
+    while (bullets.length > settings.bullets.maxBullets) bullets.shift();
 
     if (player.iframeTime <= 0) {
       for (const b of bullets) {
@@ -315,7 +365,7 @@ function frame(now: number) {
   } else {
     dyingTime -= dt;
     if (dyingTime <= 0) {
-      state = "alive";
+      gameState = "alive";
       resetRun();
     }
   }
@@ -328,45 +378,47 @@ function render() {
   ctx.fillStyle = "#000";
   ctx.fillRect(0, 0, viewW, viewH);
 
-  ctx.fillStyle = "#ef4444";
+  const bSize = settings.bullets.size;
+  ctx.fillStyle = settings.bullets.color;
   for (const b of bullets) {
-    ctx.fillRect(b.x - BULLET_SIZE / 2, b.y - BULLET_SIZE / 2, BULLET_SIZE, BULLET_SIZE);
+    ctx.fillRect(b.x - bSize / 2, b.y - bSize / 2, bSize, bSize);
   }
 
-  if (state === "alive") {
+  const pSize = settings.player.size;
+
+  if (gameState === "alive") {
     const dashing = player.dashTime > 0;
     const invuln = player.iframeTime > 0;
     const cooling = player.cooldown > 0;
+    const walking = keys.has(settings.bindings.walk);
 
     if (dashing) {
       ctx.save();
       ctx.globalAlpha = 0.35;
-      ctx.fillStyle = "#22d3ee";
-      const trailLen = 36;
+      ctx.fillStyle = settings.player.colorDash;
+      const trailLen = pSize * 1.3;
       ctx.fillRect(
-        player.x - PLAYER_SIZE / 2 - player.dashDirX * trailLen,
-        player.y - PLAYER_SIZE / 2 - player.dashDirY * trailLen,
-        PLAYER_SIZE,
-        PLAYER_SIZE,
+        player.x - pSize / 2 - player.dashDirX * trailLen,
+        player.y - pSize / 2 - player.dashDirY * trailLen,
+        pSize,
+        pSize,
       );
       ctx.restore();
     }
 
-    const walking = keys.has("shift");
     let color: string;
-    if (dashing) color = "#22d3ee";
-    else if (invuln) color = "#a5f3fc";
-    else if (walking) color = "#fbbf24";
-    else if (cooling) color = "#9ca3af";
-    else color = "#ffffff";
+    if (dashing || invuln) color = settings.player.colorDash;
+    else if (walking) color = settings.player.colorWalk;
+    else color = settings.player.colorIdle;
 
     ctx.fillStyle = color;
-    ctx.fillRect(player.x - PLAYER_SIZE / 2, player.y - PLAYER_SIZE / 2, PLAYER_SIZE, PLAYER_SIZE);
+    ctx.fillRect(player.x - pSize / 2, player.y - pSize / 2, pSize, pSize);
 
-    if (cooling) {
-      const r = PLAYER_SIZE * 0.9;
-      const t = 1 - player.cooldown / DASH_COOLDOWN;
-      ctx.strokeStyle = "rgba(156,163,175,0.9)";
+    if (cooling && !dashing) {
+      const r = pSize * 0.9;
+      const total = settings.dash.cooldownMs / 1000;
+      const t = total > 0 ? 1 - player.cooldown / total : 1;
+      ctx.strokeStyle = "rgba(170,170,170,0.85)";
       ctx.lineWidth = 2;
       ctx.beginPath();
       ctx.arc(player.x, player.y, r, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * t);
@@ -380,16 +432,16 @@ function render() {
     ctx.fillRect(0, 0, viewW, viewH);
     ctx.restore();
 
-    const burst = (1 - k) * PLAYER_SIZE * 2.2;
+    const burst = (1 - k) * pSize * 2.2;
     ctx.save();
     ctx.globalAlpha = k;
     ctx.strokeStyle = "#fca5a5";
     ctx.lineWidth = 3;
     ctx.strokeRect(
-      player.x - PLAYER_SIZE / 2 - burst / 2,
-      player.y - PLAYER_SIZE / 2 - burst / 2,
-      PLAYER_SIZE + burst,
-      PLAYER_SIZE + burst,
+      player.x - pSize / 2 - burst / 2,
+      player.y - pSize / 2 - burst / 2,
+      pSize + burst,
+      pSize + burst,
     );
     ctx.restore();
   }
