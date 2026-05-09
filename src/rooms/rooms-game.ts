@@ -1026,6 +1026,10 @@ export function start(canvas: HTMLCanvasElement): void {
         bullets,
         currentRoom.enemies,
       ),
+      bullets,
+      enemies: currentRoom.enemies,
+      mode: "rooms",
+      hitIframe: state.hitIframe,
       size: settings.player.size,
       dashDurationSec: settings.dash.durationMs / 1000,
     });

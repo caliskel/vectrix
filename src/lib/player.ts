@@ -3,6 +3,8 @@ import {
   BLINK_INTERVAL_MAX_MS,
   BLINK_INTERVAL_MIN_MS,
   BLINK_OPEN_DURATION_MS,
+  BREATH_AMPLITUDE,
+  BREATH_PERIOD_MS,
   DASH_GHOST_INITIAL_ALPHA,
   DASH_GHOST_INTERVAL_MS,
   DASH_GHOST_LIFETIME_MS,
@@ -12,6 +14,8 @@ import {
   DASH_STRETCH_PEAK_X,
   DASH_STRETCH_X,
   DASH_STRETCH_Y,
+  DOUBLE_BLINK_CHANCE,
+  DOUBLE_BLINK_DELAY_MS,
   BOB_AMPLITUDE_PX,
   BOB_FREQUENCY_FACTOR,
   BOB_VELOCITY_THRESHOLD,
@@ -20,6 +24,12 @@ import {
   BRAKE_PREV_MIN,
   BRAKE_SQUASH_X,
   BRAKE_STRETCH_Y,
+  FLINCH_COOLDOWN_MS,
+  FLINCH_DURATION_MS,
+  FLINCH_OFFSET_PX,
+  FLINCH_PUPIL_RECOVER_MS,
+  FLINCH_PUPIL_SHRINK,
+  FLINCH_RADIUS_EXTRA,
   IDLE_JITTER_AMPLITUDE,
   IDLE_LOOK_CALM_DOWN_MS,
   IDLE_LOOK_CENTER_CHANCE,
@@ -33,6 +43,11 @@ import {
   LEAN_MAX_DIAGONAL_RAD,
   LEAN_MAX_HORIZONTAL_RAD,
   LEAN_VELOCITY_THRESHOLD,
+  PUPIL_DILATION_LERP,
+  PUPIL_DILATION_MAX,
+  PUPIL_DILATION_MIN,
+  PUPIL_ENEMY_THREAT_RADIUS,
+  PUPIL_THREAT_RADIUS,
   SQUASH_DURATION_MS,
   SQUASH_Y,
   START_SQUASH_CUR_MIN,
@@ -52,9 +67,25 @@ const PUPIL_DILATE_PEAK = 0.5;
 
 const BLINK_CLOSE_SEC = BLINK_CLOSE_DURATION_MS / 1000;
 const BLINK_OPEN_SEC = BLINK_OPEN_DURATION_MS / 1000;
+// Second blink in a double-blink is faster than the first; the
+// asymmetry is what makes the rare double feel like a "twitch" rather
+// than two identical blinks.
+const DOUBLE_BLINK_CLOSE_SEC = 0.05;
+const DOUBLE_BLINK_OPEN_SEC = 0.1;
+const DOUBLE_BLINK_DELAY_SEC = DOUBLE_BLINK_DELAY_MS / 1000;
 const BLINK_INTERVAL_MIN_SEC = BLINK_INTERVAL_MIN_MS / 1000;
 const BLINK_INTERVAL_MAX_SEC = BLINK_INTERVAL_MAX_MS / 1000;
-const BLINK_CYCLE_SEC = BLINK_CLOSE_SEC + BLINK_OPEN_SEC;
+const BREATH_PHASE_RATE = (Math.PI * 2) / (BREATH_PERIOD_MS / 1000);
+// Flinch effects: ring/iris offset is the shortest, body squash even
+// shorter, and the pupil shrink+recover the longest. Hold the pupil
+// at full shrink for 100 ms before recovering over FLINCH_PUPIL_RECOVER.
+const FLINCH_DURATION_SEC = FLINCH_DURATION_MS / 1000;
+const FLINCH_COOLDOWN_SEC = FLINCH_COOLDOWN_MS / 1000;
+const FLINCH_PUPIL_RECOVER_SEC = FLINCH_PUPIL_RECOVER_MS / 1000;
+const FLINCH_PUPIL_HOLD_SEC = 0.1;
+const FLINCH_PUPIL_TOTAL_SEC = FLINCH_PUPIL_HOLD_SEC + FLINCH_PUPIL_RECOVER_SEC;
+const FLINCH_SQUASH_SEC = 0.06;
+const FLINCH_SQUASH_Y = 0.94;
 const DASH_GHOST_INTERVAL_SEC = DASH_GHOST_INTERVAL_MS / 1000;
 const DASH_GHOST_LIFETIME_SEC = DASH_GHOST_LIFETIME_MS / 1000;
 const DASH_PEAK_SEC = DASH_STRETCH_PEAK_PHASE_MS / 1000;
@@ -195,6 +226,17 @@ export type Player = {
   squashTime: number;       // counts down through SQUASH_DURATION_SEC (start pop)
   brakeSquashTime: number;  // counts down through BRAKE_DURATION_SEC (sharp stop)
   prevSpeed: number;        // last frame's speed, used for squash + brake triggers
+  // micro-animations: breathing, threat-driven dilation, double blink, flinch
+  breathPhase: number;      // accumulator for the idle breath sin wave
+  pupilDilation: number;    // smoothed factor (PUPIL_DILATION_MIN..MAX) applied to pupil
+  doubleBlinkPending: boolean; // current blink will be followed by a faster second
+  inDoubleBlink: boolean;   // currently running the faster second blink
+  flinchTime: number;       // ring/iris offset countdown
+  flinchPupilTime: number;  // pupil shrink/recover countdown
+  flinchSquashTime: number; // body vertical squeeze countdown
+  flinchCooldown: number;   // gate so a bullet shower can't make us vibrate
+  flinchDirX: number;       // unit direction the eye is recoiling toward
+  flinchDirY: number;
 };
 
 export function createPlayer(): Player {
@@ -230,6 +272,16 @@ export function createPlayer(): Player {
     squashTime: 0,
     brakeSquashTime: 0,
     prevSpeed: 0,
+    breathPhase: Math.random() * Math.PI * 2,
+    pupilDilation: PUPIL_DILATION_MAX,
+    doubleBlinkPending: false,
+    inDoubleBlink: false,
+    flinchTime: 0,
+    flinchPupilTime: 0,
+    flinchSquashTime: 0,
+    flinchCooldown: 0,
+    flinchDirX: 0,
+    flinchDirY: 0,
   };
 }
 
@@ -254,6 +306,16 @@ export function resetEyeState(p: Player): void {
   p.squashTime = 0;
   p.brakeSquashTime = 0;
   p.prevSpeed = 0;
+  p.breathPhase = Math.random() * Math.PI * 2;
+  p.pupilDilation = PUPIL_DILATION_MAX;
+  p.doubleBlinkPending = false;
+  p.inDoubleBlink = false;
+  p.flinchTime = 0;
+  p.flinchPupilTime = 0;
+  p.flinchSquashTime = 0;
+  p.flinchCooldown = 0;
+  p.flinchDirX = 0;
+  p.flinchDirY = 0;
 }
 
 export function eyeOnHit(p: Player): void {
@@ -342,13 +404,27 @@ function dashStretchX(
   return DASH_STRETCH_X;
 }
 
+function currentBlinkDurations(p: Player): { close: number; open: number } {
+  return p.inDoubleBlink
+    ? { close: DOUBLE_BLINK_CLOSE_SEC, open: DOUBLE_BLINK_OPEN_SEC }
+    : { close: BLINK_CLOSE_SEC, open: BLINK_OPEN_SEC };
+}
+
 function blinkProgress(p: Player): number {
   if (!p.blinkActive) return 0;
-  if (p.blinkElapsed < BLINK_CLOSE_SEC) {
-    return p.blinkElapsed / BLINK_CLOSE_SEC;
-  }
-  return 1 - (p.blinkElapsed - BLINK_CLOSE_SEC) / BLINK_OPEN_SEC;
+  const { close, open } = currentBlinkDurations(p);
+  if (p.blinkElapsed < close) return p.blinkElapsed / close;
+  return 1 - (p.blinkElapsed - close) / open;
 }
+
+/** Bullet shape used for dilation counting and flinch detection. The
+ *  flinchTriggered flag is mutated in place so a single bullet can only
+ *  flinch once as it crosses the player. */
+type FlinchableBullet = {
+  x: number;
+  y: number;
+  flinchTriggered?: boolean;
+};
 
 export function updateEye(
   p: Player,
@@ -357,6 +433,19 @@ export function updateEye(
     threat: Pointable | null;
     size: number;
     dashDurationSec: number;
+    /** Bullets in play. When provided, drives pupil dilation (count
+     *  within PUPIL_THREAT_RADIUS) and flinch detection (per-bullet
+     *  flinchTriggered). */
+    bullets?: FlinchableBullet[];
+    /** Live enemies. Adds +0.3 to threat level if any are within
+     *  PUPIL_ENEMY_THREAT_RADIUS. */
+    enemies?: EnemyLike[];
+    /** Mode-specific behavior — rooms keeps a minimum threat floor of
+     *  0.2 because the walls always make the space feel pressed. */
+    mode?: "sandbox" | "rooms";
+    /** Hit i-frame remaining; suppresses flinch so it doesn't pile on
+     *  damage feedback. */
+    hitIframe?: number;
   },
 ): void {
   // movement animations: lean, bob, squash + brake. Skipped when dashing
@@ -424,19 +513,109 @@ export function updateEye(
   if (p.shakeTime > 0) p.shakeTime = Math.max(0, p.shakeTime - dt);
   if (p.dilateTime > 0) p.dilateTime = Math.max(0, p.dilateTime - dt);
 
-  // blink scheduler
+  // blink scheduler — supports double blinks. The first cycle uses the
+  // standard durations and rolls a chance to trigger a second, faster
+  // cycle after a brief pause; the second cycle uses DOUBLE_BLINK_*
+  // durations.
   if (p.blinkActive) {
     p.blinkElapsed += dt;
-    if (p.blinkElapsed >= BLINK_CYCLE_SEC) {
+    const { close, open } = currentBlinkDurations(p);
+    if (p.blinkElapsed >= close + open) {
       p.blinkActive = false;
       p.blinkElapsed = 0;
-      p.blinkCooldown = randomBlinkInterval();
+      if (p.doubleBlinkPending) {
+        p.doubleBlinkPending = false;
+        p.inDoubleBlink = true;
+        p.blinkCooldown = DOUBLE_BLINK_DELAY_SEC;
+      } else {
+        p.inDoubleBlink = false;
+        p.blinkCooldown = randomBlinkInterval();
+      }
     }
   } else {
     p.blinkCooldown -= dt;
     if (p.blinkCooldown <= 0) {
       p.blinkActive = true;
       p.blinkElapsed = 0;
+      // Roll for a follow-up only at the start of a "first" blink so
+      // we don't infinitely chain doubles.
+      if (!p.inDoubleBlink && Math.random() < DOUBLE_BLINK_CHANCE) {
+        p.doubleBlinkPending = true;
+      }
+    }
+  }
+
+  // breathing — phase always advances; render reads sin(phase) and
+  // suppresses the scale during dash/blink so it doesn't fight those.
+  p.breathPhase += dt * BREATH_PHASE_RATE;
+  if (p.breathPhase > Math.PI * 2) p.breathPhase -= Math.PI * 2;
+
+  // pupil dilation — threat level is bullet count within radius (capped
+  // at 5 = full threat) plus a flat +0.3 if any live enemy is close.
+  // Rooms keeps a 0.2 floor for the sustained pressure of walls.
+  let nearbyBullets = 0;
+  if (options.bullets) {
+    const r2 = PUPIL_THREAT_RADIUS * PUPIL_THREAT_RADIUS;
+    for (const b of options.bullets) {
+      const bdx = b.x - p.x;
+      const bdy = b.y - p.y;
+      if (bdx * bdx + bdy * bdy < r2) nearbyBullets++;
+    }
+  }
+  let threatLevel = Math.min(1, nearbyBullets / 5);
+  if (options.enemies) {
+    const r2 = PUPIL_ENEMY_THREAT_RADIUS * PUPIL_ENEMY_THREAT_RADIUS;
+    for (const e of options.enemies) {
+      if (e.isDead()) continue;
+      const ex = e.x - p.x;
+      const ey = e.y - p.y;
+      if (ex * ex + ey * ey < r2) {
+        threatLevel += 0.3;
+        break;
+      }
+    }
+  }
+  if (options.mode === "rooms") threatLevel = Math.max(0.2, threatLevel);
+  threatLevel = Math.max(0, Math.min(1, threatLevel));
+  const desiredDilation =
+    PUPIL_DILATION_MAX -
+    threatLevel * (PUPIL_DILATION_MAX - PUPIL_DILATION_MIN);
+  const dilK = 1 - Math.pow(1 - PUPIL_DILATION_LERP, dt * 60);
+  p.pupilDilation += (desiredDilation - p.pupilDilation) * dilK;
+
+  // flinch — single trigger per frame, gated by cooldown / dash i-frame /
+  // hit i-frame. We still mark the bullet as having entered the radius
+  // so it can't re-trigger on a later frame.
+  if (p.flinchCooldown > 0) p.flinchCooldown = Math.max(0, p.flinchCooldown - dt);
+  if (p.flinchTime > 0) p.flinchTime = Math.max(0, p.flinchTime - dt);
+  if (p.flinchPupilTime > 0)
+    p.flinchPupilTime = Math.max(0, p.flinchPupilTime - dt);
+  if (p.flinchSquashTime > 0)
+    p.flinchSquashTime = Math.max(0, p.flinchSquashTime - dt);
+  if (options.bullets) {
+    const radius = options.size + FLINCH_RADIUS_EXTRA;
+    const r2 = radius * radius;
+    const suppressed =
+      p.flinchCooldown > 0 ||
+      p.dashIframeTime > 0 ||
+      (options.hitIframe ?? 0) > 0;
+    for (const b of options.bullets) {
+      if (b.flinchTriggered) continue;
+      const bdx = b.x - p.x;
+      const bdy = b.y - p.y;
+      const d2 = bdx * bdx + bdy * bdy;
+      if (d2 >= r2) continue;
+      b.flinchTriggered = true;
+      if (suppressed) continue;
+      const dist = Math.sqrt(d2) || 1;
+      p.flinchDirX = -bdx / dist;
+      p.flinchDirY = -bdy / dist;
+      p.flinchTime = FLINCH_DURATION_SEC;
+      p.flinchPupilTime = FLINCH_PUPIL_TOTAL_SEC;
+      p.flinchSquashTime = FLINCH_SQUASH_SEC;
+      p.flinchCooldown = FLINCH_COOLDOWN_SEC;
+      // only one flinch per frame even if more bullets cross
+      break;
     }
   }
 
@@ -577,10 +756,23 @@ export function drawPlayerEye(
   const pupilRBase = size * 0.18;
   const highlightR = size * 0.06;
 
-  // dilation factor (1 → 1.5 over the dilate window)
+  // pupil scaling stack:
+  //   - dilateFactor: hit-driven shock dilation (existing, decays with dilateTime)
+  //   - p.pupilDilation: smoothed threat-driven factor (smaller when bullets/enemies are close)
+  //   - flinch shrink: short shrink-and-recover when a near miss flinches the eye
   const dilateProgress = p.dilateTime > 0 ? p.dilateTime / DILATE_DURATION : 0;
   const dilateFactor = 1 + PUPIL_DILATE_PEAK * dilateProgress;
-  const pupilR = pupilRBase * dilateFactor;
+  let pupilR = pupilRBase * dilateFactor * p.pupilDilation;
+  if (p.flinchPupilTime > 0) {
+    let f: number;
+    if (p.flinchPupilTime > FLINCH_PUPIL_RECOVER_SEC) {
+      f = FLINCH_PUPIL_SHRINK;
+    } else {
+      const t = 1 - p.flinchPupilTime / FLINCH_PUPIL_RECOVER_SEC;
+      f = FLINCH_PUPIL_SHRINK + (1 - FLINCH_PUPIL_SHRINK) * t;
+    }
+    pupilR *= f;
+  }
 
   // dash deformation
   const isDashing = p.dashTime > 0;
@@ -660,6 +852,29 @@ export function drawPlayerEye(
   if (p.tiltAngle !== 0) ctx.rotate(p.tiltAngle);
   if (bobOffsetY !== 0) ctx.translate(0, bobOffsetY);
   if (hasSquash) ctx.scale(squashSx, squashSy);
+
+  // flinch translate — eye recoils away from the bullet that just
+  // crossed; offset eases back to 0 over FLINCH_DURATION
+  if (p.flinchTime > 0) {
+    const t = p.flinchTime / FLINCH_DURATION_SEC;
+    ctx.translate(
+      p.flinchDirX * FLINCH_OFFSET_PX * t,
+      p.flinchDirY * FLINCH_OFFSET_PX * t,
+    );
+  }
+  // flinch vertical squeeze — short impact compression
+  if (p.flinchSquashTime > 0) {
+    const t = p.flinchSquashTime / FLINCH_SQUASH_SEC;
+    const sy = 1 + (FLINCH_SQUASH_Y - 1) * t;
+    ctx.scale(1, sy);
+  }
+  // breathing — uniform sin pulse on the orb. Skipped during dash (its
+  // own deformation owns the look) and during a blink (lid squash makes
+  // the breath read as a glitch).
+  if (!isDashing && !p.blinkActive) {
+    const breathScale = 1 + Math.sin(p.breathPhase) * BREATH_AMPLITUDE;
+    ctx.scale(breathScale, breathScale);
+  }
 
   // ===== outer ring (deformed in dash) =====
   drawNeon(

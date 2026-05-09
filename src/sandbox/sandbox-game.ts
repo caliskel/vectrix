@@ -1245,6 +1245,9 @@ function frame(now: number) {
     threat: findNearestThreat(player.x, player.y, bullets),
     size: settings.player.size,
     dashDurationSec: settings.dash.durationMs / 1000,
+    bullets,
+    mode: "sandbox",
+    hitIframe: state.hitIframeTime,
   });
 
   // pickups: age, expire, collect

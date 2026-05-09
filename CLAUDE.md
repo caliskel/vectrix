@@ -133,6 +133,36 @@ its own `GameState` later when scripted encounters land.
   All three are skipped while dashing (the dash teardrop owns the
   visual). Constants live in `config.ts` (`LEAN_*`, `BOB_*`,
   `SQUASH_*`, `STRETCH_X`).
+- **Player micro-animations** — four "alive" tells layered on top of
+  the eye, all driven from `updateEye` / `drawPlayerEye` so sandbox,
+  rooms, and the landing preview share the behavior:
+  - **Breathing** — uniform sin pulse (±1.2 % over a ~4 s period)
+    applied as the last transform before the eye layers. Skipped
+    during a dash and during a blink to keep it from fighting those.
+  - **Pupil dilation** — the pupil shrinks under threat. Each frame
+    counts bullets within `PUPIL_THREAT_RADIUS` (250 px), maps to
+    `clamp(count/5, 0, 1)`, adds +0.3 if any live enemy is within
+    `PUPIL_ENEMY_THREAT_RADIUS` (300 px), and rooms applies a
+    minimum-threat floor of 0.2. Desired factor is `1.3 - threat *
+    0.7` (range 0.6..1.3) and the current factor lerps toward it
+    with a per-frame coefficient of 0.04. Sandbox + rooms pass
+    `bullets`, `enemies`, and `mode` into `updateEye`; the landing
+    preview leaves them undefined so it sits at calm ×1.3.
+  - **Double blink** — when a blink starts there's a 25 % chance
+    that a second, faster blink (close 50 ms / open 100 ms) follows
+    after a 150 ms gap. The follow-up uses different durations so
+    the double reads as a twitch rather than two identical blinks.
+  - **Flinch** — when a bullet first enters the radius `player.size
+    + FLINCH_RADIUS_EXTRA` (62 px at default size) the bullet's
+    `flinchTriggered` flag is set; if no cooldown is active and the
+    player isn't dashing or in hit i-frame, the eye recoils away
+    from the bullet (ring + iris translate `FLINCH_OFFSET_PX`
+    decaying over 80 ms), the pupil shrinks to 0.7× for 100 ms then
+    recovers over 200 ms, and the body squeezes scaleY 0.94 for
+    60 ms. A 250 ms cooldown gates re-trigger so a bullet shower
+    doesn't make the eye vibrate. Constants: `BREATH_*`,
+    `PUPIL_DILATION_*`, `PUPIL_*_THREAT_RADIUS`, `DOUBLE_BLINK_*`,
+    `FLINCH_*` in `config.ts`.
 
 ## Gameplay parameters (current defaults)
 

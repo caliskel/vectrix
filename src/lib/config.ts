@@ -168,6 +168,27 @@ export const BRAKE_SQUASH_X = 0.9;
 export const BRAKE_PREV_MIN = 100;
 export const BRAKE_CUR_MAX = 60;
 
+// Player micro-animations: breathing, threat-driven pupil dilation,
+// occasional double blink, and flinch on near-misses. These run on top
+// of the existing lean/bob/dash deformations and are applied in
+// lib/player.ts so all three modes (sandbox, rooms, landing preview)
+// share the behavior.
+export const BREATH_PERIOD_MS = 4000;
+export const BREATH_AMPLITUDE = 0.012;
+export const PUPIL_DILATION_MIN = 0.6;
+export const PUPIL_DILATION_MAX = 1.3;
+export const PUPIL_DILATION_LERP = 0.04;
+export const PUPIL_THREAT_RADIUS = 250;
+export const PUPIL_ENEMY_THREAT_RADIUS = 300;
+export const DOUBLE_BLINK_CHANCE = 0.25;
+export const DOUBLE_BLINK_DELAY_MS = 150;
+export const FLINCH_RADIUS_EXTRA = 30;
+export const FLINCH_OFFSET_PX = 2.5;
+export const FLINCH_DURATION_MS = 80;
+export const FLINCH_COOLDOWN_MS = 250;
+export const FLINCH_PUPIL_SHRINK = 0.7;
+export const FLINCH_PUPIL_RECOVER_MS = 200;
+
 // Watcher pacing — fraction of player.maxSpeed used for chase. 0.28
 // lets the player walk away if they keep moving but punishes ignoring
 // the eye while reading laser telegraphs.
