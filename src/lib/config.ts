@@ -168,6 +168,11 @@ export const BRAKE_SQUASH_X = 0.9;
 export const BRAKE_PREV_MIN = 100;
 export const BRAKE_CUR_MAX = 60;
 
+// Watcher pacing — fraction of player.maxSpeed used for chase. 0.28
+// lets the player walk away if they keep moving but punishes ignoring
+// the eye while reading laser telegraphs.
+export const WATCHER_SPEED_FACTOR = 0.28;
+
 // Bindings store KeyboardEvent.code values (layout-independent). Modifier
 // codes are normalized to drop the Left/Right side suffix (see normalizeCode
 // in main.ts) so either Shift key counts as "Shift", etc.

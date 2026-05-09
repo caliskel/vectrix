@@ -7,7 +7,7 @@ const ROOM_W = 1200;
 const ROOM_H = 800;
 const WALL_T = 30;
 const DOOR_CENTER_Y = 400;
-const DOOR_W = 80;
+const DOOR_W = 30; // matches WALL_T so the door sits flush inside the wall
 const DOOR_H = 120;
 
 export function buildRoom1(): Room {
@@ -32,7 +32,13 @@ export function buildRoom1(): Room {
     id: "room1",
     walls,
     enemies: [new Turret(600, 400)],
-    door: makeDoor(ROOM_W, DOOR_CENTER_Y, DOOR_W, DOOR_H, "closed"),
+    door: makeDoor(
+      ROOM_W - WALL_T / 2,
+      DOOR_CENTER_Y,
+      DOOR_W,
+      DOOR_H,
+      "closed",
+    ),
     nextRoomId: "room2",
     spawnX: 150,
     spawnY: 400,

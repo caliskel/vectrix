@@ -91,8 +91,21 @@ function pointSegmentDistanceSq(
   return ex * ex + ey * ey;
 }
 
+const LASER_CHEVRON_COUNT = 4;
+const LASER_CHEVRON_SPEED = 200; // px/s along the beam
+const LASER_CHEVRON_SIZE = 7;
+
 function drawLaser(ctx: CanvasRenderingContext2D, l: Laser): void {
   const charging = l.age < l.chargingDuration;
+  const dx = l.endX - l.startX;
+  const dy = l.endY - l.startY;
+  const lineLen = Math.hypot(dx, dy);
+  if (lineLen <= 0) return;
+  const dirX = dx / lineLen;
+  const dirY = dy / lineLen;
+  const perpX = -dirY;
+  const perpY = dirX;
+
   ctx.save();
   if (charging) {
     const p = l.age / l.chargingDuration;
@@ -107,19 +120,48 @@ function drawLaser(ctx: CanvasRenderingContext2D, l: Laser): void {
     ctx.moveTo(l.startX, l.startY);
     ctx.lineTo(l.endX, l.endY);
     ctx.stroke();
+
+    // chevrons sliding along the beam — tells the player the attack
+    // is loading rather than a static red line painted on the room
+    const spacing = lineLen / LASER_CHEVRON_COUNT;
+    const advance = (l.age * LASER_CHEVRON_SPEED) % spacing;
+    ctx.fillStyle = PALETTE.bullet;
+    ctx.globalAlpha = Math.max(0, Math.min(1, 0.6 + flicker * 0.5));
+    for (let i = 0; i < LASER_CHEVRON_COUNT; i++) {
+      const distAlong = i * spacing + advance;
+      if (distAlong >= lineLen) continue;
+      const cx = l.startX + dirX * distAlong;
+      const cy = l.startY + dirY * distAlong;
+      const tipX = cx + dirX * LASER_CHEVRON_SIZE;
+      const tipY = cy + dirY * LASER_CHEVRON_SIZE;
+      const baseLeftX =
+        cx - dirX * LASER_CHEVRON_SIZE + perpX * LASER_CHEVRON_SIZE * 0.55;
+      const baseLeftY =
+        cy - dirY * LASER_CHEVRON_SIZE + perpY * LASER_CHEVRON_SIZE * 0.55;
+      const baseRightX =
+        cx - dirX * LASER_CHEVRON_SIZE - perpX * LASER_CHEVRON_SIZE * 0.55;
+      const baseRightY =
+        cy - dirY * LASER_CHEVRON_SIZE - perpY * LASER_CHEVRON_SIZE * 0.55;
+      ctx.beginPath();
+      ctx.moveTo(tipX, tipY);
+      ctx.lineTo(baseLeftX, baseLeftY);
+      ctx.lineTo(baseRightX, baseRightY);
+      ctx.closePath();
+      ctx.fill();
+    }
   } else {
-    // firing — full bright beam with a hot inner core
+    // firing — full bright beam with a hot white core
     ctx.shadowColor = PALETTE.bullet;
-    ctx.shadowBlur = 25;
+    ctx.shadowBlur = 35;
     ctx.strokeStyle = PALETTE.bullet;
-    ctx.lineWidth = 12;
+    ctx.lineWidth = 14;
     ctx.beginPath();
     ctx.moveTo(l.startX, l.startY);
     ctx.lineTo(l.endX, l.endY);
     ctx.stroke();
-    ctx.strokeStyle = "#fff5f5";
+    ctx.strokeStyle = "#ffffff";
     ctx.lineWidth = 4;
-    ctx.shadowBlur = 12;
+    ctx.shadowBlur = 18;
     ctx.beginPath();
     ctx.moveTo(l.startX, l.startY);
     ctx.lineTo(l.endX, l.endY);
@@ -776,6 +818,7 @@ export function start(canvas: HTMLCanvasElement): void {
         color: settings.bullets.color,
       },
       playerHalfSize: settings.player.size / 2,
+      playerMaxSpeed: settings.player.maxSpeed,
     };
     for (const e of currentRoom.enemies) e.update(enemyCtx);
 

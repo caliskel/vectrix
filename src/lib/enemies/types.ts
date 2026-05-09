@@ -32,6 +32,7 @@ export type EnemyContext = {
   lasers: Laser[];
   bulletsConfig: { speed: number; size: number; color: string };
   playerHalfSize: number;
+  playerMaxSpeed: number;
 };
 
 export interface Enemy {
