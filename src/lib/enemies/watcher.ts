@@ -3,17 +3,27 @@ import { WATCHER_SPEED_FACTOR } from "../config";
 import { drawNeon } from "../neon";
 import type { Enemy, EnemyContext, EnemyType, Laser } from "./types";
 
+// Layered eye visual. Outer ring is stroke-only so the dark gap
+// between ring and iris reads as a real hole through the orb. Three
+// solid concentric iris discs fake a gradient (bright red → deep
+// burgundy) without needing canvas radial gradients. All iris layers
+// must stay fully opaque — only the upper gloss highlight is
+// translucent.
 const WATCHER_RADIUS = 30;        // outer ring radius
-const OUTER_RING_W = 4;
-const IRIS_OUTER_R = 21;          // ~5 px gap from outer ring
+const OUTER_RING_W = 6;
+const IRIS_OUTER_R = 21;
 const IRIS_MID_R = 16;
 const IRIS_INNER_R = 11;
-const PUPIL_RADIUS = 7;
-const PUPIL_HIGHLIGHT_R = 2.5;
-const PUPIL_HIGHLIGHT_OFFSET = 1.5;
-const CRESCENT_W = 8;
-const CRESCENT_H = 4;
-const CRESCENT_OFFSET_Y = -10;
+const IRIS_OUTER_COLOR = "#ff1744";
+const IRIS_MID_COLOR = "#a8001f";
+const IRIS_INNER_COLOR = "#3d0010";
+const PUPIL_RADIUS = 4;
+const PUPIL_HIGHLIGHT_R = 1.5;
+const PUPIL_HIGHLIGHT_OFFSET = 0.7;
+const GLOSS_OFFSET_Y = -22;
+const GLOSS_W = 14;
+const GLOSS_H = 6;
+const GLOSS_ALPHA = 0.18;
 const PUPIL_LERP_RATE = 10;
 const WATCHER_HP_MAX = 2;
 
@@ -65,23 +75,29 @@ export class Watcher implements Enemy {
     if (this.destroyed) return;
     const { dt, player } = ctxRoom;
 
-    // Chase the player straight — no stop distance. Contact deals
-    // damage via the room's enemy-overlap check; if the player is in
-    // dash i-frames, it's dash-through damage to the Watcher instead.
+    // Movement: freeze during aiming/firing so the laser is readable —
+    // the player gets a clean stop-then-aim tell. Chase resumes in
+    // cooldown/idle.
+    const frozen = this.phase === "aiming" || this.phase === "firing";
     const dx = player.x - this.x;
     const dy = player.y - this.y;
     const dist = Math.hypot(dx, dy);
-    const speed = ctxRoom.playerMaxSpeed * WATCHER_SPEED_FACTOR;
-    if (dist > 1e-3) {
-      const inv = 1 / dist;
-      this.vx = dx * inv * speed;
-      this.vy = dy * inv * speed;
-    } else {
+    if (frozen) {
       this.vx = 0;
       this.vy = 0;
+    } else {
+      const speed = ctxRoom.playerMaxSpeed * WATCHER_SPEED_FACTOR;
+      if (dist > 1e-3) {
+        const inv = 1 / dist;
+        this.vx = dx * inv * speed;
+        this.vy = dy * inv * speed;
+      } else {
+        this.vx = 0;
+        this.vy = 0;
+      }
+      this.x += this.vx * dt;
+      this.y += this.vy * dt;
     }
-    this.x += this.vx * dt;
-    this.y += this.vy * dt;
 
     // Pupil tracking — locked during aiming/firing (the "captured target"),
     // smooth lerp during idle / cooldown.
@@ -150,15 +166,16 @@ export class Watcher implements Enemy {
   draw(ctx: CanvasRenderingContext2D): void {
     if (this.destroyed) return;
 
-    // 1. Outer ring — thick white with neon halo. The dark gap between
-    //    ring and iris reads against the room background.
+    // 1. Outer ring — stroke only (no fill). The unfilled annulus between
+    //    ring and iris exposes the room background as a dark gap, which
+    //    is what reads as the orb's "shell".
     drawNeon(
       ctx,
       () => {
-        ctx.strokeStyle = "#f8fafc";
-        ctx.lineWidth = OUTER_RING_W;
         ctx.beginPath();
         ctx.arc(this.x, this.y, WATCHER_RADIUS, 0, Math.PI * 2);
+        ctx.lineWidth = OUTER_RING_W;
+        ctx.strokeStyle = "#f8fafc";
         ctx.stroke();
       },
       "#f8fafc",
@@ -166,43 +183,25 @@ export class Watcher implements Enemy {
       8,
     );
 
-    // 2. Iris — three concentric reds for a depth gradient
-    ctx.save();
-    ctx.globalAlpha = 0.9;
-    ctx.fillStyle = "#ff1744";
+    // 2-4. Iris stack — three opaque solid discs. The illusion of depth
+    //      comes from the colors fading toward burgundy at the center,
+    //      not from alpha blending. Do NOT lower opacity on these.
+    ctx.fillStyle = IRIS_OUTER_COLOR;
     ctx.beginPath();
     ctx.arc(this.x, this.y, IRIS_OUTER_R, 0, Math.PI * 2);
     ctx.fill();
-    ctx.restore();
 
-    ctx.fillStyle = "#cc1133";
+    ctx.fillStyle = IRIS_MID_COLOR;
     ctx.beginPath();
     ctx.arc(this.x, this.y, IRIS_MID_R, 0, Math.PI * 2);
     ctx.fill();
 
-    ctx.fillStyle = "#88001a";
+    ctx.fillStyle = IRIS_INNER_COLOR;
     ctx.beginPath();
     ctx.arc(this.x, this.y, IRIS_INNER_R, 0, Math.PI * 2);
     ctx.fill();
 
-    // 3. Crescent highlight on top of iris — fakes a curved-glass sheen
-    ctx.save();
-    ctx.globalAlpha = 0.25;
-    ctx.fillStyle = "#ffffff";
-    ctx.beginPath();
-    ctx.ellipse(
-      this.x,
-      this.y + CRESCENT_OFFSET_Y,
-      CRESCENT_W,
-      CRESCENT_H,
-      0,
-      0,
-      Math.PI * 2,
-    );
-    ctx.fill();
-    ctx.restore();
-
-    // 4. Pupil — solid black
+    // 5. Pupil — solid black, follows pupil tracking offset
     ctx.fillStyle = "#0a0e1a";
     ctx.beginPath();
     ctx.arc(
@@ -214,8 +213,8 @@ export class Watcher implements Enemy {
     );
     ctx.fill();
 
-    // 5. Pupil highlight — tiny upper-left white dot
-    ctx.fillStyle = "#ffffff";
+    // 6. Tiny upper-left highlight on the pupil
+    ctx.fillStyle = "#f8fafc";
     ctx.beginPath();
     ctx.arc(
       this.x + this.pupilOffsetX - PUPIL_HIGHLIGHT_OFFSET,
@@ -225,6 +224,25 @@ export class Watcher implements Enemy {
       Math.PI * 2,
     );
     ctx.fill();
+
+    // 7. Glossy iris highlight — translucent ellipse near the top edge,
+    //    static (does not follow the pupil) so it reads as a fixed
+    //    reflection on the orb.
+    ctx.save();
+    ctx.globalAlpha = GLOSS_ALPHA;
+    ctx.fillStyle = "#ffffff";
+    ctx.beginPath();
+    ctx.ellipse(
+      this.x,
+      this.y + GLOSS_OFFSET_Y,
+      GLOSS_W,
+      GLOSS_H,
+      0,
+      0,
+      Math.PI * 2,
+    );
+    ctx.fill();
+    ctx.restore();
 
     // HP pips above the watcher
     const dotSpacing = 10;
