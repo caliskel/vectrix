@@ -1,3 +1,5 @@
+import { PALETTE } from "./config";
+
 export type PickupType = "hp" | "shield" | "scoreBoost" | "breaker";
 
 export const PICKUP_TYPES: PickupType[] = [
@@ -16,10 +18,10 @@ export type Pickup = {
 };
 
 export const PICKUP_COLORS: Record<PickupType, string> = {
-  hp: "#4ade80",
-  shield: "#60a5fa",
-  scoreBoost: "#c084fc",
-  breaker: "#fb923c",
+  hp: PALETTE.pickupHP,
+  shield: PALETTE.pickupShield,
+  scoreBoost: PALETTE.pickupBoost,
+  breaker: PALETTE.pickupBreaker,
 };
 
 export const PICKUP_LABELS: Record<PickupType, string> = {

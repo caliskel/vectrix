@@ -1,5 +1,6 @@
 import {
   DEFAULT_SETTINGS,
+  PALETTE,
   PRESETS,
   deepAssign,
   loadSettings,
@@ -34,7 +35,54 @@ function resize() {
   canvas.width = Math.floor(viewW * dpr);
   canvas.height = Math.floor(viewH * dpr);
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  rebuildGrid();
 }
+
+const GRID_STEP = 60;
+let gridCanvas: HTMLCanvasElement | null = null;
+
+function rebuildGrid() {
+  const gc = document.createElement("canvas");
+  gc.width = Math.max(1, Math.floor(viewW * dpr));
+  gc.height = Math.max(1, Math.floor(viewH * dpr));
+  const gctx = gc.getContext("2d");
+  if (!gctx) return;
+  gctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  gctx.fillStyle = PALETTE.bg;
+  gctx.fillRect(0, 0, viewW, viewH);
+  gctx.strokeStyle = PALETTE.bgGrid;
+  gctx.lineWidth = 1;
+  gctx.beginPath();
+  for (let x = GRID_STEP; x < viewW; x += GRID_STEP) {
+    gctx.moveTo(x + 0.5, 0);
+    gctx.lineTo(x + 0.5, viewH);
+  }
+  for (let y = GRID_STEP; y < viewH; y += GRID_STEP) {
+    gctx.moveTo(0, y + 0.5);
+    gctx.lineTo(viewW, y + 0.5);
+  }
+  gctx.stroke();
+  gridCanvas = gc;
+}
+
+// Two-pass neon render: a strong outer halo + a sharp inner halo, both
+// using the canvas drop-shadow. Cheap when used per-object; for many
+// objects (particles) we fall back to a flat draw.
+function drawNeon(
+  drawFn: () => void,
+  color: string,
+  blurStrong: number,
+  blurSoft: number,
+) {
+  ctx.save();
+  ctx.shadowColor = color;
+  ctx.shadowBlur = blurStrong;
+  drawFn();
+  ctx.shadowBlur = blurSoft;
+  drawFn();
+  ctx.restore();
+}
+
 resize();
 window.addEventListener("resize", resize);
 
@@ -171,6 +219,9 @@ function setBestScoreIfBetter(id: ConfigId, score: number): boolean {
   return false;
 }
 
+const BULLET_TRAIL = 5;
+const PLAYER_TRAIL = 8;
+
 type Bullet = {
   x: number;
   y: number;
@@ -179,6 +230,11 @@ type Bullet = {
   bounces: boolean;
   nearMissed: boolean;
   dashedThroughId: number; // last dash session id this bullet was awarded for
+  // circular trail buffer (pre-allocated, no per-frame allocation)
+  trailX: Float32Array;
+  trailY: Float32Array;
+  trailIdx: number;   // next write slot
+  trailCount: number; // valid samples, capped at BULLET_TRAIL
 };
 
 type FloatingText = {
@@ -291,6 +347,12 @@ let floatingTexts: FloatingText[] = [];
 let rings: Ring[] = [];
 let particles: Particle[] = [];
 
+// player trail (circular buffer)
+const playerTrailX = new Float32Array(PLAYER_TRAIL);
+const playerTrailY = new Float32Array(PLAYER_TRAIL);
+let playerTrailIdx = 0;
+let playerTrailCount = 0;
+
 let endTryAgainBounds: Bounds | null = null;
 let endSettingsBounds: Bounds | null = null;
 
@@ -329,6 +391,8 @@ function resetRun() {
   floatingTexts = [];
   rings = [];
   particles = [];
+  playerTrailIdx = 0;
+  playerTrailCount = 0;
   endTryAgainBounds = null;
   endSettingsBounds = null;
 }
@@ -432,6 +496,10 @@ function spawnBullet() {
     bounces,
     nearMissed: false,
     dashedThroughId: -1,
+    trailX: new Float32Array(BULLET_TRAIL),
+    trailY: new Float32Array(BULLET_TRAIL),
+    trailIdx: 0,
+    trailCount: 0,
   });
 }
 
@@ -954,7 +1022,18 @@ function frame(now: number) {
         b.vy = -b.vy;
       }
     }
+    // record this frame's position into the trail's circular buffer
+    b.trailX[b.trailIdx] = b.x;
+    b.trailY[b.trailIdx] = b.y;
+    b.trailIdx = (b.trailIdx + 1) % BULLET_TRAIL;
+    if (b.trailCount < BULLET_TRAIL) b.trailCount++;
   }
+
+  // record player trail
+  playerTrailX[playerTrailIdx] = player.x;
+  playerTrailY[playerTrailIdx] = player.y;
+  playerTrailIdx = (playerTrailIdx + 1) % PLAYER_TRAIL;
+  if (playerTrailCount < PLAYER_TRAIL) playerTrailCount++;
 
   bullets = bullets.filter(
     (b) => b.x > -60 && b.x < viewW + 60 && b.y > -60 && b.y < viewH + 60,
@@ -1071,8 +1150,13 @@ function multColor(m: number): string {
 }
 
 function render() {
-  ctx.fillStyle = "#000";
-  ctx.fillRect(0, 0, viewW, viewH);
+  // background + grid (cached offscreen canvas)
+  if (gridCanvas) {
+    ctx.drawImage(gridCanvas, 0, 0, viewW, viewH);
+  } else {
+    ctx.fillStyle = PALETTE.bg;
+    ctx.fillRect(0, 0, viewW, viewH);
+  }
 
   ctx.save();
   ctx.strokeStyle = "rgba(255,255,255,0.6)";
@@ -1085,27 +1169,73 @@ function render() {
   );
   ctx.restore();
 
-  // bullets
+  // bullets (trail first as a flat alpha-faded ramp, then live bullet with neon)
   const bSize = settings.bullets.size;
-  ctx.fillStyle = settings.bullets.color;
+  const bColor = settings.bullets.color;
   for (const b of bullets) {
-    ctx.fillRect(b.x - bSize / 2, b.y - bSize / 2, bSize, bSize);
+    if (b.trailCount > 0) {
+      const start =
+        b.trailCount === BULLET_TRAIL ? b.trailIdx : 0;
+      for (let i = 0; i < b.trailCount; i++) {
+        const j = (start + i) % BULLET_TRAIL;
+        const t = b.trailCount === 1 ? 1 : i / (b.trailCount - 1);
+        const sz = bSize * (0.5 + 0.5 * t);
+        const alpha = 0.1 + 0.4 * t;
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.fillStyle = bColor;
+        ctx.fillRect(
+          b.trailX[j] - sz / 2,
+          b.trailY[j] - sz / 2,
+          sz,
+          sz,
+        );
+        ctx.restore();
+      }
+    }
+    drawNeon(
+      () => {
+        ctx.fillStyle = bColor;
+        ctx.fillRect(b.x - bSize / 2, b.y - bSize / 2, bSize, bSize);
+      },
+      bColor,
+      20,
+      8,
+    );
   }
 
-  // pickups (drawn under the player so the player visually grabs them)
+  // pickups (each individually neon-glowed in its own table color)
   for (const p of pickups) {
-    drawPickup(ctx, p, settings.pickups.blinkDuration);
+    drawNeon(
+      () => drawPickup(ctx, p, settings.pickups.blinkDuration),
+      PICKUP_COLORS[p.type],
+      22,
+      8,
+    );
   }
 
-  // particles (between bullets/pickups and the player so player stays on top)
+  // particles — neon only when there's a manageable number on screen
+  const particlesGetNeon = particles.length < 50;
   for (const p of particles) {
     const t = p.age / p.lifetime;
     const alpha = Math.max(0, 1 - t);
     const sz = Math.max(0.5, p.size * (1 - t * 0.6));
     ctx.save();
     ctx.globalAlpha = alpha;
-    ctx.fillStyle = p.color;
-    ctx.fillRect(p.x - sz / 2, p.y - sz / 2, sz, sz);
+    if (particlesGetNeon) {
+      drawNeon(
+        () => {
+          ctx.fillStyle = p.color;
+          ctx.fillRect(p.x - sz / 2, p.y - sz / 2, sz, sz);
+        },
+        p.color,
+        10,
+        4,
+      );
+    } else {
+      ctx.fillStyle = p.color;
+      ctx.fillRect(p.x - sz / 2, p.y - sz / 2, sz, sz);
+    }
     ctx.restore();
   }
 
@@ -1116,18 +1246,55 @@ function render() {
   const cooling = player.cooldown > 0;
   const walking = keys.has(settings.bindings.walk);
 
-  if (dashing && state.runState === "running") {
-    ctx.save();
-    ctx.globalAlpha = 0.35;
-    ctx.fillStyle = settings.player.colorDash;
-    const trailLen = pSize * 1.3;
-    ctx.fillRect(
-      player.x - pSize / 2 - player.dashDirX * trailLen,
-      player.y - pSize / 2 - player.dashDirY * trailLen,
-      pSize,
-      pSize,
-    );
-    ctx.restore();
+  // player trail — draw under the live player, color/density per state
+  let trailColor: string;
+  let trailBlurStrong: number;
+  let trailAlphaLow: number;
+  let trailAlphaHigh: number;
+  if (dashing || dashIframe) {
+    trailColor = settings.player.colorDash;
+    trailBlurStrong = 20;
+    trailAlphaLow = 0.2;
+    trailAlphaHigh = 0.7;
+  } else if (walking) {
+    trailColor = settings.player.colorWalk;
+    trailBlurStrong = 10;
+    trailAlphaLow = 0.05;
+    trailAlphaHigh = 0.3;
+  } else {
+    trailColor = settings.player.colorIdle;
+    trailBlurStrong = 10;
+    trailAlphaLow = 0.05;
+    trailAlphaHigh = 0.3;
+  }
+
+  if (playerTrailCount > 1) {
+    const start =
+      playerTrailCount === PLAYER_TRAIL ? playerTrailIdx : 0;
+    // skip the very last sample because it's the current player position
+    const visible = playerTrailCount - 1;
+    for (let i = 0; i < visible; i++) {
+      const j = (start + i) % PLAYER_TRAIL;
+      const t = visible === 1 ? 1 : i / (visible - 1);
+      const alpha = trailAlphaLow + (trailAlphaHigh - trailAlphaLow) * t;
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      drawNeon(
+        () => {
+          ctx.fillStyle = trailColor;
+          ctx.fillRect(
+            playerTrailX[j] - pSize / 2,
+            playerTrailY[j] - pSize / 2,
+            pSize,
+            pSize,
+          );
+        },
+        trailColor,
+        trailBlurStrong,
+        Math.max(2, trailBlurStrong * 0.4),
+      );
+      ctx.restore();
+    }
   }
 
   let drawPlayer = true;
@@ -1141,17 +1308,18 @@ function render() {
     else if (walking) color = settings.player.colorWalk;
     else color = settings.player.colorIdle;
 
-    if (state.effects.breaker) {
-      ctx.save();
-      ctx.shadowColor = "#fb923c";
-      ctx.shadowBlur = settings.pickups.breaker.glowBlur;
-      ctx.fillStyle = color;
-      ctx.fillRect(player.x - pSize / 2, player.y - pSize / 2, pSize, pSize);
-      ctx.restore();
-    } else {
-      ctx.fillStyle = color;
-      ctx.fillRect(player.x - pSize / 2, player.y - pSize / 2, pSize, pSize);
-    }
+    // glow color is the body color, except while Bullet Breaker is active —
+    // then we use the breaker orange to telegraph "you're in power mode"
+    const glow = state.effects.breaker ? PALETTE.pickupBreaker : color;
+    drawNeon(
+      () => {
+        ctx.fillStyle = color;
+        ctx.fillRect(player.x - pSize / 2, player.y - pSize / 2, pSize, pSize);
+      },
+      glow,
+      25,
+      10,
+    );
   }
 
   if (cooling && !dashing) {
@@ -1210,16 +1378,41 @@ function render() {
     ctx.restore();
   }
 
-  // floating texts
+  // floating texts (score numbers glow, all texts get a soft halo)
   for (const ft of floatingTexts) {
     const alpha = 1 - ft.age / ft.lifetime;
     ctx.save();
     ctx.globalAlpha = Math.max(0, alpha);
-    ctx.fillStyle = ft.color;
     ctx.font = `600 ${ft.size}px ui-monospace, SFMono-Regular, Menlo, monospace`;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.fillText(ft.text, ft.x, ft.y);
+    drawNeon(
+      () => {
+        ctx.fillStyle = ft.color;
+        ctx.fillText(ft.text, ft.x, ft.y);
+      },
+      ft.color,
+      15,
+      4,
+    );
+    ctx.restore();
+  }
+
+  // ambient corner vignette — focuses attention toward the play field
+  {
+    const grad = ctx.createRadialGradient(
+      viewW / 2,
+      viewH / 2,
+      Math.min(viewW, viewH) * 0.3,
+      viewW / 2,
+      viewH / 2,
+      Math.max(viewW, viewH) * 0.7,
+    );
+    grad.addColorStop(0, "rgba(0,0,0,0)");
+    grad.addColorStop(1, "rgba(0,0,0,0.4)");
+    ctx.save();
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, viewW, viewH);
     ctx.restore();
   }
 

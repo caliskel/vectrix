@@ -82,6 +82,22 @@ export type Settings = {
 
 export const STORAGE_KEY = "dash-proto:settings:v3";
 
+// Single source of truth for the neon-arcade palette. Game-object colors in
+// DEFAULT_SETTINGS reference these so a future palette tweak only happens
+// here. Existing users who've customized colors keep their picks.
+export const PALETTE = {
+  bg: "#0a0e1a",
+  bgGrid: "#14192b",
+  player: "#ffd60a",
+  playerWalk: "#94a3b8",
+  playerDash: "#00e5ff",
+  bullet: "#ff2d55",
+  pickupHP: "#4ade80",
+  pickupShield: "#60a5fa",
+  pickupBoost: "#c084fc",
+  pickupBreaker: "#fb923c",
+} as const;
+
 // Bindings store KeyboardEvent.code values (layout-independent). Modifier
 // codes are normalized to drop the Left/Right side suffix (see normalizeCode
 // in main.ts) so either Shift key counts as "Shift", etc.
@@ -102,14 +118,14 @@ export const DEFAULT_SETTINGS: Settings = {
     size: 9,
     bounceChance: 100,
     maxBullets: 30,
-    color: "#ff3030",
+    color: PALETTE.bullet,
   },
   player: {
     size: 32,
     maxSpeed: 440,
-    colorIdle: "#ffffff",
-    colorWalk: "#b0b0b0",
-    colorDash: "#888888",
+    colorIdle: PALETTE.player,
+    colorWalk: PALETTE.playerWalk,
+    colorDash: PALETTE.playerDash,
     walkFactor: 0.4,
   },
   dash: {
