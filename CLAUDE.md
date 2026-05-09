@@ -112,6 +112,13 @@ its own `GameState` later when scripted encounters land.
   score, cached background grid, ambient corner vignette, particle trail
   off the player, and a partial bullet trail (5-frame circular buffer).
   All colors come from `lib/palette.ts`.
+- **Player visual** — white eye-orb with a pupil tracking the nearest
+  threat (closest bullet, plus enemies in rooms). Smooth pupil inertia
+  via lerp, dilates and shakes on hit, closes vertically on death,
+  blinks every 4–7 s. During a dash the ring + pupil go cyan and the
+  pupil locks in the dash direction. Implementation in `lib/player.ts`
+  (`updateEye`, `drawPlayerEye`, `findNearestThreat`); both sandbox
+  and rooms call it with their own threat list.
 
 ## Gameplay parameters (current defaults)
 

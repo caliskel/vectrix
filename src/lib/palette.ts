@@ -4,9 +4,9 @@
 export const PALETTE = {
   bg: "#0a0e1a",
   bgGrid: "#14192b",
-  player: "#a855f7",
-  playerWalk: "#94a3b8",
-  playerDash: "#d8b4fe",
+  player: "#ffffff",
+  playerWalk: "#cbd5e1",
+  playerDash: "#00e5ff",
   // dedicated trail colors so the streak reads as light, not as a smear
   // of the body — each is a lighter cousin of its body color
   playerTrail: "#d8b4fe",

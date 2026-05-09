@@ -29,6 +29,15 @@ import {
   rollPickupType,
   type Pickup,
 } from "../lib/pickups";
+import {
+  createPlayer,
+  drawPlayerEye,
+  eyeOnHit,
+  eyeStartClosing,
+  findNearestThreat,
+  resetEyeState,
+  updateEye,
+} from "../lib/player";
 
 const settings: Settings = loadSettings();
 const save = () => saveSettings(settings);
@@ -335,19 +344,7 @@ type GameRunState = {
 
 const MULT_TIER_PORTS = [3, 5, 7, 10];
 
-const player = {
-  x: 0,
-  y: 0,
-  vx: 0,
-  vy: 0,
-  facingX: 0,
-  facingY: -1,
-  dashTime: 0,
-  dashIframeTime: 0,
-  cooldown: 0,
-  dashDirX: 0,
-  dashDirY: 0,
-};
+const player = createPlayer();
 
 const state: GameRunState = {
   runState: "running",
@@ -408,6 +405,7 @@ function resetRun() {
   player.dashTime = 0;
   player.dashIframeTime = 0;
   player.cooldown = 0;
+  resetEyeState(player);
 
   bullets = [];
   pickups = [];
@@ -871,6 +869,7 @@ function hitPlayer() {
   state.multiplierTimer = 0;
   state.hitIframeTime = HIT_IFRAME;
   state.hitVignetteTime = HIT_VIGNETTE;
+  eyeOnHit(player);
   if (state.hp <= 0) endRun("ko");
 }
 
@@ -878,6 +877,7 @@ function endRun(reason: "timeout" | "ko") {
   if (state.runState === "ended") return;
   state.runState = "ended";
   state.endReason = reason;
+  eyeStartClosing(player);
   audio.play.runEnd();
   const id = configIdFromSettings();
   const newBest = id ? setBestScoreIfBetter(id, state.score) : false;
@@ -928,6 +928,12 @@ function frame(now: number) {
   if (state.runState === "ended") {
     if (state.hitVignetteTime > 0)
       state.hitVignetteTime = Math.max(0, state.hitVignetteTime - dt);
+    // keep the eye animation alive (closing, blink decay) while overlay is up
+    updateEye(player, dt, {
+      isDashing: false,
+      threat: null,
+      size: settings.player.size,
+    });
     render();
     requestAnimationFrame(frame);
     return;
@@ -1234,6 +1240,13 @@ function frame(now: number) {
     bullets = bullets.filter((b) => !consumed.has(b));
   }
 
+  // eye state: pupil tracks the closest bullet
+  updateEye(player, dt, {
+    isDashing: player.dashTime > 0,
+    threat: findNearestThreat(player.x, player.y, bullets),
+    size: settings.player.size,
+  });
+
   // pickups: age, expire, collect
   const playerHalf = settings.player.size / 2;
   const pickRadius = PICKUP_HALF * settings.pickups.pickupRadiusMul + playerHalf;
@@ -1365,7 +1378,7 @@ function render() {
     ctx.restore();
   }
 
-  // player
+  // player — eye-orb with pupil tracking the nearest bullet
   const pSize = settings.player.size;
   const dashing = player.dashTime > 0;
   const dashIframe = player.dashIframeTime > 0;
@@ -1378,23 +1391,22 @@ function render() {
   }
 
   if (drawPlayer) {
-    let color: string;
-    if (dashing || dashIframe) color = settings.player.colorDash;
-    else if (walking) color = settings.player.colorWalk;
-    else color = settings.player.colorIdle;
+    let ringColor: string;
+    if (dashing || dashIframe) ringColor = settings.player.colorDash;
+    else if (walking) ringColor = settings.player.colorWalk;
+    else ringColor = settings.player.colorIdle;
 
-    // glow color is the body color, except while Bullet Breaker is active —
-    // then we use the breaker orange to telegraph "you're in power mode"
-    const glow = state.effects.breaker ? PALETTE.pickupBreaker : color;
-    drawNeon(
-      () => {
-        ctx.fillStyle = color;
-        ctx.fillRect(player.x - pSize / 2, player.y - pSize / 2, pSize, pSize);
-      },
-      glow,
-      25,
-      10,
-    );
+    // breaker keeps its orange halo around the regular ring color
+    const glow = state.effects.breaker ? PALETTE.pickupBreaker : ringColor;
+    // pupil flips to the dash color during the dash so the eye reads
+    // as "locked on" while moving instead of tracking
+    const pupilColor =
+      dashing || dashIframe ? settings.player.colorDash : "#ffffff";
+    drawPlayerEye(ctx, player, pSize, {
+      ringColor,
+      glowColor: glow,
+      pupilColor,
+    });
   }
 
   if (cooling && !dashing) {

@@ -27,7 +27,17 @@ import {
   addFloatingText,
   addRing,
 } from "../lib/particles";
-import { createPlayer, dashSpeed, inputDirection } from "../lib/player";
+import {
+  createPlayer,
+  dashSpeed,
+  drawPlayerEye,
+  eyeOnHit,
+  eyeStartClosing,
+  findNearestThreat,
+  inputDirection,
+  resetEyeState,
+  updateEye,
+} from "../lib/player";
 import { createMenu } from "../lib/settings-menu";
 import { type Bounds, hitBounds } from "../lib/types";
 import {
@@ -175,6 +185,7 @@ export function start(canvas: HTMLCanvasElement): void {
     floatingTexts = [];
     tryAgainBounds = null;
     spawnPlayerInCurrentRoom();
+    resetEyeState(player);
   }
 
   function transitionToRoom(id: string) {
@@ -371,12 +382,14 @@ export function start(canvas: HTMLCanvasElement): void {
     state.hp -= 1;
     state.hitIframe = HIT_IFRAME;
     state.hitVignette = HIT_VIGNETTE;
+    eyeOnHit(player);
     if (state.hp <= 0) failRun();
   }
 
   function failRun() {
     if (state.runState === "failed") return;
     state.runState = "failed";
+    eyeStartClosing(player);
     audio.play.runEnd();
     const prev = Number.parseFloat(
       localStorage.getItem(ROOMS_BEST_KEY) ?? "0",
@@ -489,6 +502,12 @@ export function start(canvas: HTMLCanvasElement): void {
       if (state.hitVignette > 0) {
         state.hitVignette = Math.max(0, state.hitVignette - dt);
       }
+      // keep the eye animation alive (closing, blink decay) while overlay is up
+      updateEye(player, dt, {
+        isDashing: false,
+        threat: null,
+        size: settings.player.size,
+      });
       render();
       requestAnimationFrame(frame);
       return;
@@ -658,6 +677,18 @@ export function start(canvas: HTMLCanvasElement): void {
 
     checkRoomCleared();
 
+    // eye state: pupil tracks the closest threat in the room
+    updateEye(player, dt, {
+      isDashing: player.dashTime > 0,
+      threat: findNearestThreat(
+        player.x,
+        player.y,
+        bullets,
+        currentRoom.enemies,
+      ),
+      size: settings.player.size,
+    });
+
     // door overlap → transition
     if (
       currentRoom.door &&
@@ -761,20 +792,17 @@ export function start(canvas: HTMLCanvasElement): void {
     }
 
     if (drawPlayer) {
-      let color: string;
-      if (dashing || dashIframe) color = settings.player.colorDash;
-      else if (walking) color = settings.player.colorWalk;
-      else color = settings.player.colorIdle;
-      drawNeon(
-        ctx,
-        () => {
-          ctx.fillStyle = color;
-          ctx.fillRect(player.x - pSize / 2, player.y - pSize / 2, pSize, pSize);
-        },
-        color,
-        25,
-        10,
-      );
+      let ringColor: string;
+      if (dashing || dashIframe) ringColor = settings.player.colorDash;
+      else if (walking) ringColor = settings.player.colorWalk;
+      else ringColor = settings.player.colorIdle;
+      const pupilColor =
+        dashing || dashIframe ? settings.player.colorDash : "#ffffff";
+      drawPlayerEye(ctx, player, pSize, {
+        ringColor,
+        glowColor: ringColor,
+        pupilColor,
+      });
     }
 
     // rings
