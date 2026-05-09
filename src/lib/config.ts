@@ -140,6 +140,20 @@ export const IDLE_LOOK_MID_DIST_RATIO = 0.6;
 export const IDLE_LOOK_FAR_DIST_RATIO = 0.9;
 export const IDLE_JITTER_AMPLITUDE = 0.5;
 
+// Movement animations for the player eye — lean (tilt into wind), bob
+// (vertical sway scaled by speed), and an optional squash + stretch
+// "pop" when speed crosses the lean threshold from below.
+export const LEAN_MAX_HORIZONTAL_RAD = 0.18;
+export const LEAN_MAX_DIAGONAL_RAD = 0.12;
+export const LEAN_VELOCITY_THRESHOLD = 50;
+export const LEAN_LERP = 0.08; // per-frame factor at 60 fps; lib uses a
+// rate (≈5 / s) derived from this so the lerp is frame-rate independent
+export const BOB_AMPLITUDE_PX = 2;
+export const BOB_FREQUENCY_FACTOR = 200;
+export const SQUASH_DURATION_MS = 80;
+export const SQUASH_Y = 0.92;
+export const STRETCH_X = 1.05;
+
 // Bindings store KeyboardEvent.code values (layout-independent). Modifier
 // codes are normalized to drop the Left/Right side suffix (see normalizeCode
 // in main.ts) so either Shift key counts as "Shift", etc.

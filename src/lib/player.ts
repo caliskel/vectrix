@@ -12,6 +12,8 @@ import {
   DASH_STRETCH_PEAK_X,
   DASH_STRETCH_X,
   DASH_STRETCH_Y,
+  BOB_AMPLITUDE_PX,
+  BOB_FREQUENCY_FACTOR,
   IDLE_JITTER_AMPLITUDE,
   IDLE_LOOK_CALM_DOWN_MS,
   IDLE_LOOK_CENTER_CHANCE,
@@ -21,6 +23,12 @@ import {
   IDLE_LOOK_MID_DIST_RATIO,
   IDLE_LOOK_NEAR_DIST_RATIO,
   IDLE_LOOK_QUICK_DART_CHANCE,
+  LEAN_MAX_DIAGONAL_RAD,
+  LEAN_MAX_HORIZONTAL_RAD,
+  LEAN_VELOCITY_THRESHOLD,
+  SQUASH_DURATION_MS,
+  SQUASH_Y,
+  STRETCH_X,
   type Bindings,
 } from "./config";
 import { drawNeon } from "./neon";
@@ -48,6 +56,9 @@ const IDLE_INTERVAL_MAX_SEC = IDLE_LOOK_INTERVAL_MAX_MS / 1000;
 const IDLE_QUICK_DART_MIN_SEC = 0.3;
 const IDLE_QUICK_DART_MAX_SEC = 0.5;
 const IDLE_TIER_JITTER = 0.1; // ± around tier center, gives e.g. 0.2..0.4 for "near"
+const LEAN_LERP_RATE = 5; // ≈0.08 per frame at 60 fps, frame-rate independent
+const BOB_DECAY_RATE = 6; // how fast bob phase eases to neutral when stopped
+const SQUASH_DURATION_SEC = SQUASH_DURATION_MS / 1000;
 
 function randomBlinkInterval(): number {
   return (
@@ -165,6 +176,11 @@ export type Player = {
   idleTargetY: number;
   nextIdleSwitchAt: number; // seconds (performance-clock-aligned)
   lastSawDangerAt: number;  // seconds (-Infinity = never)
+  // movement animations
+  tiltAngle: number;        // current lean (radians), eases toward target
+  bobPhase: number;         // accumulator for the sin bob wave
+  squashTime: number;       // counts down through SQUASH_DURATION_SEC
+  prevSpeed: number;        // last frame's speed, used for squash trigger
 };
 
 export function createPlayer(): Player {
@@ -195,6 +211,10 @@ export function createPlayer(): Player {
     idleTargetY: 0,
     nextIdleSwitchAt: 0,
     lastSawDangerAt: Number.NEGATIVE_INFINITY,
+    tiltAngle: 0,
+    bobPhase: 0,
+    squashTime: 0,
+    prevSpeed: 0,
   };
 }
 
@@ -214,6 +234,10 @@ export function resetEyeState(p: Player): void {
   p.idleTargetY = 0;
   p.nextIdleSwitchAt = 0;
   p.lastSawDangerAt = Number.NEGATIVE_INFINITY;
+  p.tiltAngle = 0;
+  p.bobPhase = 0;
+  p.squashTime = 0;
+  p.prevSpeed = 0;
 }
 
 export function eyeOnHit(p: Player): void {
@@ -319,6 +343,49 @@ export function updateEye(
     dashDurationSec: number;
   },
 ): void {
+  // movement animations: lean, bob, squash. Skipped when dashing (dash
+  // owns its own deformation) — tilt eases back to 0 in that case.
+  const speed = Math.hypot(p.vx, p.vy);
+  const isDashing = p.dashTime > 0;
+  const moving = speed >= LEAN_VELOCITY_THRESHOLD && !isDashing;
+
+  // squash trigger — speed crossed the threshold from below this frame
+  if (
+    !isDashing &&
+    p.prevSpeed < LEAN_VELOCITY_THRESHOLD &&
+    speed >= LEAN_VELOCITY_THRESHOLD
+  ) {
+    p.squashTime = SQUASH_DURATION_SEC;
+  }
+  if (p.squashTime > 0) p.squashTime = Math.max(0, p.squashTime - dt);
+  p.prevSpeed = speed;
+
+  // tilt target — sign of vx, with diagonal getting a smaller angle and
+  // pure vertical leaving the eye upright
+  let tiltTarget = 0;
+  if (moving) {
+    const ax = Math.abs(p.vx);
+    const ay = Math.abs(p.vy);
+    if (ax > ay) {
+      const mostlyHorizontal = ax > ay * 3;
+      tiltTarget =
+        Math.sign(p.vx) *
+        (mostlyHorizontal ? LEAN_MAX_HORIZONTAL_RAD : LEAN_MAX_DIAGONAL_RAD);
+    }
+  }
+  const leanK = 1 - Math.exp(-LEAN_LERP_RATE * dt);
+  p.tiltAngle += (tiltTarget - p.tiltAngle) * leanK;
+
+  // bob — phase advances proportional to speed while moving; when stopped
+  // it eases toward the nearest "neutral" multiple of π so sin(phase) = 0
+  if (moving) {
+    p.bobPhase += dt * (speed / BOB_FREQUENCY_FACTOR);
+  } else {
+    const target = Math.round(p.bobPhase / Math.PI) * Math.PI;
+    const k = 1 - Math.exp(-BOB_DECAY_RATE * dt);
+    p.bobPhase += (target - p.bobPhase) * k;
+  }
+
   // shake/dilate countdown
   if (p.shakeTime > 0) p.shakeTime = Math.max(0, p.shakeTime - dt);
   if (p.dilateTime > 0) p.dilateTime = Math.max(0, p.dilateTime - dt);
@@ -346,8 +413,6 @@ export function updateEye(
   } else {
     p.closeAmount = Math.max(0, p.closeAmount - closeSpeed * dt);
   }
-
-  const isDashing = p.dashTime > 0;
 
   // dash ghost emission
   if (isDashing) {
@@ -529,15 +594,28 @@ export function drawPlayerEye(
   const irisColor = opts.profile?.iris ?? opts.irisColor ?? PALETTE.bg;
   const ghostColor = opts.ghostColor;
 
-  // ===== ghosts (drawn first, behind the live eye) =====
+  // ===== ghosts (drawn first, behind the live eye, in world space) =====
   if (p.dashGhosts.length > 0) {
     drawDashGhosts(ctx, p.dashGhosts, ghostColor, eyeOpenY);
   }
 
-  // ===== outer ring (deformed in dash) =====
+  // Per-frame movement deformations applied to the live eye only.
+  // Order: translate → close (world Y squeeze) → rotate (lean) →
+  // translate(0, bobY) → scale (squash) → draw layers inside.
+  const bobOffsetY =
+    BOB_AMPLITUDE_PX * Math.sin(p.bobPhase) * (isDashing ? 0 : 1);
+  const squashAlpha = p.squashTime > 0 ? p.squashTime / SQUASH_DURATION_SEC : 0;
+  const squashSx = 1 + (STRETCH_X - 1) * squashAlpha;
+  const squashSy = 1 + (SQUASH_Y - 1) * squashAlpha;
+
   ctx.save();
   ctx.translate(baseX, baseY);
   ctx.scale(1, Math.max(0.001, eyeOpenY));
+  if (p.tiltAngle !== 0) ctx.rotate(p.tiltAngle);
+  if (bobOffsetY !== 0) ctx.translate(0, bobOffsetY);
+  if (squashAlpha > 0) ctx.scale(squashSx, squashSy);
+
+  // ===== outer ring (deformed in dash) =====
   drawNeon(
     ctx,
     () => {
@@ -555,12 +633,9 @@ export function drawPlayerEye(
     opts.blurStrong ?? 25,
     opts.blurSoft ?? 10,
   );
-  ctx.restore();
 
   // ===== iris + pupil + highlight (NOT deformed; shifted forward in dash) =====
   ctx.save();
-  ctx.translate(baseX, baseY);
-  ctx.scale(1, Math.max(0.001, eyeOpenY));
   if (isDashing) {
     ctx.translate(p.dashDirX * irisShift, p.dashDirY * irisShift);
   }
@@ -594,12 +669,10 @@ export function drawPlayerEye(
   ctx.fill();
   ctx.restore();
 
-  // ===== eyelids (clipped to the outer-ring shape) =====
+  // ===== eyelids (clipped to the outer-ring shape, sharing the live transform) =====
   const blink = blinkProgress(p);
   if (blink > 0) {
     ctx.save();
-    ctx.translate(baseX, baseY);
-    ctx.scale(1, Math.max(0.001, eyeOpenY));
     ctx.beginPath();
     if (isDashing) {
       ctx.ellipse(0, 0, r * stretchX, r * stretchY, dashAngle, 0, Math.PI * 2);
@@ -619,6 +692,8 @@ export function drawPlayerEye(
     );
     ctx.restore();
   }
+
+  ctx.restore();
 }
 
 function drawDashGhosts(

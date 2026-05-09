@@ -119,6 +119,20 @@ its own `GameState` later when scripted encounters land.
   pupil locks in the dash direction. Implementation in `lib/player.ts`
   (`updateEye`, `drawPlayerEye`, `findNearestThreat`); both sandbox
   and rooms call it with their own threat list.
+- **Lean and bob animations during movement** — when the player is
+  moving (|velocity| > 50 px/s) the eye tilts into the wind: full
+  ±0.18 rad for mostly-horizontal motion, ±0.12 rad on diagonals,
+  zero on pure vertical. The lean eases via a frame-rate-independent
+  lerp (≈0.08 per frame at 60 fps). A vertical bob runs at a phase
+  that advances proportional to current speed (`speed /
+  BOB_FREQUENCY_FACTOR`) and renders as `sin(phase) * 2 px`; when
+  the player stops, the phase eases to the nearest neutral so the
+  bob ends at zero offset rather than freezing at a peak. A small
+  squash + stretch (1.05 × 0.92 × 80 ms) plays when speed crosses
+  the lean threshold from below — the "pop" of starting to move.
+  All three are skipped while dashing (the dash teardrop owns the
+  visual). Constants live in `config.ts` (`LEAN_*`, `BOB_*`,
+  `SQUASH_*`, `STRETCH_X`).
 
 ## Gameplay parameters (current defaults)
 
