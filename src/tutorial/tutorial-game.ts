@@ -417,7 +417,12 @@ export function start(canvas: HTMLCanvasElement): void {
   let hintPendingText: string | null = null;
   const HINT_FADE_IN_SEC = 0.3;
   const HINT_FADE_OUT_SEC = 0.2;
-  const HINT_TEXT_COLOR = "#d4af0a";
+  // Pale cyan reads as a "tutorial UI" colour — distinct from the
+  // canary-yellow we used to show, which competed with the player's
+  // own glow. Keycaps and the marker glyphs share this hue so the
+  // whole tutorial layer lives in one tonal family.
+  const HINT_TEXT_COLOR = "#7dd3fc";
+  const HINT_KEYCAP_FILL = "#f0f9ff";
   const HINT_BACKPLATE_COLOR = "rgba(10, 14, 26, 0.85)";
   const HINT_GLOW_BLUR = 6;
 
@@ -459,7 +464,7 @@ export function start(canvas: HTMLCanvasElement): void {
     if (phase === "movement") {
       // Initial state — Room 0 already ships with the four direction
       // markers; just queue the hint.
-      showHint("USE [W][A][S][D] TO MOVE");
+      showHint("USE [↑][←][↓][→] TO MOVE");
     } else if (phase === "dash") {
       // Replace movement markers with a single goal beyond the wall.
       currentRoom.markers = [createMarker(900, 400, 1, "→")];
@@ -562,7 +567,9 @@ export function start(canvas: HTMLCanvasElement): void {
   type HintToken = { kind: "text" | "key"; value: string };
   function parseHintTokens(text: string): HintToken[] {
     const tokens: HintToken[] = [];
-    const re = /\[([A-Z])\]/g;
+    // Bracketed token = a keycap glyph. Letters A-Z for ASCII keys,
+    // ↑ ← ↓ → for the arrow-glyph movement hint in Phase 1.
+    const re = /\[([A-Z↑←↓→])\]/g;
     let last = 0;
     let m: RegExpExecArray | null;
     while ((m = re.exec(text))) {
@@ -662,12 +669,14 @@ export function start(canvas: HTMLCanvasElement): void {
       } else {
         // keycap
         ctx.shadowBlur = 0;
-        ctx.fillStyle = "rgba(255, 255, 255, 0.95)";
+        ctx.fillStyle = HINT_KEYCAP_FILL;
         roundedRectPath(ctx, cursor, -keyH / 2, keyW, keyH, 4);
         ctx.fill();
-        ctx.fillStyle = "#0a0e1a";
+        ctx.fillStyle = PALETTE.bg;
+        // Arrow glyphs need a touch more size than letters to read at
+        // the same optical weight; bumped from 22 → 28.
         ctx.font =
-          "600 22px ui-monospace, SFMono-Regular, Menlo, monospace";
+          "600 28px ui-monospace, SFMono-Regular, Menlo, monospace";
         ctx.textAlign = "center";
         ctx.fillText(tk.value, cursor + keyW / 2, 1);
         cursor += keyW + keyGap;

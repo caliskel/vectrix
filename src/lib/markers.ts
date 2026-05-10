@@ -1,5 +1,4 @@
 import { drawNeon } from "./neon";
-import { PALETTE } from "./palette";
 
 // Tutorial markers: numbered checkpoints the player walks through to
 // learn movement / dash. Used by Tutorial Room 0; the game engine
@@ -9,8 +8,15 @@ import { PALETTE } from "./palette";
 const MARKER_RADIUS = 35;
 const MARKER_PULSE_HZ = 0.67; // ~1.5 s period
 const MARKER_PULSE_AMPLITUDE = 0.1; // ±10 % size
-const MARKER_GLOW_BLUR = 20;
+const MARKER_GLOW_BLUR = 18;
 const MARKER_REACH_RADIUS = 28; // pickup radius (slightly inside the visual)
+// Pale cyan shared with the HUD tutorial-hint text — every tutorial
+// element lives in the same tonal family so the player reads them as
+// "this is the tutorial layer" rather than mistaking markers for a
+// gameplay pickup. Deliberately not piped through PALETTE because
+// markers are the only consumer of this hue.
+const MARKER_COLOR = "#7dd3fc";
+const MARKER_FILL = "rgba(125, 211, 252, 0.2)";
 
 export type Marker = {
   x: number;
@@ -65,12 +71,12 @@ export function drawMarker(
     // Silhouette — flat alpha, no pulse, no label.
     ctx.save();
     ctx.globalAlpha = 0.25;
-    ctx.strokeStyle = PALETTE.pickupHP;
+    ctx.strokeStyle = MARKER_COLOR;
     ctx.lineWidth = 1.5;
     ctx.beginPath();
     ctx.arc(marker.x, marker.y, MARKER_RADIUS, 0, Math.PI * 2);
     ctx.stroke();
-    ctx.fillStyle = PALETTE.pickupHP;
+    ctx.fillStyle = MARKER_COLOR;
     ctx.font = "600 18px ui-monospace, SFMono-Regular, Menlo, monospace";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
@@ -84,19 +90,17 @@ export function drawMarker(
   drawNeon(
     ctx,
     () => {
-      ctx.fillStyle = PALETTE.pickupHP;
-      ctx.globalAlpha = 0.18;
+      ctx.fillStyle = MARKER_FILL;
       ctx.beginPath();
       ctx.arc(marker.x, marker.y, r, 0, Math.PI * 2);
       ctx.fill();
-      ctx.globalAlpha = 1;
-      ctx.strokeStyle = PALETTE.pickupHP;
+      ctx.strokeStyle = MARKER_COLOR;
       ctx.lineWidth = 2;
       ctx.beginPath();
       ctx.arc(marker.x, marker.y, r, 0, Math.PI * 2);
       ctx.stroke();
     },
-    PALETTE.pickupHP,
+    MARKER_COLOR,
     MARKER_GLOW_BLUR,
     8,
   );
@@ -107,10 +111,10 @@ export function drawMarker(
   ctx.textBaseline = "middle";
   ctx.fillText(String(marker.number), marker.x, marker.y);
   // Floating label
-  ctx.fillStyle = PALETTE.pickupHP;
+  ctx.fillStyle = MARKER_COLOR;
   ctx.font = "600 13px ui-monospace, SFMono-Regular, Menlo, monospace";
   ctx.textBaseline = "alphabetic";
-  ctx.shadowColor = PALETTE.pickupHP;
+  ctx.shadowColor = MARKER_COLOR;
   ctx.shadowBlur = 10;
   ctx.fillText(marker.label, marker.x, marker.y - r - 14);
   ctx.shadowBlur = 0;
