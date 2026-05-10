@@ -976,6 +976,26 @@ export function start(canvas: HTMLCanvasElement): void {
     if (mobs.length > 0) {
       for (const m of mobs) currentRoom.enemies.push(m);
     }
+    // Phase 3 corner turrets — same adoption path. Sentinel
+    // queues four of them, staggered, just after phase-3 entry.
+    const turrets = sentinel.consumeSpawnedTurrets();
+    if (turrets.length > 0) {
+      for (const t of turrets) currentRoom.enemies.push(t);
+    }
+    // Boss-death cascade — Sentinel.enterDying populates a forced
+    // kill queue (alive Hunters first, then Turrets) so the Game
+    // Complete overlay opens with no leftover enemies. Each entry
+    // that fires this frame gets the standard impact FX + score +
+    // removal pipeline, same as a player kill.
+    const cascadeKills = sentinel.consumeCascadeKills();
+    if (cascadeKills.length > 0) {
+      for (const e of cascadeKills) {
+        if (e.isDead()) {
+          emitEnemyKill(makeImpactCtx(), e);
+          destroyEnemy(e);
+        }
+      }
+    }
   }
 
   // Watches sentinel state transitions so kill score lands at the

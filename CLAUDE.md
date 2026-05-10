@@ -846,9 +846,50 @@ transitions for score + Game Complete.
     velocity. Then the regular cadence kicks in 4 s later, so
     Phase 3 opens with two Hunters in the first 5 seconds.
     Mob spawn timer is gated by `bossPhase === 3` only — it
-    runs while the boss is mid-attack. Spawned mobs do **not**
-    auto-die when the boss reaches `dying`; the player has to
-    clean them up before VICTORY.
+    runs while the boss is mid-attack. Cleanup is handled by
+    the death cascade (see below).
+  - **+ 4 corner turrets** — phase 3 only. At the same climax
+    that fires the dramatic Hunter spawn, Sentinel queues four
+    `Turret`s — one per arena corner, inset 100 px from the
+    walls — staggered on a domino cadence: 0.2 / 0.6 / 1.0 /
+    1.4 s after the cinematic releases. Each carries a 700 ms
+    spawn-invuln window (pink `#ff6688` ring r 15 → 80 + 8
+    particles 180–260 px/s + scale 0 → 1 ramp; can't shoot or
+    take damage during this window). Per-turret overrides:
+    HP 2 (default), fire interval 1.5 s, bullet speed 200 px/s
+    (slower than the room default so the player can read four
+    parallel streams), detection radius 2500 px (>> arena
+    diagonal so permanently aggro post-invuln), `canDeaggro`
+    forced off. Stationary — no idle drift. **Killable**, dash
+    twice for kill (standard MEDIUM + HEAVY impacts). **No
+    respawn**: each cleared corner is one less stream of
+    bullets for the rest of the fight, so the player trades
+    boss damage time for breathing room. **Allied to the boss**:
+    Sentinel's own bullets / sweep beam don't damage the
+    turrets (bullet-vs-enemy collision isn't wired against
+    boss-side bullets, and the sweep beam only damage-checks
+    the player, so this is automatic). Mob-spawn cap
+    (`MOB_MAX_ALIVE = 2`) is independent — corner turrets have
+    their own `spawnedTurrets` list with lifetime cap = 4.
+    Turret constructor accepts new opts:
+    `{ startsAggressive, fireIntervalSec, bulletSpeed,
+    spawnInvulnerableSec }`. `spawnInvulnerableTime` field
+    gates `update` (no aim/shoot) and `takeDamage` (no-op)
+    while ramping the visual scale.
+  - **Boss-death cascade.** When Sentinel HP hits 0,
+    `enterDying` populates a forced-kill queue with the alive
+    Hunters (50 ms between), a 100 ms gap, then the alive
+    corner Turrets (50 ms between). Each scheduled entry fires
+    `takeDamage(hp)` to force the kill and pushes the enemy
+    into `pendingCascadeKills`; rooms-game drains the buffer
+    in `consumeSentinelEffects` and runs the standard
+    `emitEnemyKill` + `destroyEnemy` pipeline (impact rings,
+    particles, shake, audio, +N floating score). The cascade
+    overlaps the start of the boss's 6 s death cinematic, so
+    by the time Sentinel finishes scale-down the arena is
+    clean and Game Complete opens with no leftover enemies to
+    block it. Already-dead enemies (the player killed them
+    earlier) are skipped.
   - **Ring Burst** — phase 1's defining mechanic. The three
     shells detach + expand, the body goes ghosted, and the eye
     becomes the only damage path. Sub-state machine
