@@ -785,9 +785,9 @@ transitions for score + Game Complete.
   cooldown expiry: **ring burst > sweep > aimed > radial** — RB
   is the defining mechanic; sweep is the phase-2+ signature;
   aimed is point threat; radial is filler.
-  **Corner turret spawn** runs as a *parallel* timer (phase 3
-  only) — staggered Turret spawns NOT subject to mutual exclusion;
-  the queue ticks in parallel with whatever attack the boss is
+  **Mine field** runs as a *parallel* timer (phase 3 only) —
+  spawns and detonations are NOT subject to mutual exclusion;
+  the timer ticks in parallel with whatever attack the boss is
   running.
   - **Radial Burst** — 1.4 s total cycle: 0.4 s telegraph +
     single firing frame (12 bullets fanned at 350 px/s) +
@@ -867,40 +867,8 @@ transitions for score + Game Complete.
     through the universal mutual-exclusion gate; sub-phases
     here don't count as a new attack — `isAnyAttackActive()`
     stays true across the whole cycle.)
-  - **2 corner turrets** — phase 3 only. At the same climax
-    that fires the phase-3 cadence boost, Sentinel queues two
-    `Turret`s in opposite diagonal corners (top-left + bottom-
-    right), inset 100 px from the walls, staggered on a 400 ms
-    cadence: 0.2 / 0.6 s after the cinematic releases. Was
-    four-per-corner originally; the layered crossfire was too
-    noisy on top of phase 3's already-loud rotation, so it's
-    pared down to a single diagonal that still forces the
-    player to manage both halves of the arena. Each carries a
-    700 ms spawn-invuln window (pink `#ff6688` ring r 15 → 80
-    + 8 particles 180–260 px/s + scale 0 → 1 ramp; can't shoot
-    or take damage during this window). Per-turret overrides:
-    HP 2 (default), fire interval 1.5 s, bullet speed 200 px/s
-    (slower than the room default so the player can read both
-    parallel streams), detection radius 2500 px (>> arena
-    diagonal so permanently aggro post-invuln), `canDeaggro`
-    forced off. Stationary — no idle drift. **Killable**, dash
-    twice for kill (standard MEDIUM + HEAVY impacts). **No
-    respawn**: each cleared corner is one less stream of
-    bullets for the rest of the fight, so the player trades
-    boss damage time for breathing room. **Allied to the boss**:
-    Sentinel's own bullets / sweep beam don't damage the
-    turrets (bullet-vs-enemy collision isn't wired against
-    boss-side bullets, and the sweep beam only damage-checks
-    the player, so this is automatic). Lifetime cap = 2 — the
-    `spawnedTurrets` list is one-shot and never refills.
-    Turret constructor accepts new opts:
-    `{ startsAggressive, fireIntervalSec, bulletSpeed,
-    spawnInvulnerableSec }`. `spawnInvulnerableTime` field
-    gates `update` (no aim/shoot) and `takeDamage` (no-op)
-    while ramping the visual scale.
   - **Mine field** — phase 3 only. Parallel timer (no mutex
-    against the attack rotation, same pattern as the corner
-    turret spawn). Once every `MINE_SPAWN_INTERVAL_SEC = 2.0 s`
+    against the attack rotation). Once every `MINE_SPAWN_INTERVAL_SEC = 2.0 s`
     the boss drops a mine in a random arena point chosen to
     keep at least 200 px from the player and 150 px from the
     boss center; up to `MINE_SPAWN_MAX_ATTEMPTS = 8` rolls per
@@ -925,19 +893,6 @@ transitions for score + Game Complete.
     flight from earlier detonations keep going; rooms-game
     owns them). The mine's hex outline echoes the boss
     silhouette to read as "the boss seeded these."
-  - **Boss-death cascade.** When Sentinel HP hits 0,
-    `enterDying` populates a forced-kill queue with the alive
-    corner Turrets (50 ms between). Each scheduled entry fires
-    `takeDamage(hp)` to force the kill and pushes the Turret
-    into `pendingCascadeKills`; rooms-game drains the buffer
-    in `consumeSentinelEffects` and runs the standard
-    `emitEnemyKill` + `destroyEnemy` pipeline (impact rings,
-    particles, shake, audio, +N floating score). The cascade
-    overlaps the start of the boss's 6 s death cinematic, so
-    by the time Sentinel finishes scale-down the arena is
-    clean and Game Complete opens with no leftover enemies to
-    block it. Already-dead Turrets (the player cleared them
-    earlier) are skipped.
   - **Ring Burst** — phase 1's defining mechanic. The three
     shells detach + expand, the body goes ghosted, and the eye
     becomes the only damage path. Sub-state machine
@@ -1460,9 +1415,9 @@ settings overlay on Esc / Tab.
 
 - **Sentinel boss** — Phases 1 + 2 + 3 ship. Phase 1 has three
   attacks (radial / aimed / Ring Burst); phase 2 adds Sweep
-  Laser; phase 3 adds **Mine field** + the parallel **2 corner
-  turret** spawn (top-left + bottom-right diagonal). Cadence multiplier ramp + the 2 s
-  phase-transition cinematic are wired across both boundaries.
+  Laser; phase 3 adds **Mine field**. Cadence multiplier ramp +
+  the 2 s phase-transition cinematic are wired across both
+  boundaries.
   **Mechanic engagement is mandatory**: HP_MAX 60 with the body
   invulnerable outside RB-`vulnerable`, so the eye in Ring Burst
   is the *only* damage path. Boss audio for sweep laser / phase

@@ -963,28 +963,6 @@ export function start(canvas: HTMLCanvasElement): void {
       // boss-cinematic guard internally — no extra checks needed.
       takeHit(dmg);
     }
-    // Phase 3 corner turrets — Sentinel queues four of them,
-    // staggered, just after phase-3 entry. As each materialises
-    // we adopt it into the active enemy list so it ticks /
-    // renders / takes damage like any other room enemy.
-    const turrets = sentinel.consumeSpawnedTurrets();
-    if (turrets.length > 0) {
-      for (const t of turrets) currentRoom.enemies.push(t);
-    }
-    // Boss-death cascade — Sentinel.enterDying populates a forced
-    // kill queue (alive Hunters first, then Turrets) so the Game
-    // Complete overlay opens with no leftover enemies. Each entry
-    // that fires this frame gets the standard impact FX + score +
-    // removal pipeline, same as a player kill.
-    const cascadeKills = sentinel.consumeCascadeKills();
-    if (cascadeKills.length > 0) {
-      for (const e of cascadeKills) {
-        if (e.isDead()) {
-          emitEnemyKill(makeImpactCtx(), e);
-          destroyEnemy(e);
-        }
-      }
-    }
   }
 
   // Watches sentinel state transitions so kill score lands at the
@@ -1786,8 +1764,7 @@ export function start(canvas: HTMLCanvasElement): void {
     // pre-rendered sprite (one offscreen canvas per color/size combo
     // in lib/bullet-sprite) so per-bullet shadowBlur is gone — the
     // dominant frame cost in phase 3 of the boss (50-80 bullets
-    // steady-state with the cadence boost + corner turrets + mine
-    // detonations).
+    // steady-state with the cadence boost + mine detonations).
     const bSize = settings.bullets.size;
     const bColor = settings.bullets.color;
     ctx.save();
