@@ -1,19 +1,23 @@
 import { audio } from "../audio";
 import {
+  ALERT_BURST_PARTICLE_COUNT,
+  ALERT_BURST_PARTICLE_LIFETIME_MS,
+  ALERT_BURST_PARTICLE_SPEED_MAX,
+  ALERT_BURST_PARTICLE_SPEED_MIN,
   ALERT_DURATION_MS,
-  AWARENESS_GLOW_BOOST_DURATION_MS,
-  AWARENESS_GLOW_BOOST_MUL,
-  AWARENESS_SQUASH_AMOUNT,
-  AWARENESS_SQUASH_DURATION_MS,
+  ALERT_JITTER_END_INTENSITY,
+  ALERT_JITTER_INTENSITY_PEAK,
+  ALERT_JITTER_PEAK_TIME,
+  ALERT_RING_DURATION_MS,
+  ALERT_RING_END_RADIUS_OFFSET,
+  ALERT_RING_START_LINEWIDTH,
 } from "../config";
+import { addRing, type Particle, type Ring } from "../particles";
 import type { Enemy } from "./types";
 
 const ALERT_DURATION_SEC = ALERT_DURATION_MS / 1000;
-const AWARENESS_SQUASH_SEC = AWARENESS_SQUASH_DURATION_MS / 1000;
-const AWARENESS_GLOW_BOOST_SEC = AWARENESS_GLOW_BOOST_DURATION_MS / 1000;
-// "Sticky" aggro radius — once the enemy is in aggro, it stays aggro.
-// We don't ramp back to idle in this version (per spec it's optional);
-// keeping the constant here makes future changes obvious.
+const ALERT_RING_DURATION_SEC = ALERT_RING_DURATION_MS / 1000;
+const ALERT_BURST_PARTICLE_LIFETIME_SEC = ALERT_BURST_PARTICLE_LIFETIME_MS / 1000;
 const RING_DASH: [number, number] = [4, 6];
 const RING_LINE_WIDTH = 1.5;
 const RING_ALPHA_MAX = 0.3;
@@ -21,27 +25,32 @@ const RING_VISIBILITY_FAR_FACTOR = 1.3;
 const RING_VISIBILITY_RAMP_FACTOR = 0.5;
 const RING_COLOR_IDLE = "#3a4a6a";
 const RING_COLOR_ALERTING = "#fb923c";
-const EXCLAMATION_RISE_DURATION_SEC = 0.2;
-const EXCLAMATION_BASE_OFFSET = -30;
-const EXCLAMATION_RISE_PX = 5;
-const EXCLAMATION_FADE_OUT_SEC = 0.05;
+
+/**
+ * Caller plumbing for the one-shot alert burst (ring + particles).
+ * `updateEnemyAwareness` only needs this on the idle → alerting
+ * transition, but the type is small enough that callers can build it
+ * once per frame and reuse.
+ */
+export type AwarenessTriggerCtx = {
+  particles: Particle[];
+  rings: Ring[];
+};
 
 /**
  * Tick the per-enemy awareness state machine. Plays the alert ping
- * on idle → alerting transitions; alerting auto-graduates to aggro
- * after ALERT_DURATION_SEC. Once in aggro the enemy stays there.
+ * + spawns a ring-burst on idle → alerting; alerting auto-graduates
+ * to aggro after ALERT_DURATION_SEC. Once in aggro the enemy stays
+ * there.
  */
 export function updateEnemyAwareness(
   enemy: Enemy,
   px: number,
   py: number,
   dt: number,
+  trigger?: AwarenessTriggerCtx,
 ): void {
   if (enemy.isDead()) return;
-  if (enemy.awarenessSquashTime > 0)
-    enemy.awarenessSquashTime = Math.max(0, enemy.awarenessSquashTime - dt);
-  if (enemy.awarenessGlowBoost > 0)
-    enemy.awarenessGlowBoost = Math.max(0, enemy.awarenessGlowBoost - dt);
 
   if (enemy.awarenessState === "idle") {
     const dx = px - enemy.x;
@@ -49,30 +58,84 @@ export function updateEnemyAwareness(
     if (dx * dx + dy * dy < enemy.detectionRadius * enemy.detectionRadius) {
       enemy.awarenessState = "alerting";
       enemy.alertTimer = 0;
-      enemy.awarenessSquashTime = AWARENESS_SQUASH_SEC;
       audio.play.alert();
+      if (trigger) emitAlertBurst(trigger, enemy);
     }
   } else if (enemy.awarenessState === "alerting") {
     enemy.alertTimer += dt;
     if (enemy.alertTimer >= ALERT_DURATION_SEC) {
       enemy.awarenessState = "aggro";
-      enemy.awarenessGlowBoost = AWARENESS_GLOW_BOOST_SEC;
     }
   }
 }
 
-/** Multiplier on glow blur during the post-alert boost (1.0 normally). */
-export function awarenessGlowMul(enemy: Enemy): number {
-  if (enemy.awarenessGlowBoost <= 0) return 1;
-  const t = enemy.awarenessGlowBoost / AWARENESS_GLOW_BOOST_SEC;
-  return 1 + (AWARENESS_GLOW_BOOST_MUL - 1) * t;
+/**
+ * Apply the alert-phase jitter to ctx — random translation that ramps
+ * up to ALERT_JITTER_INTENSITY_PEAK at ALERT_JITTER_PEAK_TIME and
+ * eases back to ALERT_JITTER_END_INTENSITY by the end of the window.
+ * Caller is responsible for being inside its own `ctx.save()` (each
+ * enemy already does this in its draw method).
+ */
+export function applyAwarenessJitter(
+  ctx: CanvasRenderingContext2D,
+  enemy: Enemy,
+): void {
+  if (enemy.awarenessState !== "alerting") return;
+  if (enemy.isDead()) return;
+  const t = Math.max(0, Math.min(1, enemy.alertTimer / ALERT_DURATION_SEC));
+  const intensity = jitterIntensity(t);
+  if (intensity <= 0) return;
+  const jx = (Math.random() - 0.5) * intensity * 2;
+  const jy = (Math.random() - 0.5) * intensity * 2;
+  ctx.translate(jx, jy);
 }
 
-/** Uniform scale (≤ 1) for the brief jolt on idle → alerting. */
-export function awarenessSquashScale(enemy: Enemy): number {
-  if (enemy.awarenessSquashTime <= 0) return 1;
-  const t = enemy.awarenessSquashTime / AWARENESS_SQUASH_SEC;
-  return 1 - (1 - AWARENESS_SQUASH_AMOUNT) * t;
+function jitterIntensity(t: number): number {
+  // Triangle ramp: 1 → peak (at PEAK_TIME) → end intensity at t=1.
+  const peakT = ALERT_JITTER_PEAK_TIME;
+  if (t < peakT) {
+    const u = t / peakT;
+    return 1 + (ALERT_JITTER_INTENSITY_PEAK - 1) * u;
+  }
+  const u = (t - peakT) / (1 - peakT);
+  return (
+    ALERT_JITTER_INTENSITY_PEAK +
+    (ALERT_JITTER_END_INTENSITY - ALERT_JITTER_INTENSITY_PEAK) * u
+  );
+}
+
+function emitAlertBurst(ctx: AwarenessTriggerCtx, enemy: Enemy): void {
+  const r0 = enemy.hitboxRadius + 5;
+  const r1 = enemy.hitboxRadius * 2 + ALERT_RING_END_RADIUS_OFFSET;
+  addRing(ctx.rings, enemy.x, enemy.y, {
+    startR: r0,
+    endR: r1,
+    color: enemy.color,
+    lifetime: ALERT_RING_DURATION_SEC,
+    startLineWidth: ALERT_RING_START_LINEWIDTH,
+    endLineWidth: 1,
+    glowBlur: 18,
+  });
+  for (let i = 0; i < ALERT_BURST_PARTICLE_COUNT; i++) {
+    const angle = Math.random() * Math.PI * 2;
+    const speed =
+      ALERT_BURST_PARTICLE_SPEED_MIN +
+      Math.random() *
+        (ALERT_BURST_PARTICLE_SPEED_MAX - ALERT_BURST_PARTICLE_SPEED_MIN);
+    ctx.particles.push({
+      x: enemy.x,
+      y: enemy.y,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      initialSize: 3,
+      color: enemy.color,
+      age: 0,
+      lifetime: ALERT_BURST_PARTICLE_LIFETIME_SEC,
+      glowStrong: 10,
+      glowSoft: 4,
+      drag: 0.94,
+    });
+  }
 }
 
 /**
@@ -94,7 +157,8 @@ export function drawEnemyDetection(
   const dist = Math.hypot(dx, dy);
   const farLimit = enemy.detectionRadius * RING_VISIBILITY_FAR_FACTOR;
   const ramp = enemy.detectionRadius * RING_VISIBILITY_RAMP_FACTOR;
-  const visibility = ramp > 0 ? Math.max(0, Math.min(1, (farLimit - dist) / ramp)) : 0;
+  const visibility =
+    ramp > 0 ? Math.max(0, Math.min(1, (farLimit - dist) / ramp)) : 0;
   if (visibility <= 0) return;
 
   const color =
@@ -117,39 +181,6 @@ export function drawEnemyDetection(
 }
 
 /**
- * Red exclamation mark above the enemy during the alerting phase.
- * Rises 5 px over 200 ms, holds, fades out in the last 50 ms before
- * graduating to aggro.
- */
-export function drawAwarenessExclamation(
-  ctx: CanvasRenderingContext2D,
-  enemy: Enemy,
-): void {
-  if (enemy.awarenessState !== "alerting") return;
-  if (enemy.isDead()) return;
-  const riseT = Math.min(1, enemy.alertTimer / EXCLAMATION_RISE_DURATION_SEC);
-  const liftY = EXCLAMATION_BASE_OFFSET - riseT * EXCLAMATION_RISE_PX;
-  const fadeRemaining =
-    ALERT_DURATION_SEC - enemy.alertTimer;
-  const alpha =
-    fadeRemaining > EXCLAMATION_FADE_OUT_SEC
-      ? 1
-      : Math.max(0, fadeRemaining / EXCLAMATION_FADE_OUT_SEC);
-  if (alpha <= 0) return;
-
-  ctx.save();
-  ctx.globalAlpha = alpha;
-  ctx.font = "bold 26px ui-monospace, SFMono-Regular, Menlo, monospace";
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.shadowColor = "#ff2d55";
-  ctx.shadowBlur = 14;
-  ctx.fillStyle = "#ff2d55";
-  ctx.fillText("!", enemy.x, enemy.y + liftY);
-  ctx.restore();
-}
-
-/**
  * Default initializer the enemy classes call from their constructors.
  * Centralises the "fresh enemy is sleeping" rule so a future enemy
  * can't forget to reset awareness state.
@@ -158,8 +189,6 @@ export function initAwareness(enemy: Enemy, detectionRadius: number): void {
   enemy.awarenessState = "idle";
   enemy.detectionRadius = detectionRadius;
   enemy.alertTimer = 0;
-  enemy.awarenessSquashTime = 0;
-  enemy.awarenessGlowBoost = 0;
 }
 
 /**

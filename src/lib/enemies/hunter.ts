@@ -10,11 +10,7 @@ import {
 } from "../config";
 import { drawNeon } from "../neon";
 import { resolveEntityWallCollisions } from "../walls";
-import {
-  awarenessGlowMul,
-  awarenessSquashScale,
-  initAwareness,
-} from "./awareness";
+import { applyAwarenessJitter, initAwareness } from "./awareness";
 import { applyEnemyKnockback, drawEnemyHitFlash } from "./fx";
 import type { AwarenessState, Enemy, EnemyContext, EnemyType } from "./types";
 
@@ -97,8 +93,6 @@ export class Hunter implements Enemy {
   awarenessState: AwarenessState = "idle";
   detectionRadius = ENEMY_HUNTER_DETECTION;
   alertTimer = 0;
-  awarenessSquashTime = 0;
-  awarenessGlowBoost = 0;
   private destroyed = false;
   vx = 0;
   vy = 0;
@@ -214,16 +208,13 @@ export class Hunter implements Enemy {
     const speedNorm =
       this.maxSpeed > 0 ? Math.min(1, speed / this.maxSpeed) : 0;
     const glowBlur =
-      (GLOW_BLUR_MIN + (GLOW_BLUR_MAX - GLOW_BLUR_MIN) * speedNorm) *
-      awarenessGlowMul(this);
+      GLOW_BLUR_MIN + (GLOW_BLUR_MAX - GLOW_BLUR_MIN) * speedNorm;
 
     ctx.save();
+    applyAwarenessJitter(ctx, this);
     applyEnemyKnockback(ctx, this);
     ctx.translate(this.x, this.y);
     ctx.rotate(angle);
-
-    const awarenessSquash = awarenessSquashScale(this);
-    if (awarenessSquash !== 1) ctx.scale(awarenessSquash, awarenessSquash);
 
     // Stretch into a bullet shape when fast (along motion, squash perp)
     if (speed > STRETCH_SPEED_THRESHOLD) {

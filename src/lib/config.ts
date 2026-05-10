@@ -265,10 +265,19 @@ export const ENEMY_TURRET_DETECTION = 280;
 export const ENEMY_WATCHER_DETECTION = 350;
 export const ENEMY_HUNTER_DETECTION = 220;
 export const ALERT_DURATION_MS = 500;
-export const AWARENESS_SQUASH_DURATION_MS = 100;
-export const AWARENESS_SQUASH_AMOUNT = 0.85;
-export const AWARENESS_GLOW_BOOST_DURATION_MS = 300;
-export const AWARENESS_GLOW_BOOST_MUL = 1.5;
+// Alerting visual — jitter through the whole window + a single
+// ring-burst on transition. Old squash/glow/exclamation were removed
+// in favor of these two combined.
+export const ALERT_JITTER_INTENSITY_PEAK = 4; // px peak amplitude
+export const ALERT_JITTER_PEAK_TIME = 0.6;    // when the peak hits, 0..1 of phase
+export const ALERT_JITTER_END_INTENSITY = 0.5;
+export const ALERT_RING_DURATION_MS = 400;
+export const ALERT_RING_END_RADIUS_OFFSET = 50;
+export const ALERT_RING_START_LINEWIDTH = 4;
+export const ALERT_BURST_PARTICLE_COUNT = 6;
+export const ALERT_BURST_PARTICLE_SPEED_MIN = 200;
+export const ALERT_BURST_PARTICLE_SPEED_MAX = 350;
+export const ALERT_BURST_PARTICLE_LIFETIME_MS = 300;
 
 // Hunter motion trail — shrunk + faded copies of the body left
 // behind every TRAIL_INTERVAL_MS while moving. Samples age out so a

@@ -436,11 +436,20 @@ crosses its `detectionRadius`. The state machine has three steps:
               parks its velocity. Detection radius pulses faintly
               under the player's feet as a slate-blue dashed ring.
   alerting  — player just entered the radius. ALERT_DURATION_MS
-              (500 ms) of pure visual telegraph: a red "!" rises
-              30 → 35 px above the enemy and fades out the last
-              50 ms, the body squashes to 0.85× for 100 ms, the
-              outer-ring glow boosts ×1.5 for 300 ms, and a single
-              triangle-synth ping fires (`audio.play.alert()`).
+              (500 ms) of pure visual telegraph. On the transition
+              one ring-burst fan-outs from the enemy (start radius
+              `hitboxRadius + 5` → end `hitboxRadius * 2 + 50`,
+              line width 4 → 1, glow 18, lifetime 400 ms) + 6
+              fast particles (200–350 px/s, 300 ms) + a single
+              triangle-synth ping (`audio.play.alert()`). For the
+              full 500 ms window the entire body **jitters** —
+              `applyAwarenessJitter` adds a per-frame
+              `ctx.translate(jx, jy)` whose amplitude ramps 1 →
+              `ALERT_JITTER_INTENSITY_PEAK` (4 px) at
+              `ALERT_JITTER_PEAK_TIME` (60 % of the window) then
+              eases to `ALERT_JITTER_END_INTENSITY` (0.5 px) by
+              the end. Detection ring stays steady through the
+              jitter (it lives outside the enemy's transform).
   aggro     — combat behavior runs as before. Sticky — once aggro,
               the enemy stays aggro for the rest of the run; a
               `radius * 1.5` regress was considered and skipped to
@@ -448,12 +457,15 @@ crosses its `detectionRadius`. The state machine has three steps:
 
 `updateEnemyAwareness` ticks the state machine each frame in the
 rooms loop (before `enemy.update`, so combat sees the freshest
-state). `drawEnemyDetection` paints the ring under every live
-enemy with `(detectionRadius * 1.3 - dist) / (detectionRadius *
-0.5)` clamped visibility, capped at α 0.3 — the player only sees
-it when close. Color shifts slate → orange → enemy.color across
-the three states. `drawAwarenessExclamation` renders the "!" in
-world coords above the enemy during alerting.
+state) and accepts an optional `AwarenessTriggerCtx` (rings +
+particles) so the burst on idle → alerting can drop straight
+into the room's lists. `drawEnemyDetection` paints the dashed
+detection ring with `(detectionRadius * 1.3 - dist) /
+(detectionRadius * 0.5)` clamped visibility, capped at α 0.3.
+Color shifts slate → orange → enemy.color across the three
+states. `applyAwarenessJitter` is called from each enemy's
+`draw` so the body shake stays sealed inside the enemy's own
+transform stack.
 
 Detection radii live in `config.ts`: Turret 280, Watcher 350
 (sniper sight line), Hunter 220 (he gets in close fast).

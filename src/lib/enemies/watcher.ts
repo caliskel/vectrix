@@ -18,11 +18,7 @@ import {
 } from "../config";
 import { drawNeon } from "../neon";
 import { resolveEntityWallCollisions } from "../walls";
-import {
-  awarenessGlowMul,
-  awarenessSquashScale,
-  initAwareness,
-} from "./awareness";
+import { applyAwarenessJitter, initAwareness } from "./awareness";
 import { applyEnemyKnockback, drawEnemyHitFlash } from "./fx";
 import type {
   AwarenessState,
@@ -95,8 +91,6 @@ export class Watcher implements Enemy {
   awarenessState: AwarenessState = "idle";
   detectionRadius = ENEMY_WATCHER_DETECTION;
   alertTimer = 0;
-  awarenessSquashTime = 0;
-  awarenessGlowBoost = 0;
   // Idle posture — Watcher drifts in a slow figure-eight around its
   // home position while sleeping, and the pupil wanders idle-look
   // style instead of tracking the player.
@@ -365,15 +359,8 @@ export class Watcher implements Enemy {
     }
 
     ctx.save();
+    applyAwarenessJitter(ctx, this);
     applyEnemyKnockback(ctx, this);
-
-    const awarenessSquash = awarenessSquashScale(this);
-    if (awarenessSquash !== 1) {
-      ctx.translate(this.x, this.y);
-      ctx.scale(awarenessSquash, awarenessSquash);
-      ctx.translate(-this.x, -this.y);
-    }
-    const glowMul = awarenessGlowMul(this);
 
     // Brake squash transform — held at full squash for the squash phase,
     // then linearly recovers toward 1.0 over the recovery phase. Axis
@@ -412,8 +399,8 @@ export class Watcher implements Enemy {
         ctx.stroke();
       },
       "#f8fafc",
-      8 * glowMul,
-      3 * glowMul,
+      8,
+      3,
     );
 
     // 2-4. Iris stack — three opaque solid discs. The illusion of depth

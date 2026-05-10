@@ -114,13 +114,7 @@ export interface Enemy {
    *  the idle → alerting transition. Per archetype default lives in
    *  config.ts (`ENEMY_TURRET_DETECTION` etc). */
   detectionRadius: number;
-  /** Seconds elapsed in the alerting phase. Drives "!" rise and
-   *  drives the timed transition to aggro. */
+  /** Seconds elapsed in the alerting phase. Drives the jitter ramp
+   *  and the timed transition to aggro. */
   alertTimer: number;
-  /** Seconds remaining of the brief 0.85× squash that plays when the
-   *  enemy first notices the player. */
-  awarenessSquashTime: number;
-  /** Seconds remaining of the post-alert glow boost — outer-ring
-   *  blur is multiplied by AWARENESS_GLOW_BOOST_MUL while > 0. */
-  awarenessGlowBoost: number;
 }

@@ -2,11 +2,7 @@ import { makeBullet } from "../bullets";
 import { ENEMY_TURRET_DETECTION } from "../config";
 import { drawNeon } from "../neon";
 import { PALETTE } from "../palette";
-import {
-  awarenessGlowMul,
-  awarenessSquashScale,
-  initAwareness,
-} from "./awareness";
+import { applyAwarenessJitter, initAwareness } from "./awareness";
 import { applyEnemyKnockback, drawEnemyHitFlash } from "./fx";
 import type { AwarenessState, Enemy, EnemyContext, EnemyType } from "./types";
 
@@ -38,8 +34,6 @@ export class Turret implements Enemy {
   awarenessState: AwarenessState = "idle";
   detectionRadius = ENEMY_TURRET_DETECTION;
   alertTimer = 0;
-  awarenessSquashTime = 0;
-  awarenessGlowBoost = 0;
   private aimAngle: number;
   private idleTargetAngle: number;
   private idleRetargetTimer: number;
@@ -136,16 +130,8 @@ export class Turret implements Enemy {
     }
     const col = PALETTE.playerDash;
     ctx.save();
+    applyAwarenessJitter(ctx, this);
     applyEnemyKnockback(ctx, this);
-
-    const awarenessSquash = awarenessSquashScale(this);
-    if (awarenessSquash !== 1) {
-      ctx.translate(this.x, this.y);
-      ctx.scale(awarenessSquash, awarenessSquash);
-      ctx.translate(-this.x, -this.y);
-    }
-
-    const glowMul = awarenessGlowMul(this);
 
     // body: double-stroke ring
     drawNeon(
@@ -162,8 +148,8 @@ export class Turret implements Enemy {
         ctx.stroke();
       },
       col,
-      22 * glowMul,
-      8 * glowMul,
+      22,
+      8,
     );
 
     // core

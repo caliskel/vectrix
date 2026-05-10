@@ -32,7 +32,6 @@ import {
 } from "../lib/config";
 import { drawDoor, playerOverlapsDoor } from "../lib/door";
 import {
-  drawAwarenessExclamation,
   drawEnemyDetection,
   updateEnemyAwareness,
 } from "../lib/enemies/awareness";
@@ -1054,9 +1053,12 @@ export function start(canvas: HTMLCanvasElement): void {
       walls: currentRoom.walls,
     };
     // Awareness ramps run BEFORE enemy update so combat ticks see the
-    // freshly-promoted aggro state immediately.
+    // freshly-promoted aggro state immediately. Trigger ctx lets the
+    // awareness module spawn the alert ring + particle burst directly
+    // into the per-room lists.
+    const awarenessTrigger = { particles, rings };
     for (const e of currentRoom.enemies) {
-      updateEnemyAwareness(e, player.x, player.y, dt);
+      updateEnemyAwareness(e, player.x, player.y, dt, awarenessTrigger);
     }
     for (const e of currentRoom.enemies) e.update(enemyCtx);
 
@@ -1381,8 +1383,6 @@ export function start(canvas: HTMLCanvasElement): void {
     // enemies
     for (const e of currentRoom.enemies) e.draw(ctx);
 
-    // alerting "!" sits above the enemy body
-    for (const e of currentRoom.enemies) drawAwarenessExclamation(ctx, e);
 
     // bullets (trail then live)
     const bSize = settings.bullets.size;
@@ -1473,10 +1473,17 @@ export function start(canvas: HTMLCanvasElement): void {
       const t = ring.age / ring.lifetime;
       const r = ring.startR + (ring.endR - ring.startR) * t;
       const alpha = 1 - t;
+      const lwStart = ring.startLineWidth ?? 2;
+      const lwEnd = ring.endLineWidth ?? lwStart;
+      const lineWidth = lwStart + (lwEnd - lwStart) * t;
       ctx.save();
       ctx.globalAlpha = Math.max(0, alpha);
       ctx.strokeStyle = ring.color;
-      ctx.lineWidth = 2;
+      ctx.lineWidth = lineWidth;
+      if (ring.glowBlur) {
+        ctx.shadowColor = ring.color;
+        ctx.shadowBlur = ring.glowBlur;
+      }
       ctx.beginPath();
       ctx.arc(ring.x, ring.y, r, 0, Math.PI * 2);
       ctx.stroke();

@@ -31,6 +31,12 @@ export type Ring = {
   startR: number;
   endR: number;
   color: string;
+  /** Optional linear-tapered stroke width over the ring's lifetime.
+   *  When unset the renderer falls back to the historic 2 px stroke. */
+  startLineWidth?: number;
+  endLineWidth?: number;
+  /** Optional shadowBlur for a glow that fades with alpha. */
+  glowBlur?: number;
 };
 
 export function addFloatingText(
@@ -66,6 +72,9 @@ export function addRing(
     endR?: number;
     color?: string;
     lifetime?: number;
+    startLineWidth?: number;
+    endLineWidth?: number;
+    glowBlur?: number;
   } = {},
 ): void {
   list.push({
@@ -76,5 +85,8 @@ export function addRing(
     startR: opts.startR ?? 8,
     endR: opts.endR ?? 32,
     color: opts.color ?? "#facc15",
+    startLineWidth: opts.startLineWidth,
+    endLineWidth: opts.endLineWidth,
+    glowBlur: opts.glowBlur,
   });
 }
