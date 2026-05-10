@@ -9,7 +9,7 @@ import type { AwarenessState, Enemy, EnemyContext, EnemyType } from "./types";
 const TURRET_RADIUS = 25;
 const TURRET_BARREL_LEN = 28;
 const TURRET_BARREL_WIDTH = 12;
-const SHOOT_INTERVAL = 1.4;
+const SHOOT_INTERVAL = 1.0;
 const TELEGRAPH_WINDOW = 0.3;
 const AIM_LERP_RATE = 10; // frame-rate-independent (1 - exp(-rate*dt))
 const IDLE_AIM_LERP_RATE = 1.5; // slower drift while sleeping
