@@ -48,7 +48,13 @@ import {
   drawEnemyDetection,
   updateEnemyAwareness,
 } from "../lib/enemies/awareness";
-import { Sentinel, type SentinelState } from "../lib/enemies/sentinel";
+import {
+  Sentinel,
+  type SentinelState,
+  SENTINEL_HP_MAX_EXPORT as SENTINEL_HP_MAX,
+  SENTINEL_PHASE_HP_BOUNDARY_1_TO_2,
+  SENTINEL_PHASE_HP_BOUNDARY_2_TO_3,
+} from "../lib/enemies/sentinel";
 import type { Enemy, Laser } from "../lib/enemies/types";
 import {
   emitBulletHit,
@@ -108,7 +114,10 @@ const HIT_VIGNETTE = 0.2;
 const TURRET_KILL_SCORE = 500;
 const WATCHER_KILL_SCORE = 800;
 const HUNTER_KILL_SCORE = 600;
-const SENTINEL_KILL_SCORE = 5000;
+// HP doubled (30 → 60) means the fight is ~2× as long; the kill
+// reward scales 3× to compensate, since the player also has to
+// keep their multiplier alive across more attacks.
+const SENTINEL_KILL_SCORE = 15000;
 // HUD layout — drawHUD lays out two columns (ROOM/SCORE labels +
 // values) starting at y=18 and ending around y=104 with the hearts
 // row. HUD_BOTTOM_Y matches the bottom of the hearts/score block;
@@ -1990,22 +1999,29 @@ export function start(canvas: HTMLCanvasElement): void {
 
       ctx.fillStyle = "rgba(255, 45, 85, 0.2)";
       ctx.fillRect(barX, barY, barW, barH);
-      const t = Math.max(0, Math.min(1, sentinel.hp / 30));
+      const t = Math.max(0, Math.min(1, sentinel.hp / SENTINEL_HP_MAX));
       ctx.fillStyle = PALETTE.bullet;
       ctx.fillRect(barX, barY, barW * t, barH);
       ctx.strokeStyle = PALETTE.bullet;
       ctx.lineWidth = 1;
       ctx.strokeRect(barX + 0.5, barY + 0.5, barW - 1, barH - 1);
 
-      // Phase boundary markers — thin vertical ticks at HP 20 + 10
-      // (i.e. 2/3 + 1/3 of bar width). Each flashes white for
+      // Phase boundary markers — thin vertical ticks at the
+      // boundaries (HP 40 + 20 with the bumped HP_MAX, i.e.
+      // 2/3 + 1/3 of the bar). Each flashes white for
       // PHASE_TRANSITION_HP_MARKER_FLASH_SEC when the corresponding
       // phase transition climax fires; sentinel exposes the
       // countdown timers and rooms-game just lerps the colour.
       const baseMarkerAlpha = 0.4;
       const markerThresholds: { fraction: number; flash: number }[] = [
-        { fraction: 20 / 30, flash: sentinel.phaseMarkerFlashTimer1to2 },
-        { fraction: 10 / 30, flash: sentinel.phaseMarkerFlashTimer2to3 },
+        {
+          fraction: SENTINEL_PHASE_HP_BOUNDARY_1_TO_2 / SENTINEL_HP_MAX,
+          flash: sentinel.phaseMarkerFlashTimer1to2,
+        },
+        {
+          fraction: SENTINEL_PHASE_HP_BOUNDARY_2_TO_3 / SENTINEL_HP_MAX,
+          flash: sentinel.phaseMarkerFlashTimer2to3,
+        },
       ];
       const PHASE_FLASH_SEC = 0.3;
       ctx.lineWidth = 2;
@@ -2023,7 +2039,11 @@ export function start(canvas: HTMLCanvasElement): void {
       ctx.font = "500 11px ui-monospace, SFMono-Regular, Menlo, monospace";
       ctx.fillStyle = "#ffffff";
       ctx.textAlign = "right";
-      ctx.fillText(`${sentinel.hp} / 30`, barX + barW, labelY);
+      ctx.fillText(
+        `${sentinel.hp} / ${SENTINEL_HP_MAX}`,
+        barX + barW,
+        labelY,
+      );
       ctx.restore();
     }
     // Sentinel-owned screen overlays — fade rect, "SENTINEL" /

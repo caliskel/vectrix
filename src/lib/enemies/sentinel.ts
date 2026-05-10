@@ -21,7 +21,11 @@ import type {
 const SENTINEL_COLOR = "#ff3344";
 const VICTORY_COLOR = "#22ff88";
 const FADE_OVERLAY_COLOR = "rgba(0, 0, 0, ALPHA)"; // ALPHA replaced at use
-const SENTINEL_HP_MAX = 30;
+// HP doubled (was 30) to extend the fight to 2–4 minutes once the
+// body became invulnerable outside Ring Burst — eye-hit is now the
+// only damage path, and HP=60 / 3-per-eye-hit lands at ~10–20
+// successful hits (one or two per RB) for a kill.
+const SENTINEL_HP_MAX = 60;
 const SENTINEL_HITBOX_RADIUS = 110;
 // Contact-damage radius lines up with the outermost shell so the
 // "you're inside the boss" cue is visually consistent. Same value
@@ -325,6 +329,21 @@ const RB_TELEGRAPH_GLOW_BOOST = 1.6;
 // Eye behaviour during vulnerable.
 const RB_EYE_HITBOX_RADIUS = 20;
 const RB_EYE_HIT_DAMAGE = 3;
+// Body whiff — short grey FX spawned when the player dashes through
+// the body hitbox while the body is invulnerable (i.e., outside
+// Ring Burst's vulnerable window). Pure visual cue: "this is not a
+// damage path; wait for the eye." rgba color carries 0.6 starting
+// alpha so the ring's natural age-fade lands at 0.6 → 0.
+const BODY_WHIFF_RING_COLOR = "rgba(138, 138, 138, 0.6)";
+const BODY_WHIFF_RING_LIFETIME_SEC = 0.2;
+const BODY_WHIFF_RING_R_START = 8;
+const BODY_WHIFF_RING_R_END = 24;
+const BODY_WHIFF_RING_LW_START = 2;
+const BODY_WHIFF_RING_LW_END = 0.5;
+const BODY_WHIFF_PARTICLE_COLOR = "#aaaaaa";
+const BODY_WHIFF_PARTICLE_COUNT = 4;
+const BODY_WHIFF_PARTICLE_SPEED = 150;
+const BODY_WHIFF_PARTICLE_LIFETIME_SEC = 0.25;
 // Eye breath in vulnerable: scale 0.90 ↔ 1.18 (±0.14 around 1.04).
 // Bigger amplitude than the idle eye breath so the open eye reads
 // as actively pulsing.
@@ -411,8 +430,11 @@ const RB_EYE_HIT_SHAKE_SEC = 0.2;
 // (those stay readable). New attacks unlock per phase: sweep laser
 // in phase 2, charge + minion spawns in phase 3 (placeholder for
 // the next iteration).
-const PHASE_HP_BOUNDARY_1_TO_2 = 20;
-const PHASE_HP_BOUNDARY_2_TO_3 = 10;
+// Phase boundaries scale with the bumped HP — phase 1 is HP 60→40,
+// phase 2 is HP 40→20, phase 3 is HP 20→0. Same 1/3-of-HP-per-phase
+// proportion as the old 30 → 20 → 10 → 0 split.
+const PHASE_HP_BOUNDARY_1_TO_2 = 40;
+const PHASE_HP_BOUNDARY_2_TO_3 = 20;
 const PHASE_CADENCE: Record<1 | 2 | 3, number> = {
   1: 1.0, // baseline
   2: 0.8,
@@ -905,8 +927,19 @@ export class Sentinel implements Enemy {
   // hand (tryDashDamage doesn't get ctxRoom in its signature).
   private pendingEyeHit = false;
 
+  // Set when the player dashes through the (solid) body without
+  // a valid eye hit — we owe them a whiff effect to telegraph
+  // "body is invulnerable, wait for the eye." Same deferral
+  // pattern as pendingEyeHit so the FX have ctxRoom.
+  private pendingBodyWhiff: { x: number; y: number } | null = null;
+
   // damage / death
   private dashIdAlreadyDamaged = -1;
+  // Whiffs dedupe per dash too; using a separate id keeps the
+  // damage / whiff dedups independent (a dash that whiffs early
+  // shouldn't lock out a later eye-hit if vulnerable opens, and
+  // vice versa).
+  private dashIdAlreadyWhiffed = -1;
 
   // intro one-shots
   private materializationSpawned = false;
@@ -1065,6 +1098,14 @@ export class Sentinel implements Enemy {
     // Marker flash timers always decay — they're transient HUD
     // visuals, independent of attack state.
     this.tickPhaseMarkerTimers(dt);
+    // Drain any pending body-whiff request from the previous frame's
+    // tryDashDamage. (Deferred so the FX have ctxRoom; same pattern
+    // as pendingEyeHit.) Drains regardless of phase, so a whiff that
+    // landed right before a phase transition still pops visually.
+    if (this.pendingBodyWhiff) {
+      this.spawnBodyWhiff(ctxRoom, this.pendingBodyWhiff);
+      this.pendingBodyWhiff = null;
+    }
     // Phase-transition cinematic preempts everything: sim freezes,
     // movement freezes, damage rejected, attacks paused. The
     // cinematic ticker drives the visuals + climax fire + end and
@@ -2295,6 +2336,7 @@ export class Sentinel implements Enemy {
     this.bodyOpacity = 1;
     this.eyeHitstopTimer = 0;
     this.pendingEyeHit = false;
+    this.pendingBodyWhiff = null;
     this.timeScale = 1;
     // Drop any pending movement-resume blend so the dying cinematic
     // owns the boss's position without a phantom lerp toward the
@@ -3504,6 +3546,45 @@ export class Sentinel implements Enemy {
     }
   }
 
+  /** "Whiff" feedback when a dash passes through the (solid)
+   *  body without landing damage — short grey ring + a few grey
+   *  particles + (silent for now; the audio module doesn't expose a
+   *  pitched + attenuated `bulletBreak` variant yet). Visual cue
+   *  that this is invulnerable, not bugged. */
+  private spawnBodyWhiff(
+    ctxRoom: EnemyContext,
+    pos: { x: number; y: number },
+  ): void {
+    ctxRoom.rings.push({
+      x: pos.x,
+      y: pos.y,
+      age: 0,
+      lifetime: BODY_WHIFF_RING_LIFETIME_SEC,
+      startR: BODY_WHIFF_RING_R_START,
+      endR: BODY_WHIFF_RING_R_END,
+      color: BODY_WHIFF_RING_COLOR,
+      startLineWidth: BODY_WHIFF_RING_LW_START,
+      endLineWidth: BODY_WHIFF_RING_LW_END,
+      glowBlur: 0,
+    });
+    for (let i = 0; i < BODY_WHIFF_PARTICLE_COUNT; i++) {
+      const a = (i / BODY_WHIFF_PARTICLE_COUNT) * Math.PI * 2;
+      ctxRoom.particles.push({
+        x: pos.x,
+        y: pos.y,
+        vx: Math.cos(a) * BODY_WHIFF_PARTICLE_SPEED,
+        vy: Math.sin(a) * BODY_WHIFF_PARTICLE_SPEED,
+        initialSize: 2,
+        color: BODY_WHIFF_PARTICLE_COLOR,
+        age: 0,
+        lifetime: BODY_WHIFF_PARTICLE_LIFETIME_SEC,
+        glowStrong: 4,
+        glowSoft: 2,
+        drag: 0.9,
+      });
+    }
+  }
+
   overlapsPlayer(px: number, py: number, half: number): boolean {
     // Contact damage is suppressed during cinematic phases AND
     // during the ghosted Ring Burst phases (detach / vulnerable /
@@ -3524,12 +3605,17 @@ export class Sentinel implements Enemy {
     half: number,
   ): boolean {
     if (this.state !== "idle" && this.state !== "attacking") return false;
-    if (dashId === this.dashIdAlreadyDamaged) return false;
-    // Ring Burst vulnerable: only the eye is a valid target. Body
-    // is intangible, ring damage is contact-only (handled in
-    // updateCombat). Eye hit deals RB_EYE_HIT_DAMAGE and queues the
-    // heavy feedback for the next update tick.
+    // Phase-transition cinematic also blocks every interaction
+    // (matches takeDamage's gate so the boss is fully invulnerable
+    // through the 2 s window).
+    if (this.phaseTransition) return false;
+    // Ring Burst vulnerable: the eye is the *only* damage path
+    // anywhere in the fight. Body is intangible during this
+    // phase (ghosted), and ring contact damage is handled
+    // separately in updateCombat. Eye hit deals RB_EYE_HIT_DAMAGE
+    // and queues the heavy feedback for the next update tick.
     if (this.ringBurstPhase === "vulnerable") {
+      if (dashId === this.dashIdAlreadyDamaged) return false;
       const dx = px - this.x;
       const dy = py - this.y;
       const r = RB_EYE_HITBOX_RADIUS + half;
@@ -3539,15 +3625,21 @@ export class Sentinel implements Enemy {
       this.pendingEyeHit = true;
       return true;
     }
-    // Body path — only when the body is solid.
-    if (!this.bodyDamageActive()) return false;
-    const dx = px - this.x;
-    const dy = py - this.y;
-    const r = SENTINEL_HITBOX_RADIUS + half;
-    if (dx * dx + dy * dy >= r * r) return false;
-    this.dashIdAlreadyDamaged = dashId;
-    this.takeDamage(1);
-    return true;
+    // Body whiff — outside the ghosted RB phases the body is
+    // SOLID but INVULNERABLE: a dash through it deals zero
+    // damage and triggers a small grey "whiff" effect so the
+    // player learns the eye is the only target. bodyDamageActive
+    // gates this (skips detach / vulnerable / reassemble).
+    if (this.bodyDamageActive() && dashId !== this.dashIdAlreadyWhiffed) {
+      const dx = px - this.x;
+      const dy = py - this.y;
+      const r = SENTINEL_HITBOX_RADIUS + half;
+      if (dx * dx + dy * dy < r * r) {
+        this.dashIdAlreadyWhiffed = dashId;
+        this.pendingBodyWhiff = { x: px, y: py };
+      }
+    }
+    return false;
   }
 }
 
@@ -3622,3 +3714,5 @@ function rayDistToArenaEdge(
 }
 
 export const SENTINEL_HP_MAX_EXPORT = SENTINEL_HP_MAX;
+export const SENTINEL_PHASE_HP_BOUNDARY_1_TO_2 = PHASE_HP_BOUNDARY_1_TO_2;
+export const SENTINEL_PHASE_HP_BOUNDARY_2_TO_3 = PHASE_HP_BOUNDARY_2_TO_3;

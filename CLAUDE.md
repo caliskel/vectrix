@@ -648,12 +648,31 @@ transitions for score + Game Complete.
   only ticks in these two combat states (intro and dying both
   hold the boss still).
 
+  **HP & damage.** `SENTINEL_HP_MAX = 60`. **Body is invulnerable
+  in every phase except RB-`vulnerable`** — outside the open-eye
+  window dash-through deals zero damage (used to be 1 HP). The
+  only damage path is dashing the eye in vulnerable for 3 HP
+  (`RB_EYE_HIT_DAMAGE`), so a kill needs ~10–20 successful eye
+  hits, with one or two landing per RB cycle ⇒ a clean 2–4 minute
+  fight. A grey "whiff" effect (small ring + four particles)
+  spawns on dash-through-body outside vulnerable so the player
+  reads the invulnerability as intentional, not a glitch — fires
+  once per dash via `dashIdAlreadyWhiffed`, deferred through
+  `pendingBodyWhiff` so the FX have ctxRoom. Body **contact
+  damage** to the player still applies as normal (1 HP, gated by
+  i-frames) — that's punishment for collision, not a damage
+  path.
+
   **Phases.** `bossPhase` (1 / 2 / 3) tracks the active "act" of
-  the fight. Boundaries: phase 1 covers HP 30→20, phase 2 covers
-  HP 20→10, phase 3 covers HP 10→0. `PHASE_CADENCE` (1.0 / 0.80 /
-  0.65) multiplies every attack cooldown so phase 2 fires ~25 %
-  faster, phase 3 ~54 % faster — internal telegraph / fire /
-  recovery beats stay readable, only the gaps shrink. Each phase
+  the fight. Boundaries: phase 1 covers HP 60→40, phase 2 covers
+  HP 40→20, phase 3 covers HP 20→0 (boundaries
+  `SENTINEL_PHASE_HP_BOUNDARY_1_TO_2` /
+  `SENTINEL_PHASE_HP_BOUNDARY_2_TO_3` exported so rooms-game
+  draws the HP-bar phase markers from them). `PHASE_CADENCE`
+  (1.0 / 0.80 / 0.65) multiplies every attack cooldown so phase 2
+  fires ~25 % faster, phase 3 ~54 % faster — internal telegraph
+  / fire / recovery beats stay readable, only the gaps shrink.
+  Each phase
   also shifts the body / outer-ring / hex-stroke accent
   (`#ff3344` → `#ff5511` → `#ff2266`) and the mid-ring colour
   (`#ff5577` → `#ff7733` → `#ff5588`). The eye keeps `#ffaa22`
@@ -869,8 +888,8 @@ transitions for score + Game Complete.
   pops the Game Complete DOM overlay; runState flips to
   `"completed"`.
 
-Score (`+5000`) is credited on the `idle/attacking → dying`
-transition with a floating "+5000" tag at the boss centre. The
+Score (`+15000`) is credited on the `idle/attacking → dying`
+transition with a floating "+15000" tag at the boss centre. The
 standard `emitEnemyKill` / `destroyEnemy` ring + particle FX is
 skipped for the Sentinel because the dying state owns its own
 visuals — `tryDashDamage` only lands during idle/attacking, so
@@ -1240,12 +1259,15 @@ settings overlay on Esc / Tab.
 - **Sentinel boss** — Phases 1 + 2 ship: phase 1 has three attacks
   (radial / aimed / Ring Burst), phase 2 adds Sweep Laser, the
   cadence multiplier ramp + the 2 s phase-transition cinematic
-  are wired across both boundaries. Phase 3 (HP 10→0) is
+  are wired across both boundaries. Phase 3 (HP 20→0) is
   reachable and runs at 0.65× cadence, but its dedicated attacks
-  (charge + minion spawn) land in the next iteration. Boss audio
-  for sweep laser / phase transition / Ring Burst telegraph still
-  reuses `alert` / `hitHeavy` placeholders — proper layered
-  synths are next-up.
+  (charge + minion spawn) land in the next iteration. **Mechanic
+  engagement is now mandatory**: HP_MAX bumped 30 → 60 and the
+  body is invulnerable outside RB-`vulnerable`, so the eye in
+  Ring Burst is the *only* damage path (previously body could be
+  cheese-dashed for 1 HP each). Boss audio for sweep laser /
+  phase transition / Ring Burst telegraph still reuses `alert` /
+  `hitHeavy` placeholders — proper layered synths are next-up.
 - **Key icon visual polish** — the `drawKey` glyph is a diamond
   + stem; readable but a bit primitive. A more iconic key shape
   (or a proper sprite) would improve the HUD slot too.
