@@ -808,6 +808,13 @@ export function start(canvas: HTMLCanvasElement): void {
         lifetime: 0.7,
       },
     );
+    // Key drop happens here so it's independent of how the enemy
+    // died — dash-through, friendly fire, or any future kill source
+    // routes through destroyEnemy and gets the same drop. Only one
+    // key per room.
+    if (enemy.dropsKey && !currentKey) {
+      currentKey = createKey(enemy.x, enemy.y);
+    }
   }
 
   function aliveEnemies(): Enemy[] {
@@ -1328,11 +1335,6 @@ export function start(canvas: HTMLCanvasElement): void {
           if (e.isDead()) {
             emitEnemyKill(makeImpactCtx(), e);
             destroyEnemy(e);
-            // Drop the room's key at the kill site if this enemy
-            // was flagged. Only one key per room.
-            if (e.dropsKey && !currentKey) {
-              currentKey = createKey(e.x, e.y);
-            }
           } else {
             emitEnemyDamage(makeImpactCtx(), e, player.x, player.y);
           }
