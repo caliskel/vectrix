@@ -122,10 +122,6 @@
         color: var(--player-yellow);
         text-shadow: 0 0 12px rgba(255, 214, 10, 0.5);
       }
-      .mode--about .label {
-        color: var(--text);
-        text-shadow: none;
-      }
       .version {
         position: fixed;
         bottom: 14px;
@@ -283,22 +279,6 @@
         color: #ffffff;
       }
 
-      .about-frame {
-        max-width: 480px;
-      }
-      .about-text {
-        white-space: pre-wrap;
-        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-        font-size: 13px;
-        line-height: 1.7;
-        text-align: center;
-        color: var(--text);
-        margin: 6px 0 22px;
-      }
-      .about-actions {
-        display: flex;
-        justify-content: center;
-      }
     </style>
   </head>
   <body>
@@ -320,10 +300,6 @@
       <button type="button" class="mode mode--player" data-overlay="player">
         <div class="label">PLAYER</div>
         <div class="desc">Customize your character</div>
-      </button>
-      <button type="button" class="mode mode--about" data-overlay="about">
-        <div class="label">ABOUT</div>
-        <div class="desc">Game info &amp; controls</div>
       </button>
     </nav>
     <div class="version">v0.0.0</div>
@@ -375,28 +351,6 @@
               <button type="button" class="btn btn--accent" id="profile-save">SAVE &amp; CLOSE</button>
             </div>
           </div>
-        </div>
-      </div>
-    </div>
-
-    <div class="overlay" id="overlay-about" hidden>
-      <div class="overlay-frame about-frame">
-        <button class="overlay-close" data-close type="button" aria-label="Close">×</button>
-        <pre class="about-text">DASH
-arcade prototype
-
-A bullet-hell about style and movement.
-Inspired by Just Shapes &amp; Beats.
-
-CONTROLS:
-WASD     — Move
-Shift    — Walk (slower, precise)
-X        — Dash (with i-frames)
-ESC/Tab  — Settings (in-game)
-
-made with claude code</pre>
-        <div class="about-actions">
-          <button type="button" class="btn" data-close>CLOSE</button>
         </div>
       </div>
     </div>

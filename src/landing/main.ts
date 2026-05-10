@@ -62,7 +62,7 @@ window.addEventListener("focus", applyTutorialState);
 window.addEventListener("pageshow", applyTutorialState);
 window.addEventListener("storage", applyTutorialState);
 
-function setOverlay(name: "player" | "about" | null) {
+function setOverlay(name: "player" | null) {
   if (activeOverlay) {
     if (activeOverlay.id === "overlay-player") stopPreview();
     activeOverlay.setAttribute("hidden", "");
@@ -79,7 +79,7 @@ function setOverlay(name: "player" | "about" | null) {
 document.querySelectorAll<HTMLElement>("[data-overlay]").forEach((el) => {
   el.addEventListener("click", (e) => {
     e.preventDefault();
-    const target = el.dataset.overlay as "player" | "about" | undefined;
+    const target = el.dataset.overlay as "player" | undefined;
     if (target) setOverlay(target);
   });
 });
