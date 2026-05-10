@@ -72,8 +72,9 @@ import {
   resolvePlayerWallCollisions,
   type Wall,
 } from "../lib/walls";
-import { buildRoom4 } from "./room4";
-import { buildRoom5 } from "./room5";
+import { buildRoom1 } from "./room1";
+import { buildRoom2 } from "./room2";
+import { buildRoom3 } from "./room3";
 import type { Room } from "../lib/room";
 
 // Canonical letterbox viewport (constant across all rooms; camera-
@@ -393,8 +394,9 @@ export function start(canvas: HTMLCanvasElement): void {
   let keyHeld = false;
 
   const rooms = new Map<string, Room>();
-  rooms.set("room4", buildRoom4());
-  rooms.set("room5", buildRoom5());
+  rooms.set("room1", buildRoom1());
+  rooms.set("room2", buildRoom2());
+  rooms.set("room3", buildRoom3());
 
   const state: GameState = {
     runState: "playing",
@@ -415,7 +417,7 @@ export function start(canvas: HTMLCanvasElement): void {
     failedSnapshot: null,
   };
 
-  let currentRoom: Room = rooms.get("room4")!;
+  let currentRoom: Room = rooms.get("room1")!;
 
   // overlay button bounds (CSS pixel space)
   let tryAgainBounds: Bounds | null = null;
@@ -437,14 +439,15 @@ export function start(canvas: HTMLCanvasElement): void {
   snapCameraToRoom();
 
   function rebuildAllRooms() {
-    rooms.set("room4", buildRoom4());
-    rooms.set("room5", buildRoom5());
+    rooms.set("room1", buildRoom1());
+    rooms.set("room2", buildRoom2());
+    rooms.set("room3", buildRoom3());
   }
 
   function restartRun() {
     audio.silence();
     rebuildAllRooms();
-    currentRoom = rooms.get("room4")!;
+    currentRoom = rooms.get("room1")!;
     state.runState = "playing";
     state.hp = 3;
     state.score = 0;
@@ -1681,8 +1684,14 @@ export function start(canvas: HTMLCanvasElement): void {
 
     ctx.font = "600 22px ui-monospace, SFMono-Regular, Menlo, monospace";
     ctx.fillStyle = "#ffffff";
-    // Campaign rooms: room4 → display "1", room5 placeholder → "2".
-    const roomNum = currentRoom.id === "room5" ? 2 : 1;
+    // Campaign rooms: room1 → "1 / 2", room2 → "2 / 2". The room3
+    // placeholder is past the campaign so the counter holds at 2 / 2.
+    const roomNum =
+      currentRoom.id === "room1"
+        ? 1
+        : currentRoom.id === "room2"
+          ? 2
+          : ROOM_TOTAL;
     ctx.fillText(`${roomNum} / ${ROOM_TOTAL}`, colA, y0 + 14);
 
     const alive = aliveEnemies().length;

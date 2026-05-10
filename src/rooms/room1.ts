@@ -15,7 +15,7 @@ const DOOR_H = 120;
 // the follow camera. Player walks the room left-to-right past three
 // turrets and a Watcher; the third turret drops a key, Door at the
 // far right requires the key + all enemies dead.
-export function buildRoom4(): Room {
+export function buildRoom1(): Room {
   const gapTop = DOOR_CENTER_Y - DOOR_H / 2;
   const gapBottom = DOOR_CENTER_Y + DOOR_H / 2;
   const walls: Wall[] = [
@@ -46,7 +46,7 @@ export function buildRoom4(): Room {
   const watcher = new Watcher(3300, 300);
 
   return {
-    id: "room4",
+    id: "room1",
     walls,
     enemies: [turret1, turret2, turret3, watcher],
     door: makeDoor(
@@ -57,7 +57,7 @@ export function buildRoom4(): Room {
       "closed",
       true, // requiresKey
     ),
-    nextRoomId: "room5",
+    nextRoomId: "room2",
     spawnX: 200,
     spawnY: DOOR_CENTER_Y,
     width: ROOM_W,

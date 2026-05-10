@@ -53,9 +53,9 @@ src/
   rooms/
     main.ts           — entry; locates #app and calls start()
     rooms-game.ts     — campaign engine; locks behind the tutorial and
-                        currently runs Room 4 (corridor) + Room 5
-                        placeholder
-    room4.ts / room5.ts
+                        currently runs Room 1 (corridor) + Room 2
+                        (arena) + Room 3 placeholder
+    room1.ts / room2.ts / room3.ts
   tutorial/
     main.ts           — entry for /tutorial.html
     tutorial-game.ts  — fork of rooms-game with tutorial-specific HUD,
@@ -471,15 +471,17 @@ instead of advancing.
 
 ## Campaign rooms (`rooms.html`)
 
-The campaign now starts at **Room 4 (corridor)**, displayed in
-the HUD as `ROOM 1 / 2`. Room 5 is the next-up placeholder
-("coming soon" message). On launch the engine checks
+The campaign now starts at **Room 1 (corridor)**, displayed in
+the HUD as `ROOM 1 / 2`. Room 2 is the arena. Room 3 is the
+next-up placeholder past the campaign ("coming soon" message);
+the HUD counter holds at `2 / 2` once the player steps into it.
+On launch the engine checks
 `localStorage["dash-proto:tutorial-completed"]` — if absent,
 it renders a "STORY MODE LOCKED" full-page overlay with a CTA
 that links straight to `/tutorial.html`, and never starts the
 game loop.
 
-### Room 4
+### Room 1 — corridor
 
 Long horizontal corridor — first room that needs the follow camera.
 
@@ -499,13 +501,41 @@ Long horizontal corridor — first room that needs the follow camera.
   at the kill site. Door at (3570, 300) is `requiresKey: true`;
   it stays closed until both every enemy is dead AND the player
   picked up the key. On clear: door switches to "open" arrow,
-  +5 mult-up sting, → Room 5.
+  +5 mult-up sting, → Room 2.
 
-### Room 5 (placeholder)
+### Room 2 — arena with circular defence
 
-- Closed border, no enemies, no door, `message: "Room 5 — coming
-  soon"`. Verifies the Room 4 → Room 5 transition while real
-  Room 5 content is in flight.
+1400×900 open arena teaching tactical positioning + the friendly-
+fire mechanic on the Watcher's beam.
+
+- Four **Turret**s in the corners at (250, 250), (1150, 250),
+  (250, 650), (1150, 650). One **Watcher** in the centre at
+  (700, 450) with `dropsKey = true`. All enemies wake on their
+  own detection radii; the player can sneak up on individual
+  turrets if they take a wide path.
+- Four **column** walls (50×200) at (500, 350), (850, 350),
+  (500, 550), (850, 550). They're plain `Wall` entries so the
+  existing bullet-vs-wall filter and the laser raycast both clip
+  on them — pellets disappear on contact, the Watcher's beam
+  shortens to whichever column it crosses first.
+- The friendly-fire teaching: the `refreshLaserEndpoints` raycast
+  in `rooms-game.ts` already iterates every wall and picks the
+  nearest hit, and the friendly-fire scan uses
+  `pointSegmentDistanceSq` against the *clipped* segment — so a
+  turret behind a column relative to the Watcher is safe, but
+  positioning the player so the Watcher fires through an open
+  lane to a turret kills the turret for free.
+- The Watcher carries the key — its kill spawns a Key in the
+  centre. Door at (1385, 450) is `requiresKey: true` and stays
+  closed until the key is collected AND every enemy is dead.
+  `useCamera = true` (1400×900 ≥ 1200×800 viewport letterbox).
+  Spawn at (200, 450). On clear → Room 3 placeholder.
+
+### Room 3 (placeholder)
+
+- 1200×800 closed border, no enemies, no door,
+  `message: "Room 3 — coming soon"`. Confirms the Room 2 → Room
+  3 transition while real Room 3 content is in flight.
 
 ## Enemy awareness system (`lib/enemies/awareness.ts`)
 
@@ -554,7 +584,7 @@ across the whole game — `ENEMY_TURRET_DETECTION = 400`,
 `ENEMY_WATCHER_DETECTION = 500`, `ENEMY_HUNTER_DETECTION = 350`.
 No per-instance override mechanism on purpose: the player learns
 the wake distance once and it carries across every room. Values
-are tuned against the longest-range room (the Room 4 corridor)
+are tuned against the longest-range room (the Room 1 corridor)
 so corner enemies still wake before the player is on top of
 them. Resets implicitly on `restartRun` because rooms are
 rebuilt with fresh enemy instances; on room transitions the
@@ -815,9 +845,9 @@ settings overlay on Esc / Tab.
 
 ### TODO (rooms direction)
 
-- **Room 5** — currently a "coming soon" placeholder; needs real
-  content (likely the next mechanic introduction or a small
-  multi-enemy encounter).
+- **Room 3** — currently a "coming soon" placeholder past the
+  arena; needs real content (likely the next mechanic
+  introduction or a multi-encounter sequence).
 - **Key icon visual polish** — the `drawKey` glyph is a diamond
   + stem; readable but a bit primitive. A more iconic key shape
   (or a proper sprite) would improve the HUD slot too.
