@@ -18,6 +18,7 @@ import {
 import { drawDoor, playerOverlapsDoor } from "../lib/door";
 import type { Enemy, Laser } from "../lib/enemies/types";
 import {
+  emitBulletHit,
   emitEnemyDamage,
   emitEnemyKill,
   type ImpactContext,
@@ -1061,6 +1062,25 @@ export function start(canvas: HTMLCanvasElement): void {
         ) {
           takeHit();
           break;
+        }
+      }
+    }
+
+    // dash-through bullets — LIGHT-tier impact feedback only (no
+    // scoring in rooms; the satisfaction is the cue itself). Dedup
+    // per dash via dashedThroughId so a single bullet can't fire the
+    // tic twice as it crosses the player.
+    if (player.dashIframeTime > 0) {
+      const ph = settings.player.size / 2;
+      const bh = settings.bullets.size / 2;
+      for (const b of bullets) {
+        if (b.dashedThroughId === state.dashId) continue;
+        if (
+          Math.abs(b.x - player.x) < ph + bh &&
+          Math.abs(b.y - player.y) < ph + bh
+        ) {
+          b.dashedThroughId = state.dashId;
+          emitBulletHit(makeImpactCtx(), b.x, b.y, settings.bullets.color);
         }
       }
     }
