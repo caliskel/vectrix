@@ -614,23 +614,26 @@ Inertial chaser — fast, fragile, can't turn instantly.
   right after `takeHit()` in the contact loop.
 - Death: orange ring, 16 orange particles 300–450 px/s,
   `bulletBreak` cue, `console.log("Hunter destroyed")`.
-- **Idle behavior** — while `awarenessState === "idle"` the Hunter
-  cycles a dart-and-pause pattern around a latched
-  `idleHomeX/Y`. Phase A (`darting`, 400–700 ms) accelerates
-  toward `idleTarget` using the regular inertia model but capped
-  at `HUNTER_IDLE_MAX_SPEED_FACTOR = 0.35` of full chase speed;
-  Phase B (`pausing`, 300–900 ms) damps via
-  `HUNTER_IDLE_PAUSE_VELOCITY_DAMPING = 0.92` per 60 fps frame
-  and once nearly stopped runs a tiny ±8 px micro-drift around
-  the pause anchor so the body looks like it's hovering, not
-  frozen. Each new dart picks a tier-weighted distance from home
-  (50 % near 60–150 px, 35 % mid 150–280 px, 15 % far 280–400
-  px) at a random angle, retrying up to four times if the target
-  buries inside a wall AABB. If the Hunter ever drifts more
-  than 350 px from home it forces the next target back to home.
-  Visually: trail emission is gated to aggro only, glow drops to
-  `HUNTER_IDLE_GLOW_BLUR = 10`, and speed lines are hidden under
-  60 px/s — the chase visuals stay reserved for engagement.
+- **Idle behavior** — while `awarenessState === "idle"` the
+  Hunter swims a slow parametric curve around a latched
+  `idleHomeX/Y`. Each Hunter picks one of three path types at
+  construction (`figure8` Lissajous lemniscate, `oval` 1.0:0.55
+  ellipse, plain `circle`), a random size in 50–90 px, and a
+  random rotation 0..2π — so a roomful reads as a flock of fish
+  in distinct curves rather than identical orbits. Phase advances
+  at `HUNTER_IDLE_PATH_SPEED = 0.4 rad/s` (full loop ≈ 15 s);
+  the body lerps toward the curve point with
+  `HUNTER_IDLE_LERP_FACTOR = 0.08`, giving a slight trailing drag
+  that reads as natural inertia. Body angle smooths toward the
+  trajectory tangent via `HUNTER_IDLE_ANGLE_LERP = 0.15`. Trail
+  is intentionally KEPT visible in idle but tuned softer
+  (`HUNTER_IDLE_TRAIL_INTERVAL_MS = 50`, max α 0.4, glow blur 6)
+  so it reads as a hypnotic motion ghost; aggro keeps the
+  punchier defaults (25 ms / α 0.6 / glow 8) via the same
+  `emitTrailSample` helper. Speed lines are visible in idle as
+  the same 2-line layout used at low aggro speeds, dimmed to α
+  0.4. Outer-stroke glow drops to `HUNTER_IDLE_GLOW_BLUR = 10`
+  to keep the chase visually louder than the patrol.
   `idleHome` re-anchors on idle → alerting transition so a
   future de-aggro returns to wherever it was alerted, not the
   spawn. Constants live in `config.ts` under `HUNTER_IDLE_*`.

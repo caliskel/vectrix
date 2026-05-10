@@ -284,29 +284,21 @@ export const ALERT_BURST_PARTICLE_SPEED_MIN = 200;
 export const ALERT_BURST_PARTICLE_SPEED_MAX = 350;
 export const ALERT_BURST_PARTICLE_LIFETIME_MS = 300;
 
-// Hunter idle behavior — playful darts around its home position with
-// a short pause between each. Uses the same inertia physics as combat
-// but at a fraction of max speed and with no trail.
-export const HUNTER_IDLE_MAX_SPEED_FACTOR = 0.35;
-export const HUNTER_IDLE_DART_DURATION_MIN_MS = 400;
-export const HUNTER_IDLE_DART_DURATION_MAX_MS = 700;
-export const HUNTER_IDLE_PAUSE_DURATION_MIN_MS = 300;
-export const HUNTER_IDLE_PAUSE_DURATION_MAX_MS = 900;
-export const HUNTER_IDLE_DART_ARRIVAL_DIST = 30;
-export const HUNTER_IDLE_HOME_RETURN_THRESHOLD = 350;
-export const HUNTER_IDLE_NEAR_DART_MIN = 60;
-export const HUNTER_IDLE_NEAR_DART_MAX = 150;
-export const HUNTER_IDLE_MID_DART_MIN = 150;
-export const HUNTER_IDLE_MID_DART_MAX = 280;
-export const HUNTER_IDLE_FAR_DART_MIN = 280;
-export const HUNTER_IDLE_FAR_DART_MAX = 400;
-export const HUNTER_IDLE_NEAR_CHANCE = 0.5;
-export const HUNTER_IDLE_MID_CHANCE = 0.35;
-export const HUNTER_IDLE_FAR_CHANCE = 0.15;
-export const HUNTER_IDLE_PAUSE_VELOCITY_DAMPING = 0.92;
-export const HUNTER_IDLE_MICRO_DRIFT_AMPLITUDE = 8;
-export const HUNTER_IDLE_SPEED_LINE_THRESHOLD = 60;
-export const HUNTER_IDLE_GLOW_BLUR = 10;
+// Hunter idle behavior — slow parametric trajectory around its home
+// position. Each Hunter picks a path type + size + rotation at
+// construction so a roomful reads as a flock of fish swimming in
+// lazy circles, figure-8s, and ovals rather than identical orbits.
+// Trail is intentionally KEPT visible in idle (softer params below)
+// so the trajectory itself reads as a hypnotic motion ghost.
+export const HUNTER_IDLE_PATH_SPEED = 0.4;     // radians/sec along the curve
+export const HUNTER_IDLE_PATH_SIZE_MIN = 50;
+export const HUNTER_IDLE_PATH_SIZE_MAX = 90;
+export const HUNTER_IDLE_LERP_FACTOR = 0.08;   // body trails the curve point
+export const HUNTER_IDLE_ANGLE_LERP = 0.15;
+export const HUNTER_IDLE_TRAIL_INTERVAL_MS = 50;
+export const HUNTER_IDLE_TRAIL_MAX_ALPHA = 0.4;
+export const HUNTER_IDLE_TRAIL_GLOW_BLUR = 6;
+export const HUNTER_IDLE_GLOW_BLUR = 10;       // softer outline glow than aggro
 
 // Hunter motion trail — shrunk + faded copies of the body left
 // behind every TRAIL_INTERVAL_MS while moving. Samples age out so a
