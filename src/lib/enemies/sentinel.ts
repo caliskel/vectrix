@@ -171,6 +171,33 @@ const DYING_FLASH_PEAK_ALPHA = 0.95;
 const DYING_AMBIENT_SHAKE_PX = 1;
 const DYING_AMBIENT_SHAKE_START_MS = 3500;
 
+// === Post-detonation force waves (3500..5500 ms) ===
+// After the initial detonation rings have expired and the flash has
+// faded, a sequence of expanding shockwaves keeps pulsing outward
+// across the arena under the VICTORY title. Each wave is a thin
+// ring with a long lifetime so it actually crosses the field; the
+// colour cycle (accent → white → green → accent → green) hands the
+// eye off to the green VICTORY palette. Each wave fires a small
+// percussive shake that wins against the 1 px ambient tremor.
+const POST_WAVE_START_R = 30;
+const POST_WAVE_LW_START = 4;
+const POST_WAVE_LW_END = 0.5;
+const POST_WAVE_GLOW_BLUR = 14;
+const POST_WAVE_SHAKE_PX = 4;
+const POST_WAVE_SHAKE_SEC = 0.12;
+const POST_WAVE_SCHEDULE: ReadonlyArray<{
+  startMs: number;
+  color: string;
+  endR: number;
+  lifetimeSec: number;
+}> = [
+  { startMs: 3500, color: SENTINEL_COLOR, endR: 600, lifetimeSec: 1.0 },
+  { startMs: 4000, color: "#ffffff", endR: 700, lifetimeSec: 1.1 },
+  { startMs: 4500, color: VICTORY_COLOR, endR: 800, lifetimeSec: 1.2 },
+  { startMs: 5000, color: SENTINEL_COLOR, endR: 720, lifetimeSec: 1.1 },
+  { startMs: 5500, color: VICTORY_COLOR, endR: 850, lifetimeSec: 1.3 },
+];
+
 // VICTORY scale-pulse — text starts slightly smaller, eases past 1
 // with an overshoot, then settles. Multiplies the text scale during
 // the fade-in window.
@@ -1088,6 +1115,10 @@ export class Sentinel implements Enemy {
    *  so the detonation burst (particles + 3 shockwaves + big shake)
    *  fires exactly once, not every frame inside the flash window. */
   private detonationFired = false;
+  /** Index into POST_WAVE_SCHEDULE — counts how many of the post-
+   *  detonation force waves have already fired. Each entry fires
+   *  once when stateTimer crosses its `startMs`. */
+  private postWavesFired = 0;
   /** Captured boss centre at the moment dying starts. The death
    *  cinematic anchors fragments + weakpoint + flash on this point
    *  rather than the live x/y so the boss doesn't drift while
@@ -2765,6 +2796,37 @@ export class Sentinel implements Enemy {
     if (!this.detonationFired && t >= DYING_FLASH_START_MS) {
       this.detonationFired = true;
       this.fireDeathDetonation(ctxRoom);
+    }
+
+    // ---- Post-detonation force waves. Each schedule entry fires
+    // exactly once when stateTimer crosses its startMs; the wave
+    // is a single ring with a long lifetime + large endR so it
+    // sweeps across the whole arena. A 4 px / 120 ms percussive
+    // shake punctuates each wave (wins against the 1 px ambient
+    // tremor via triggerShake's max-amplitude rule). while-loop
+    // so multiple waves can fire on the same frame if a long
+    // unscaledDt step (e.g. tab refocus) skips past several
+    // schedule entries at once.
+    while (
+      this.postWavesFired < POST_WAVE_SCHEDULE.length &&
+      t >= POST_WAVE_SCHEDULE[this.postWavesFired].startMs
+    ) {
+      const w = POST_WAVE_SCHEDULE[this.postWavesFired];
+      ctxRoom.rings.push({
+        x: this.deathX,
+        y: this.deathY,
+        age: 0,
+        lifetime: w.lifetimeSec,
+        startR: POST_WAVE_START_R,
+        endR: w.endR,
+        color: w.color,
+        startLineWidth: POST_WAVE_LW_START,
+        endLineWidth: POST_WAVE_LW_END,
+        glowBlur: POST_WAVE_GLOW_BLUR,
+      });
+      this.pendingShakePx = POST_WAVE_SHAKE_PX;
+      this.pendingShakeSec = POST_WAVE_SHAKE_SEC;
+      this.postWavesFired++;
     }
 
     // ---- fragment spawns: outer / middle / inner at the spec'd

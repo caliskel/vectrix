@@ -1009,9 +1009,12 @@ transitions for score + Game Complete.
   flag each frame the player overlaps and rooms-game's
   `consumeSentinelEffects` drains it into the standard `takeHit`
   pipeline. The same flag is reused by RB ring contact during
-  detach / vulnerable / reassemble. The HP bar sits below the
-  HUD block (HUD_BOTTOM_Y + 24 px pad) so the ROOM/HP/SCORE row
-  never overlaps the boss bar. The bar carries two thin vertical
+  detach / vulnerable / reassemble. The HP bar is pinned to the
+  bottom of the viewport (`viewH - BOSS_HP_BAR_BOTTOM_PADDING_PX
+  - barH`, label sitting `BOSS_HP_LABEL_GAP_PX` above the bar) so
+  the player's eye stays on the arena instead of the corner; the
+  HUD block at the top owns the ROOM/HP/SCORE row without
+  competing for vertical space. The bar carries two thin vertical
   ticks at HP 40 and HP 20 — phase boundaries — that flash from
   alpha 0.4 → 1.0 → 0.4 over 300 ms when the matching transition
   fires. Sentinel exposes `phaseMarkerFlashTimer1to2` and
@@ -1043,11 +1046,21 @@ transitions for score + Game Complete.
   drifts as the visual hand-off into VICTORY). The flash
   itself peaks at 0.95 alpha (was 0.7) at 3050 ms and fades to
   0 by 3300 ms. Audio: layered `hitHeavy` placeholder on the
-  detonation. A green "VICTORY" title fades in over 3050–3350
-  ms with an `easeOutBack`-style scale pulse (0.85 → 1.05 →
-  1.0 over the same window) so the text lands with weight.
-  The cinematic timer runs on `unscaledDt` so the slow-mo
-  doesn't recursively slow the cinematic itself.
+  detonation. From 3500 ms to 5500 ms a sequence of five
+  post-detonation **force waves** keeps pulsing outward across
+  the arena under the VICTORY title — single thin rings
+  (`POST_WAVE_LW_START 4 → POST_WAVE_LW_END 0.5`) with long
+  lifetimes (1.0–1.3 s) and large end radii (600–850 px) so
+  each wave actually sweeps the field. Colour cycle accent →
+  white → green → accent → green hands the eye off to the
+  green VICTORY palette. Each wave fires a 4 px / 120 ms
+  percussive shake that wins against the 1 px ambient tremor
+  via `triggerShake`'s max-amplitude rule. A green "VICTORY"
+  title fades in over 3050–3350 ms with an `easeOutBack`-style
+  scale pulse (0.85 → 1.05 → 1.0 over the same window) so the
+  text lands with weight. The cinematic timer runs on
+  `unscaledDt` so the slow-mo doesn't recursively slow the
+  cinematic itself.
 - **defeated**: terminal. `isDead()` flips to true. rooms-game's
   `reconcileSentinelTransitions` catches the transition and
   pops the Game Complete DOM overlay; runState flips to

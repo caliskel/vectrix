@@ -130,12 +130,10 @@ const HUNTER_KILL_SCORE = 600;
 // reward scales 3× to compensate, since the player also has to
 // keep their multiplier alive across more attacks.
 const SENTINEL_KILL_SCORE = 15000;
-// HUD layout — drawHUD lays out two columns (ROOM/SCORE labels +
-// values) starting at y=18 and ending around y=104 with the hearts
-// row. HUD_BOTTOM_Y matches the bottom of the hearts/score block;
-// the boss HP bar drops 24 px under it so the two never overlap.
-const HUD_BOTTOM_Y = 104;
-const BOSS_HP_BAR_TOP_PADDING_PX = 24;
+// Boss HP bar layout — pinned to the viewport bottom with
+// BOSS_HP_BAR_BOTTOM_PADDING_PX of breathing room from the edge,
+// SENTINEL label sitting BOSS_HP_LABEL_GAP_PX above the bar.
+const BOSS_HP_BAR_BOTTOM_PADDING_PX = 36;
 const BOSS_HP_LABEL_GAP_PX = 6;
 const LASER_DODGE_SCORE = 50;
 const LASER_HIT_PADDING = 6; // px added to player half for laser collision
@@ -2034,12 +2032,15 @@ export function start(canvas: HTMLCanvasElement): void {
       const barH = 18;
       const barW = viewW - sideMargin * 2;
       const barX = sideMargin;
-      // Label sits BOSS_HP_LABEL_GAP_PX above the bar; bar itself
-      // drops a fixed pad under HUD_BOTTOM_Y so the two layouts
-      // never collide.
+      // Bar pinned to the bottom edge with
+      // BOSS_HP_BAR_BOTTOM_PADDING_PX of breathing room from the
+      // viewport edge; SENTINEL label + HP count sit above the bar.
+      // Top-of-screen position used to fight the HUD block; bottom
+      // gives the boss arena more vertical reading space and keeps
+      // the player's eye on the action instead of the corner.
       const labelLineHeight = 13;
-      const labelY = HUD_BOTTOM_Y + BOSS_HP_BAR_TOP_PADDING_PX;
-      const barY = labelY + labelLineHeight + BOSS_HP_LABEL_GAP_PX;
+      const barY = viewH - BOSS_HP_BAR_BOTTOM_PADDING_PX - barH;
+      const labelY = barY - labelLineHeight - BOSS_HP_LABEL_GAP_PX;
       ctx.save();
       ctx.font = "700 13px ui-monospace, SFMono-Regular, Menlo, monospace";
       ctx.fillStyle = PALETTE.bullet;
