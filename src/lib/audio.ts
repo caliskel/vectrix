@@ -294,6 +294,39 @@ class AudioEngine {
     }
   }
 
+  /**
+   * Force every synth voice into release. Used to recover from the
+   * occasional stuck-voice on Tone.PolySynth's voice allocator (the
+   * runEnd chord can leak a sustained sawtooth when a death lands
+   * during another active envelope) and to clear the death cue's tail
+   * when the player hits restart and expects a clean audio start.
+   * Reverbs continue to decay naturally — this only releases the
+   * underlying voices, not their tails.
+   */
+  silence(): void {
+    if (!this.initialized) return;
+    try {
+      this.dashNoise?.triggerRelease();
+      this.dashThroughSynth?.triggerRelease();
+      this.breakSquare?.triggerRelease();
+      this.breakSub?.triggerRelease();
+      this.breakNoise?.triggerRelease();
+      this.spawnSynth?.releaseAll();
+      this.hpSynth?.releaseAll();
+      this.shieldSynth?.releaseAll();
+      this.boostSynth?.triggerRelease();
+      this.breakerSynth?.releaseAll();
+      this.hitSynth?.triggerRelease();
+      this.hitLightSynth?.triggerRelease();
+      this.hitMediumSynth?.triggerRelease();
+      this.hitHeavyMembrane?.triggerRelease();
+      this.hitHeavyNoise?.triggerRelease();
+      this.alertSynth?.triggerRelease();
+      this.multSynth?.triggerRelease();
+      this.endSynth?.releaseAll();
+    } catch {}
+  }
+
   setMasterVolume(v: number): void {
     this.masterVol = clamp01(v);
     if (this.master) this.master.gain.rampTo(this.masterVol, 0.05);
@@ -478,6 +511,11 @@ class AudioEngine {
 
   private playRunEnd(): void {
     if (!this.endSynth || !this.endFilter) return;
+    // Release any voices still lingering from gameplay before the
+    // death cue fires. Without this a sustain-stuck note (rare, but
+    // happens when a hit lands the same tick as the death) would
+    // bleed into the runEnd chord and never let go.
+    this.silence();
     const t = toneNow();
     try {
       this.endFilter.frequency.cancelScheduledValues(t);

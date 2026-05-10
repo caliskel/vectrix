@@ -760,6 +760,7 @@ export function start(canvas: HTMLCanvasElement): void {
   }
 
   function restartRun() {
+    audio.silence();
     rebuildAllRooms();
     currentRoom = rooms.get("room0")!;
     state.runState = "playing";

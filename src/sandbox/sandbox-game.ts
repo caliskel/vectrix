@@ -420,6 +420,9 @@ const noopShake: ImpactContext["triggerShake"] = () => {};
 const noopScreenFlash: ImpactContext["triggerScreenFlash"] = () => {};
 
 function resetRun() {
+  // Kill any lingering synth voices from the previous run (especially
+  // the runEnd chord) so the new run starts on silence.
+  audio.silence();
   state.runState = "running";
   state.endReason = null;
   state.elapsed = 0;
