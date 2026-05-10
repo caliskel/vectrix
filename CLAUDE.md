@@ -983,24 +983,32 @@ transitions for score + Game Complete.
       and runs an asymmetric breath cycle 0.90 ↔ 1.18 (mid 1.04).
       On detach → vulnerable a one-shot golden attention pulse
       expands r 24 → 110 over 600 ms.
-    - **Outer ring** two-pass stack (`#ff3344` glow lw 10 alpha
-      0.20 + `#ff4455` bright lw 4 alpha 1.0) with two `#ffffff`
-      lw 5 markers spanning 30° on opposite sides, plus a slow
-      bright-stroke alpha sub-pulse (period 1.1 s, range
-      0.85 ↔ 1.0) so the only damaging shell visually shouts
-      "danger here."
-    - **Cyan dashed indicator** (`#7dd3fc`, 2.5 px single stroke,
-      8/8 dash pattern, animated offset at 30 px/s) drawn UNDER
-      the outer ring on the same radius — the red shell paints
-      on top and the cyan peeks out from beneath, reading as
-      "this red object is the dashable phase." Opacity ramps
-      `0 → 0.6` over detach (linear), holds at `0.6` with a
-      `0.6 ↔ 0.85` pulse on a 0.9 s period during vulnerable,
-      and fades `0.6 → 0` across reassemble. Same visual
-      language as the cyan dashed walls in the tutorial /
-      Room 4. Not applied to mid / inner (they're dimmed to
-      background) or the eye (its own gold + reticle
-      iconography carries the read).
+    - **Outer ring** switches its render mode across Ring Burst.
+      In `idle` / `attacking` / `telegraph` / `recovery` it's the
+      "danger here" red shell: solid `#ff4455` bright lw 4 + a
+      glow pass at lw 10 alpha 0.20, plus a slow bright-stroke
+      alpha sub-pulse (period 1.1 s, range 0.85 ↔ 1.0). In
+      `detach` / `vulnerable` / `reassemble` the same ring flips
+      to **cyan dashed** — `#7dd3fc` bright lw 4 with a `[12, 8]`
+      dash pattern + animated `lineDashOffset` at ~30 px/s, and
+      a wider glow at lw 14 alpha 0.18 (cyan reads softer on the
+      dark background, so the glow is bumped). Color crossfades
+      over 300 ms at the telegraph → detach edge (red → cyan)
+      and the reassemble → recovery edge (cyan → red, ticked
+      across recovery's `rbTimer`). The dash pattern itself
+      flips on/off discretely on those same edges — interpolating
+      a dash pattern looks glitchy. The two `#ffffff` lw 5
+      rotation markers (30° arcs at top + bottom) persist
+      through both modes; on the red ring they read as notches,
+      on the cyan ring they read as rotation indicators. The
+      visual language matches the cyan dashed walls in the
+      tutorial and Room 4 — "pass through with a dash, costs HP
+      without i-frames" — collapsed into the same shell that
+      already reads as the danger boundary.
+      Implementation: `computeOuterRingDepth()` builds the
+      `RingDepth` per-frame instead of picking from a static
+      const; `RingDepth` gained a `brightDashOffset` field so
+      the marching dash effect is config-driven.
     - **Mid + inner** desaturate to `#8a2030` / `#5a1020` at
       0.40 / 0.30 alpha so they read as background decoration.
       The mid ring keeps two short dim markers; the inner ring

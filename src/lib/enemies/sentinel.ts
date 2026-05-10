@@ -185,9 +185,14 @@ type RingDepth = {
   brightLineWidth: number;
   brightAlpha: number;
   /** Inner ring uses a dotted main stroke (`[2, 6]`) to read as
-   *  rotating without needing markers. Optional; defaults to
-   *  solid. */
+   *  rotating without needing markers; outer ring uses a wider
+   *  `[12, 8]` during the Ring Burst cyan-mode. Optional;
+   *  defaults to solid. */
   brightDashPattern?: [number, number];
+  /** Optional `lineDashOffset` in pixels applied alongside the
+   *  pattern. Animated by `combatElapsedSec` for a "marching
+   *  dashes" effect on the outer ring during cyan-mode. */
+  brightDashOffset?: number;
   /** Arc-marker count (0 disables markers entirely; inner ring
    *  uses 0 since its dash pattern already conveys rotation). */
   markerCount: number;
@@ -199,34 +204,10 @@ type RingDepth = {
   markerArcRad?: number;
   maxAngularVel: number; // rad/s — the random target sample range
 };
-const OUTER_RING_DEPTH: RingDepth = {
-  glowColor: "#ff3344",
-  glowLineWidth: 8,
-  glowAlpha: 0.2,
-  brightColor: "#ff3344",
-  brightLineWidth: 4,
-  brightAlpha: 1.0,
-  markerCount: 2,
-  markerColor: "#ff7788",
-  markerLineWidth: 5,
-  maxAngularVel: 0.8,
-};
-// Outer ring during Ring Burst — bumped glow + brighter `#ff4455`
-// core + larger `#ffffff` markers so the only damaging shell
-// visually shouts "danger here."
-const OUTER_RING_DEPTH_RB: RingDepth = {
-  glowColor: "#ff3344",
-  glowLineWidth: 10,
-  glowAlpha: 0.2,
-  brightColor: "#ff4455",
-  brightLineWidth: 4,
-  brightAlpha: 1.0,
-  markerCount: 2,
-  markerColor: "#ffffff",
-  markerLineWidth: 5,
-  markerArcRad: (Math.PI * 30) / 180,
-  maxAngularVel: 0.8,
-};
+// Outer ring config is computed dynamically per frame (see
+// `computeOuterRingDepth`) so the color + dash-pattern can lerp
+// across phase boundaries. Only the rotation tunable lives here.
+const OUTER_RING_MAX_ANGULAR_VEL = 0.8;
 // Mid + inner during vulnerable / reassemble — desaturated and
 // faded so they read as visual decoration, not threats.
 const MID_RING_DEPTH_DIM: RingDepth = {
@@ -310,18 +291,24 @@ const RB_DETACH_SEC = 0.8;
 const RB_VULNERABLE_SEC = 5.0;
 const RB_REASSEMBLE_SEC = 0.8;
 const RB_RECOVERY_SEC = 0.5;
-// Cyan dashed indicator painted under the outer ring during
-// detach / vulnerable / reassemble — communicates "this shell is
-// the dashable phase" using the same visual language as cyan
-// dashed walls in the tutorial / Room 4. Same pattern + animated
-// offset so the line reads as energetic.
-const RB_CYAN_INDICATOR_COLOR = "#7dd3fc";
-const RB_CYAN_INDICATOR_DASH_PATTERN: [number, number] = [8, 8];
-const RB_CYAN_INDICATOR_DASH_RATE_PX_PER_SEC = 30;
-const RB_CYAN_INDICATOR_LW_MAIN = 2.5;
-const RB_CYAN_INDICATOR_PEAK_OPACITY = 0.6;
-const RB_CYAN_INDICATOR_PULSE_AMPLITUDE = 0.25;
-const RB_CYAN_INDICATOR_PULSE_PERIOD_SEC = 0.9;
+// Outer ring switches to cyan dashed during the three ghost-body
+// Ring Burst phases — same visual language as the cyan dashed
+// walls in the tutorial / Room 4 ("dash through, costs HP without
+// i-frames"). Was previously a separate stroke layered under a
+// red outer; merged into the outer ring itself so the player sees
+// one ring with two render modes instead of two stacked rings.
+const RB_OUTER_CYAN_COLOR = "#7dd3fc";
+const RB_OUTER_CYAN_DASH_PATTERN: [number, number] = [12, 8];
+const RB_OUTER_CYAN_DASH_RATE_PX_PER_SEC = 30;
+const RB_OUTER_RED_GLOW_LW = 10;
+const RB_OUTER_CYAN_GLOW_LW = 14;
+const RB_OUTER_RED_GLOW_ALPHA = 0.2;
+const RB_OUTER_CYAN_GLOW_ALPHA = 0.18;
+// 300 ms color crossfade at telegraph → detach (red → cyan) and
+// at reassemble → recovery (cyan → red, ticked across recovery's
+// rbTimer). The dash pattern flips on/off discretely on the same
+// boundaries — interpolating dash-pattern itself reads as glitchy.
+const RB_OUTER_TRANSITION_SEC = 0.3;
 // Cooldown shortened from 8 s now that the active window is longer
 // — between successive Ring Bursts the player gets ~4–5 radial
 // volleys and 1–2 aimed shots.
@@ -1785,23 +1772,26 @@ export class Sentinel implements Enemy {
 
   private tickRingRotation(dt: number): void {
     this.ringElapsedMs += dt * 1000;
-    const depths: RingDepth[] = [
-      OUTER_RING_DEPTH,
-      MID_RING_DEPTH,
-      INNER_RING_DEPTH,
+    // Outer ring's render config is computed per-frame, so its
+    // max-angular-vel lives as a standalone constant; mid + inner
+    // still pull from the static RingDepth configs.
+    const maxVels = [
+      OUTER_RING_MAX_ANGULAR_VEL,
+      MID_RING_DEPTH.maxAngularVel,
+      INNER_RING_DEPTH.maxAngularVel,
     ];
     for (let i = 0; i < this.ringStates.length; i++) {
       const r = this.ringStates[i];
-      const d = depths[i];
+      const maxVel = maxVels[i];
       // First-time init — schedule the first retarget so the ring
       // doesn't start motionless until the timer fires.
       if (r.nextChangeAtMs === 0) {
-        r.targetAngularVel = randomAngularVel(d.maxAngularVel);
+        r.targetAngularVel = randomAngularVel(maxVel);
         r.nextChangeAtMs = this.ringElapsedMs + nextRingRetargetMs();
       }
       // Retarget on timer.
       if (this.ringElapsedMs >= r.nextChangeAtMs) {
-        r.targetAngularVel = randomAngularVel(d.maxAngularVel);
+        r.targetAngularVel = randomAngularVel(maxVel);
         r.nextChangeAtMs = this.ringElapsedMs + nextRingRetargetMs();
       }
       // Smooth easing toward target so velocity changes don't jerk.
@@ -3688,50 +3678,77 @@ export class Sentinel implements Enemy {
     }
   }
 
-  /** Cyan dashed indicator drawn under the outer ring during the
-   *  three ghost-body phases of Ring Burst. Communicates "this
-   *  shell is the dashable phase" using the same visual language
-   *  as cyan-dashed walls in the tutorial / Room 4. Lives in the
-   *  body-relative ctx (translated to boss origin) so it renders
-   *  at (0, 0) on the current outer-ring radius. */
-  private renderCyanDashableIndicator(ctx: CanvasRenderingContext2D): void {
-    let opacity = 0;
-    if (this.ringBurstPhase === "detach") {
-      const u = Math.min(1, this.rbTimer / RB_DETACH_SEC);
-      opacity = RB_CYAN_INDICATOR_PEAK_OPACITY * u;
-    } else if (this.ringBurstPhase === "vulnerable") {
-      const phase =
-        (this.rbTimer * Math.PI * 2) / RB_CYAN_INDICATOR_PULSE_PERIOD_SEC;
-      const pulse = (Math.sin(phase) + 1) / 2;
-      opacity =
-        RB_CYAN_INDICATOR_PEAK_OPACITY +
-        RB_CYAN_INDICATOR_PULSE_AMPLITUDE * pulse;
-    } else if (this.ringBurstPhase === "reassemble") {
-      const u = Math.min(1, this.rbTimer / RB_REASSEMBLE_SEC);
-      opacity = RB_CYAN_INDICATOR_PEAK_OPACITY * (1 - u);
+  /** Build the outer-ring depth config for THIS frame. The outer
+   *  ring switches between "red solid" and "cyan dashed" modes
+   *  across Ring Burst — solid red `accent` in
+   *  idle/attacking/telegraph/recovery, `#7dd3fc` dashed during
+   *  detach/vulnerable/reassemble. Color crossfades over 300 ms
+   *  at the telegraph → detach and reassemble → recovery edges.
+   *  Dash pattern flips on/off on those same edges (interpolating
+   *  the pattern itself looks glitchy). Animated `lineDashOffset`
+   *  comes from `combatElapsedSec` so the dashes march steadily
+   *  across the whole fight. */
+  private computeOuterRingDepth(): RingDepth {
+    const red = this.accentColor();
+    const cyan = RB_OUTER_CYAN_COLOR;
+    const phase = this.ringBurstPhase;
+    let color: string;
+    let glowLineWidth: number;
+    let glowAlpha: number;
+    let dashed: boolean;
+    if (phase === "detach") {
+      const t = Math.min(1, this.rbTimer / RB_OUTER_TRANSITION_SEC);
+      color = lerpHex(red, cyan, t);
+      glowLineWidth =
+        RB_OUTER_RED_GLOW_LW +
+        (RB_OUTER_CYAN_GLOW_LW - RB_OUTER_RED_GLOW_LW) * t;
+      glowAlpha =
+        RB_OUTER_RED_GLOW_ALPHA +
+        (RB_OUTER_CYAN_GLOW_ALPHA - RB_OUTER_RED_GLOW_ALPHA) * t;
+      dashed = true;
+    } else if (phase === "vulnerable" || phase === "reassemble") {
+      color = cyan;
+      glowLineWidth = RB_OUTER_CYAN_GLOW_LW;
+      glowAlpha = RB_OUTER_CYAN_GLOW_ALPHA;
+      dashed = true;
+    } else if (phase === "recovery") {
+      // Recovery's `rbTimer` runs 0 → RB_RECOVERY_SEC. Lerp the
+      // first 300 ms back to red; dashes are off the moment we
+      // entered recovery so the boundary reads as "the dash
+      // window just closed."
+      const t = Math.min(1, this.rbTimer / RB_OUTER_TRANSITION_SEC);
+      color = lerpHex(cyan, red, t);
+      glowLineWidth =
+        RB_OUTER_CYAN_GLOW_LW +
+        (RB_OUTER_RED_GLOW_LW - RB_OUTER_CYAN_GLOW_LW) * t;
+      glowAlpha =
+        RB_OUTER_CYAN_GLOW_ALPHA +
+        (RB_OUTER_RED_GLOW_ALPHA - RB_OUTER_CYAN_GLOW_ALPHA) * t;
+      dashed = false;
+    } else {
+      // idle / attacking / telegraph
+      color = red;
+      glowLineWidth = RB_OUTER_RED_GLOW_LW;
+      glowAlpha = RB_OUTER_RED_GLOW_ALPHA;
+      dashed = false;
     }
-    if (opacity <= 0) return;
-    // Single dashed stroke (was a 2-pass bloom + main stack — the
-    // dash pattern carries the read on its own; the bloom was
-    // redundant after the visual-budget pass). Animated offset
-    // driven by combatElapsedSec so the pattern marches across
-    // the whole fight.
-    const dashOffset =
-      -this.combatElapsedSec * RB_CYAN_INDICATOR_DASH_RATE_PX_PER_SEC;
-    const r = this.ringRadiusOuter;
-    ctx.save();
-    ctx.setLineDash(RB_CYAN_INDICATOR_DASH_PATTERN);
-    ctx.lineDashOffset = dashOffset;
-    ctx.strokeStyle = RB_CYAN_INDICATOR_COLOR;
-    ctx.lineWidth = RB_CYAN_INDICATOR_LW_MAIN;
-    ctx.globalAlpha = opacity;
-    ctx.beginPath();
-    ctx.arc(0, 0, r, 0, Math.PI * 2);
-    ctx.stroke();
-    // Crucial — restore the canvas dash state so subsequent
-    // strokes (outer ring, mid, inner, eye) render solid.
-    ctx.setLineDash([]);
-    ctx.restore();
+    return {
+      glowColor: color,
+      glowLineWidth,
+      glowAlpha,
+      brightColor: color,
+      brightLineWidth: 4,
+      brightAlpha: 1.0,
+      brightDashPattern: dashed ? RB_OUTER_CYAN_DASH_PATTERN : undefined,
+      brightDashOffset: dashed
+        ? -this.combatElapsedSec * RB_OUTER_CYAN_DASH_RATE_PX_PER_SEC
+        : undefined,
+      markerCount: 2,
+      markerColor: "#ffffff",
+      markerLineWidth: 5,
+      markerArcRad: (Math.PI * 30) / 180,
+      maxAngularVel: OUTER_RING_MAX_ANGULAR_VEL,
+    };
   }
 
   private renderDepthRing(
@@ -3759,15 +3776,25 @@ export class Sentinel implements Enemy {
       ctx.globalAlpha = depth.glowAlpha * alphaMul;
       ctx.stroke();
     }
-    // Main stroke (optionally dashed for the inner ring).
+    // Main stroke (optionally dashed for the inner ring + outer
+    // cyan-mode). `brightDashOffset` is animated by the caller to
+    // give the dashes a marching effect.
     ctx.beginPath();
     ctx.arc(0, 0, radius, 0, Math.PI * 2);
     ctx.strokeStyle = depth.brightColor;
     ctx.lineWidth = depth.brightLineWidth;
     ctx.globalAlpha = (brightAlphaOverride ?? depth.brightAlpha) * alphaMul;
-    if (depth.brightDashPattern) ctx.setLineDash(depth.brightDashPattern);
+    if (depth.brightDashPattern) {
+      ctx.setLineDash(depth.brightDashPattern);
+      if (depth.brightDashOffset !== undefined) {
+        ctx.lineDashOffset = depth.brightDashOffset;
+      }
+    }
     ctx.stroke();
-    if (depth.brightDashPattern) ctx.setLineDash([]);
+    if (depth.brightDashPattern) {
+      ctx.setLineDash([]);
+      ctx.lineDashOffset = 0;
+    }
     // Rotation markers — drop count is config-driven; 0 disables.
     if (depth.markerCount > 0) {
       ctx.strokeStyle = depth.markerColor;
@@ -3985,10 +4012,6 @@ export class Sentinel implements Enemy {
     // reassemble. Using a multiplicative alpha factor instead of
     // a hard switch makes the cross-fade smooth.
     const rbPhase = this.ringBurstPhase;
-    const inRingBurst =
-      rbPhase === "detach" ||
-      rbPhase === "vulnerable" ||
-      rbPhase === "reassemble";
     let dimRamp = 0;
     if (rbPhase === "detach") {
       dimRamp = easeInOutCubic(
@@ -4012,26 +4035,13 @@ export class Sentinel implements Enemy {
         1) /
         2) *
         (RB_OUTER_PULSE_ALPHA_MAX - RB_OUTER_PULSE_ALPHA_MIN);
-    const accent = this.accentColor();
-    const outerDepthBase = inRingBurst ? OUTER_RING_DEPTH_RB : OUTER_RING_DEPTH;
-    // Spread the per-phase accent over the outer-ring depth config
-    // so the glow + main strokes shift hue with the phase. Markers
-    // in RB stay white for legibility; outside RB markers track the
-    // accent so the colour doesn't fight the shell.
-    const outerDepth: RingDepth = inRingBurst
-      ? { ...outerDepthBase, brightColor: accent, glowColor: accent }
-      : { ...outerDepthBase, brightColor: accent, markerColor: accent };
-    // Cyan dashed indicator — drawn UNDER the outer ring (before
-    // renderDepthRing) so the red shell paints on top and the
-    // cyan peeks out from beneath, reading as "this red object is
-    // dashable." Only painted during the three ghost-body phases.
-    if (
-      this.ringBurstPhase === "detach" ||
-      this.ringBurstPhase === "vulnerable" ||
-      this.ringBurstPhase === "reassemble"
-    ) {
-      this.renderCyanDashableIndicator(ctx);
-    }
+    // Outer ring config is built per-frame so the color +
+    // dashing can crossfade across Ring Burst phase edges
+    // (telegraph → detach goes red → cyan dashed; reassemble →
+    // recovery goes the other way). The previous separate
+    // "cyan indicator drawn under the outer" stroke is gone —
+    // it's the same ring now, with a phase-conditional render.
+    const outerDepth: RingDepth = this.computeOuterRingDepth();
     this.renderDepthRing(
       ctx,
       this.ringRadiusOuter,
