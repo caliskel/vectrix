@@ -708,6 +708,57 @@ const CORNER_TURRET_SPAWN_PARTICLE_LIFETIME_SEC = 0.4;
 const CORNER_TURRET_SPAWN_PARTICLE_SPEED_MIN = 180;
 const CORNER_TURRET_SPAWN_PARTICLE_SPEED_MAX = 260;
 
+// === Phase 3 mine field ===
+// Parallel timer (not in the attack rotation, no mutex). Once per
+// MINE_SPAWN_INTERVAL_SEC the boss drops a mine in a random arena
+// point, picked to keep clear of both the player and the boss
+// itself. The mine telegraphs as a pulsing hex outline for
+// MINE_TELEGRAPH_SEC, then detonates a 6-bullet radial burst from
+// its position. Player can stand in a mine during telegraph
+// without taking damage — the threat is the bullets after, not
+// the mine itself. The hex outline echoes the boss silhouette;
+// six bullets continues the hex theme.
+const MINE_SPAWN_INTERVAL_SEC = 2.0;
+const MINE_TELEGRAPH_SEC = 1.5;
+// Last fraction of the telegraph reads as a fast strobe so the
+// detonation moment is impossible to miss.
+const MINE_STROBE_SEC = 0.2;
+const MINE_MAX_ACTIVE = 5;
+const MINE_MIN_DIST_FROM_PLAYER = 200;
+const MINE_MIN_DIST_FROM_BOSS = 150;
+// Up to N attempts per spawn tick to find a valid position; if
+// every candidate collides with the exclusion zones we skip this
+// tick (timer keeps running, not reset, so the next try lands on
+// the same cadence).
+const MINE_SPAWN_MAX_ATTEMPTS = 8;
+const MINE_RADIUS = 30;
+const MINE_CENTER_DOT_RADIUS = 4;
+const MINE_OUTLINE_LINE_WIDTH = 2;
+const MINE_COLOR = "#ff5577";
+const MINE_DETONATION_BULLET_COUNT = 6;
+const MINE_DETONATION_BULLET_SPEED = 280;
+// Outward shockwave on detonation — same `Ring` shape as the
+// rest of the boss FX so the shared renderer interpolates it.
+const MINE_DETONATION_RING_R0 = 10;
+const MINE_DETONATION_RING_R1 = 80;
+const MINE_DETONATION_RING_LW0 = 6;
+const MINE_DETONATION_RING_LW1 = 0.5;
+const MINE_DETONATION_RING_LIFETIME_SEC = 0.4;
+const MINE_DETONATION_PARTICLE_COUNT = 8;
+const MINE_DETONATION_PARTICLE_SPEED_MIN = 200;
+const MINE_DETONATION_PARTICLE_SPEED_MAX = 350;
+const MINE_DETONATION_PARTICLE_LIFETIME_SEC = 0.4;
+const MINE_SPAWN_PARTICLE_COUNT = 4;
+const MINE_SPAWN_PARTICLE_SPEED = 80;
+const MINE_SPAWN_PARTICLE_LIFETIME_SEC = 0.3;
+
+type Mine = {
+  x: number;
+  y: number;
+  /** Seconds since spawn; detonates at MINE_TELEGRAPH_SEC. */
+  age: number;
+};
+
 // === Cascade death cleanup ===
 // On `enterDying`, all alive corner turrets are scheduled for forced
 // kill so the Game Complete overlay doesn't open with leftover
@@ -1162,6 +1213,14 @@ export class Sentinel implements Enemy {
   private cornerTurretSpawnQueue: { delay: number; x: number; y: number }[] =
     [];
 
+  // === Phase 3 mine field ===
+  /** Live mines on the floor. Each entry ages until detonation,
+   *  then is filtered out. */
+  private mines: Mine[] = [];
+  /** Seconds since the last successful mine spawn (ticks only when
+   *  `bossPhase === 3`). Resets on a successful spawn. */
+  private mineSpawnTimer = 0;
+
   // === Cascade death cleanup ===
   /** Forced kills queued at `enterDying` — alive corner turrets
    *  get scheduled so the cascade plays through the start of the
@@ -1518,6 +1577,12 @@ export class Sentinel implements Enemy {
     // instantiation when it hits zero. Runs in parallel with
     // attacks (NOT mutual-exclusion-gated).
     this.tickCornerTurretSpawnQueue(ctxRoom, dt);
+
+    // === 5. Mine field — phase-3 only. Same parallel pattern as
+    // the corner turret spawn: independent timer, no mutex
+    // against the attack rotation. Internally gated on
+    // bossPhase === 3 so it's a no-op in phases 1 / 2.
+    this.tickMineField(ctxRoom, dt);
 
     // Reflect activity back into the public state field — rooms-game
     // reads this for HP-bar visibility / kill-credit transitions.
@@ -3032,6 +3097,188 @@ export class Sentinel implements Enemy {
     this.pendingSpawnedTurrets.push(t);
   }
 
+  /** Phase-3 mine field. Runs from updateCombat in parallel with
+   *  the attack rotation (no mutex). Ages live mines, detonates
+   *  them at MINE_TELEGRAPH_SEC, and tries to spawn a new mine on
+   *  MINE_SPAWN_INTERVAL_SEC cadence up to MINE_MAX_ACTIVE.
+   *  Filtered out automatically — phaseTransition cinematic short-
+   *  circuits updateCombat, so detonations don't pop mid-cinematic
+   *  (the timer just pauses for the cinematic's ~2 s, mines
+   *  resume aging when combat resumes). */
+  private tickMineField(ctxRoom: EnemyContext, dt: number): void {
+    if (this.bossPhase !== 3) return;
+    // Age + detonate. Detonation pushes its FX into ctxRoom; the
+    // mine itself is filtered next frame.
+    for (const m of this.mines) {
+      m.age += dt;
+      if (m.age >= MINE_TELEGRAPH_SEC) {
+        this.detonateMine(m, ctxRoom);
+      }
+    }
+    this.mines = this.mines.filter((m) => m.age < MINE_TELEGRAPH_SEC);
+    // Spawn cadence — only resets on a successful spawn so a
+    // crowded arena (5 active mines) keeps trying every frame
+    // once one detonates.
+    this.mineSpawnTimer += dt;
+    if (
+      this.mineSpawnTimer >= MINE_SPAWN_INTERVAL_SEC &&
+      this.mines.length < MINE_MAX_ACTIVE
+    ) {
+      if (this.trySpawnMine(ctxRoom)) {
+        this.mineSpawnTimer = 0;
+      }
+    }
+  }
+
+  /** Try to drop a mine at a random arena point that's at least
+   *  MINE_MIN_DIST_FROM_PLAYER from the player and
+   *  MINE_MIN_DIST_FROM_BOSS from the boss center. Up to
+   *  MINE_SPAWN_MAX_ATTEMPTS rolls; if everything collides the
+   *  caller can retry next tick. Returns true on a successful
+   *  placement so the cadence timer only resets on success. */
+  private trySpawnMine(ctxRoom: EnemyContext): boolean {
+    const minPx = MINE_MIN_DIST_FROM_PLAYER * MINE_MIN_DIST_FROM_PLAYER;
+    const minBx = MINE_MIN_DIST_FROM_BOSS * MINE_MIN_DIST_FROM_BOSS;
+    const xMin = MINE_RADIUS;
+    const xMax = this.arenaW - MINE_RADIUS;
+    const yMin = MINE_RADIUS;
+    const yMax = this.arenaH - MINE_RADIUS;
+    for (let attempt = 0; attempt < MINE_SPAWN_MAX_ATTEMPTS; attempt++) {
+      const x = xMin + Math.random() * (xMax - xMin);
+      const y = yMin + Math.random() * (yMax - yMin);
+      const dxP = x - ctxRoom.player.x;
+      const dyP = y - ctxRoom.player.y;
+      if (dxP * dxP + dyP * dyP < minPx) continue;
+      const dxB = x - this.x;
+      const dyB = y - this.y;
+      if (dxB * dxB + dyB * dyB < minBx) continue;
+      this.mines.push({ x, y, age: 0 });
+      this.spawnMineFx(ctxRoom, x, y);
+      return true;
+    }
+    return false;
+  }
+
+  /** Small spark burst on mine placement so the spawn reads as
+   *  an event rather than a mine just appearing. */
+  private spawnMineFx(
+    ctxRoom: EnemyContext,
+    x: number,
+    y: number,
+  ): void {
+    for (let i = 0; i < MINE_SPAWN_PARTICLE_COUNT; i++) {
+      const a = (i / MINE_SPAWN_PARTICLE_COUNT) * Math.PI * 2;
+      ctxRoom.particles.push({
+        x,
+        y,
+        vx: Math.cos(a) * MINE_SPAWN_PARTICLE_SPEED,
+        vy: Math.sin(a) * MINE_SPAWN_PARTICLE_SPEED,
+        initialSize: 4,
+        color: MINE_COLOR,
+        age: 0,
+        lifetime: MINE_SPAWN_PARTICLE_LIFETIME_SEC,
+        glowStrong: 8,
+        glowSoft: 3,
+        drag: 0.92,
+      });
+    }
+    audio.play.alert();
+  }
+
+  /** Detonate a mine — radial 6-bullet burst (hex theme), one
+   *  shockwave ring, particles, audio. Bullets origin at the
+   *  mine; angles rotated so vertex 0 sits at top to match the
+   *  mine outline. */
+  private detonateMine(m: Mine, ctxRoom: EnemyContext): void {
+    for (let i = 0; i < MINE_DETONATION_BULLET_COUNT; i++) {
+      const a =
+        HEX_TOP_OFFSET_RAD +
+        (i / MINE_DETONATION_BULLET_COUNT) * Math.PI * 2;
+      ctxRoom.bullets.push(
+        makeBullet(
+          m.x,
+          m.y,
+          Math.cos(a) * MINE_DETONATION_BULLET_SPEED,
+          Math.sin(a) * MINE_DETONATION_BULLET_SPEED,
+          false,
+        ),
+      );
+    }
+    ctxRoom.rings.push({
+      x: m.x,
+      y: m.y,
+      age: 0,
+      lifetime: MINE_DETONATION_RING_LIFETIME_SEC,
+      startR: MINE_DETONATION_RING_R0,
+      endR: MINE_DETONATION_RING_R1,
+      color: MINE_COLOR,
+      startLineWidth: MINE_DETONATION_RING_LW0,
+      endLineWidth: MINE_DETONATION_RING_LW1,
+      glowBlur: 12,
+    });
+    for (let i = 0; i < MINE_DETONATION_PARTICLE_COUNT; i++) {
+      const a = (i / MINE_DETONATION_PARTICLE_COUNT) * Math.PI * 2;
+      const ps =
+        MINE_DETONATION_PARTICLE_SPEED_MIN +
+        Math.random() *
+          (MINE_DETONATION_PARTICLE_SPEED_MAX -
+            MINE_DETONATION_PARTICLE_SPEED_MIN);
+      ctxRoom.particles.push({
+        x: m.x,
+        y: m.y,
+        vx: Math.cos(a) * ps,
+        vy: Math.sin(a) * ps,
+        initialSize: 5,
+        color: MINE_COLOR,
+        age: 0,
+        lifetime: MINE_DETONATION_PARTICLE_LIFETIME_SEC,
+        glowStrong: 10,
+        glowSoft: 4,
+        drag: 0.92,
+      });
+    }
+    audio.play.hitHeavy();
+  }
+
+  /** Render all live mines as pulsing hex outlines with a small
+   *  center dot. Last MINE_STROBE_SEC of telegraph reads as a
+   *  fast strobe so the detonation moment is unmissable. Drawn
+   *  in world space; rooms-game wraps the boss's draw call in
+   *  the camera transform already. */
+  private renderMines(ctx: CanvasRenderingContext2D): void {
+    if (this.mines.length === 0) return;
+    for (const m of this.mines) {
+      const t = m.age / MINE_TELEGRAPH_SEC;
+      const inStrobe = m.age >= MINE_TELEGRAPH_SEC - MINE_STROBE_SEC;
+      let alpha: number;
+      if (inStrobe) {
+        // Fast strobe: 4 full pulses across the strobe window.
+        const u =
+          (m.age - (MINE_TELEGRAPH_SEC - MINE_STROBE_SEC)) /
+          MINE_STROBE_SEC;
+        alpha = 0.4 + 0.6 * ((Math.sin(u * Math.PI * 8) + 1) / 2);
+      } else {
+        // Buildup pulse — base alpha grows from 0.4 to ~0.9 with
+        // a slow sin shimmer on top so even early in the
+        // telegraph the mine reads as "alive".
+        const pulse = (Math.sin(m.age * 6) + 1) / 2;
+        alpha = 0.4 + 0.4 * t + 0.1 * pulse;
+      }
+      ctx.save();
+      ctx.translate(m.x, m.y);
+      ctx.strokeStyle = MINE_COLOR;
+      ctx.lineWidth = MINE_OUTLINE_LINE_WIDTH;
+      ctx.globalAlpha = alpha;
+      traceHexPath(ctx, MINE_RADIUS);
+      ctx.stroke();
+      ctx.fillStyle = MINE_COLOR;
+      ctx.beginPath();
+      ctx.arc(0, 0, MINE_CENTER_DOT_RADIUS, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+  }
+
   /** Tick the cascade kill queue. Fires forced kills on schedule;
    *  rooms-game drains pendingCascadeKills next frame and runs the
    *  standard impact FX + score / removal pipeline. Runs from
@@ -3159,6 +3406,12 @@ export class Sentinel implements Enemy {
     // is dropped (the bay door is closed). Already-spawned turrets
     // are caught by the cascade kill below.
     this.cornerTurretSpawnQueue = [];
+    // Mine field stops cold — live mines are dropped without
+    // detonating so the dying cinematic isn't interrupted by a
+    // late explosion. Bullets already in flight from earlier
+    // detonations keep going (rooms-game owns them).
+    this.mines = [];
+    this.mineSpawnTimer = 0;
     // Cascade-kill the alive corner turrets so Game Complete opens
     // on a clean field. Hunters first (50 ms between), 100 ms gap,
     // then turrets (50 ms between).
@@ -3307,6 +3560,11 @@ export class Sentinel implements Enemy {
     ) {
       this.renderChargeGhosts(ctx);
     }
+    // Phase-3 mines — drawn under the body so the boss stays the
+    // focal point. Mines are spawned with player + boss exclusion
+    // zones so the body rarely covers one anyway, and the strobe
+    // window in the last 200 ms cuts through any overlap.
+    this.renderMines(ctx);
     this.renderBody(ctx, 1);
     // Appearance flash — additive white disc painted over the body
     // for the first CHARGE_APPEAR_FLASH_SEC of telegraph. Decays

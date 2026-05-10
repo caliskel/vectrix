@@ -952,6 +952,33 @@ transitions for score + Game Complete.
     spawnInvulnerableSec }`. `spawnInvulnerableTime` field
     gates `update` (no aim/shoot) and `takeDamage` (no-op)
     while ramping the visual scale.
+  - **Mine field** — phase 3 only. Parallel timer (no mutex
+    against the attack rotation, same pattern as the corner
+    turret spawn). Once every `MINE_SPAWN_INTERVAL_SEC = 2.0 s`
+    the boss drops a mine in a random arena point chosen to
+    keep at least 200 px from the player and 150 px from the
+    boss center; up to `MINE_SPAWN_MAX_ATTEMPTS = 8` rolls per
+    cadence tick before giving up and trying again next frame.
+    Cap of `MINE_MAX_ACTIVE = 5` simultaneous mines so the
+    floor doesn't fill up. The cadence timer only resets on a
+    successful spawn — a crowded arena keeps trying every frame
+    once one detonates. Each mine telegraphs as a pulsing 30 px
+    pointy-top hex outline for `MINE_TELEGRAPH_SEC = 1.5 s`
+    (alpha grows from 0.4 to ~0.9 with a slow sin shimmer);
+    the last 200 ms (`MINE_STROBE_SEC`) reads as a fast strobe
+    so the detonation moment is unmissable. Detonation: 6
+    bullets radial from the mine center (hex theme — vertex 0
+    at top via `HEX_TOP_OFFSET_RAD`), speed 280 px/s; one
+    accent shockwave (`#ff5577`, r 10 → 80, lw 6 → 0.5,
+    400 ms); 8 particles 200–350 px/s; audio `hitHeavy`
+    placeholder. The mine itself never deals contact damage —
+    the player can stand inside the hex during telegraph
+    safely. The threat is the bullets after detonation. Mines
+    are reset to empty in `enterDying` so the death cinematic
+    isn't interrupted by a late explosion (bullets already in
+    flight from earlier detonations keep going; rooms-game
+    owns them). The mine's hex outline echoes the boss
+    silhouette to read as "the boss seeded these."
   - **Boss-death cascade.** When Sentinel HP hits 0,
     `enterDying` populates a forced-kill queue with the alive
     corner Turrets (50 ms between). Each scheduled entry fires
