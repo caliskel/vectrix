@@ -1775,61 +1775,57 @@ export function start(canvas: HTMLCanvasElement): void {
     for (const e of currentRoom.enemies) e.draw(ctx);
 
 
-    // bullets (trail then live)
+    // bullets — trail pass then live pass. State hoisted out of the
+    // hot loops: shadowBlur and fillStyle are set once per pass
+    // instead of per bullet, and the live pass uses a single shadow
+    // stroke instead of drawNeon's two passes. Phase 3 of the boss
+    // (4 corner turrets + faster cadence) regularly puts 60-80
+    // bullets on screen — per-bullet drawNeon was the dominant
+    // frame cost. Single 12-blur reads close to the old 20+8 stack
+    // for an 8 px square.
     const bSize = settings.bullets.size;
     const bColor = settings.bullets.color;
+    ctx.save();
+    ctx.fillStyle = bColor;
+    ctx.shadowBlur = 0;
     for (const b of bullets) {
-      if (b.trailCount > 0) {
-        const start = b.trailCount === 5 ? b.trailIdx : 0;
-        for (let i = 0; i < b.trailCount; i++) {
-          const j = (start + i) % 5;
-          const t = b.trailCount === 1 ? 1 : i / (b.trailCount - 1);
-          const sz = bSize * (0.5 + 0.5 * t);
-          const alpha = 0.1 + 0.4 * t;
-          ctx.save();
-          ctx.globalAlpha = alpha;
-          ctx.fillStyle = bColor;
-          ctx.fillRect(b.trailX[j] - sz / 2, b.trailY[j] - sz / 2, sz, sz);
-          ctx.restore();
-        }
+      if (b.trailCount === 0) continue;
+      const start = b.trailCount === 5 ? b.trailIdx : 0;
+      for (let i = 0; i < b.trailCount; i++) {
+        const j = (start + i) % 5;
+        const t = b.trailCount === 1 ? 1 : i / (b.trailCount - 1);
+        const sz = bSize * (0.5 + 0.5 * t);
+        ctx.globalAlpha = 0.1 + 0.4 * t;
+        ctx.fillRect(b.trailX[j] - sz / 2, b.trailY[j] - sz / 2, sz, sz);
       }
-      drawNeon(
-        ctx,
-        () => {
-          ctx.fillStyle = bColor;
-          ctx.fillRect(b.x - bSize / 2, b.y - bSize / 2, bSize, bSize);
-        },
-        bColor,
-        20,
-        8,
-      );
     }
+    ctx.globalAlpha = 1;
+    ctx.shadowColor = bColor;
+    ctx.shadowBlur = 12;
+    for (const b of bullets) {
+      ctx.fillRect(b.x - bSize / 2, b.y - bSize / 2, bSize, bSize);
+    }
+    ctx.restore();
 
-    // particles
+    // particles — same hoisting pattern. Color changes per particle
+    // so we can't hoist fillStyle, but we drop the per-particle
+    // save/restore and the second drawNeon pass.
     const useNeon = particles.length < 50;
+    ctx.save();
+    if (!useNeon) ctx.shadowBlur = 0;
     for (const p of particles) {
       const t = p.age / p.lifetime;
       const alpha = t < 0.5 ? 1 : Math.max(0, 1 - (t - 0.5) * 2);
       const sz = Math.max(0.5, p.initialSize * (1 - t));
-      ctx.save();
       ctx.globalAlpha = alpha;
+      ctx.fillStyle = p.color;
       if (useNeon) {
-        drawNeon(
-          ctx,
-          () => {
-            ctx.fillStyle = p.color;
-            ctx.fillRect(p.x - sz / 2, p.y - sz / 2, sz, sz);
-          },
-          p.color,
-          p.glowStrong,
-          p.glowSoft,
-        );
-      } else {
-        ctx.fillStyle = p.color;
-        ctx.fillRect(p.x - sz / 2, p.y - sz / 2, sz, sz);
+        ctx.shadowColor = p.color;
+        ctx.shadowBlur = p.glowStrong;
       }
-      ctx.restore();
+      ctx.fillRect(p.x - sz / 2, p.y - sz / 2, sz, sz);
     }
+    ctx.restore();
 
     // player
     const pSize = PLAYER_SIZE;
