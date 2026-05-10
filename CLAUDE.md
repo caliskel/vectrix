@@ -677,16 +677,24 @@ transitions for score + Game Complete.
     shells detach + expand, the body goes ghosted, and the eye
     becomes the only damage path. Sub-state machine
     `idle / telegraph / detach / vulnerable / reassemble /
-    recovery`. Timings: telegraph 0.5 s (body jitter ±3 px,
-    glow ramp ×1.6), detach 0.3 s (rings ease out from
-    110 / 85 / 60 → 180 / 130 / 95, body opacity 1 → 0.25, white
-    18-particle radial spray + r 60 → 200 shockwave), vulnerable
-    3 s (eye hitbox r 20 active, body intangible, rings carry
-    1 HP contact damage in their thin band), reassemble 0.5 s
-    (radii ease back, body opacity 0.25 → 1, eye hitbox closes,
-    rings still damage), recovery 0.5 s (no damage either
-    direction), 8 s cooldown from recovery end to next
-    telegraph. First RB has a 6 s grace from fight start.
+    recovery`. **Boss is stationary during all Ring Burst
+    phases** (figure-8 movement gated on
+    `ringBurstPhase === "idle"`; figurePhase keeps advancing in
+    the background so the boss eases onto the live curve point
+    on exit instead of resuming from the held position).
+    Timings: telegraph 0.5 s (body jitter ±3 px, glow ramp
+    ×1.6), detach 0.8 s (`easeInOutCubic` — slow start AND slow
+    finish — rings ease from 110 / 85 / 60 → 180 / 130 / 95,
+    body opacity 1 → 0.25, white 18-particle radial spray + r 60
+    → 200 shockwave), vulnerable 5 s (eye hitbox r 20 active,
+    body intangible, rings carry 1 HP contact damage in their
+    thin band), reassemble 0.8 s (`easeInOutCubic`, radii ease
+    back, body opacity 0.25 → 1, eye hitbox closes, rings still
+    damage), recovery 0.5 s (no damage either direction), 6 s
+    cooldown from recovery end to next telegraph. First RB has
+    a 6 s grace from fight start. Reads as "slow inhale → long
+    hold → slow exhale" instead of the bumpy easeOut/easeIn snap
+    of the first draft.
     **Damage table during RB:**
     | Phase | Body dash | Eye dash | Body contact | Ring contact |
     | --- | --- | --- | --- | --- |

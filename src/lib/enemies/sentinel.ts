@@ -227,11 +227,18 @@ const BODY_GLOW_ALPHA_MAX = 0.35;
 // player learns radial / aimed first.
 const RB_FIRST_GRACE_SEC = 6.0;
 const RB_TELEGRAPH_SEC = 0.5;
-const RB_DETACH_SEC = 0.3;
-const RB_VULNERABLE_SEC = 3.0;
-const RB_REASSEMBLE_SEC = 0.5;
+// Detach + reassemble pacing reads as a slow inhale + slow exhale
+// after the bumpy initial draft — easeInOutCubic on both ends, 800
+// ms each. vulnerable holds 5 s so the player has time for a clean
+// double-dash through the rings to the eye.
+const RB_DETACH_SEC = 0.8;
+const RB_VULNERABLE_SEC = 5.0;
+const RB_REASSEMBLE_SEC = 0.8;
 const RB_RECOVERY_SEC = 0.5;
-const RB_COOLDOWN_SEC = 8.0;
+// Cooldown shortened from 8 s now that the active window is longer
+// — between successive Ring Bursts the player gets ~4–5 radial
+// volleys and 1–2 aimed shots.
+const RB_COOLDOWN_SEC = 6.0;
 
 // Default + expanded ring radii. Detach lerps the live radii from
 // the default values to the expanded ones; reassemble lerps back.
@@ -325,6 +332,15 @@ function easeOutBack(t: number): number {
   const c1 = 1.70158;
   const c3 = c1 + 1;
   return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
+}
+
+/** Smooth start AND smooth end — used by the Ring Burst detach +
+ *  reassemble lerps so the rings ease both into and out of motion
+ *  instead of the easeOut/easeIn snap the first draft had. */
+function easeInOutCubic(t: number): number {
+  return t < 0.5
+    ? 4 * t * t * t
+    : 1 - Math.pow(-2 * t + 2, 3) / 2;
 }
 
 function randomAngularVel(max: number): number {
@@ -692,38 +708,51 @@ export class Sentinel implements Enemy {
     // FIGURE_EIGHT_EDGE_PAD_PX so the path never crosses walls. dt
     // is in seconds — figurePhase walks the lemniscate at one full
     // loop every FIGURE_EIGHT_PERIOD_SEC.
+    //
+    // figurePhase keeps advancing even when Ring Burst freezes
+    // movement, so when RB ends the boss lerps onto the *current*
+    // curve point instead of resuming from where it stopped (which
+    // would teleport-feel after the long vulnerable hold).
     this.figurePhase +=
       (Math.PI * 2 * dt) / FIGURE_EIGHT_PERIOD_SEC;
-    const centerX = this.arenaW / 2;
-    const centerY = this.arenaH / 2;
-    const ampX = Math.max(
-      0,
-      this.arenaW / 2 - SENTINEL_HITBOX_RADIUS - FIGURE_EIGHT_EDGE_PAD_PX,
-    );
-    const ampY = Math.max(
-      0,
-      this.arenaH / 2 - SENTINEL_HITBOX_RADIUS - FIGURE_EIGHT_EDGE_PAD_PX,
-    );
-    const t = this.figurePhase;
-    const targetX = centerX + ampX * Math.sin(t);
-    const targetY = centerY + ampY * Math.sin(t) * Math.cos(t);
-    // dt (seconds) * 60 reproduces "per-frame at 60 fps" semantics
-    // so the lerp behaves the same regardless of frame rate.
-    const lerp = POSITION_LERP_PER_FRAME * (dt * 60);
-    this.x += (targetX - this.x) * lerp;
-    this.y += (targetY - this.y) * lerp;
-    // Hard clamp safety net — keeps body inside the arena even if
-    // the path or lerp ever overshoots.
-    const minX = SENTINEL_HITBOX_RADIUS;
-    const maxX = this.arenaW - SENTINEL_HITBOX_RADIUS;
-    const minY = SENTINEL_HITBOX_RADIUS;
-    const maxY = this.arenaH - SENTINEL_HITBOX_RADIUS;
-    if (this.x < minX) this.x = minX;
-    else if (this.x > maxX) this.x = maxX;
-    if (this.y < minY) this.y = minY;
-    else if (this.y > maxY) this.y = maxY;
-    this.vx = (targetX - this.x) * lerp * 60;
-    this.vy = (targetY - this.y) * lerp * 60;
+    if (this.ringBurstPhase === "idle") {
+      const centerX = this.arenaW / 2;
+      const centerY = this.arenaH / 2;
+      const ampX = Math.max(
+        0,
+        this.arenaW / 2 - SENTINEL_HITBOX_RADIUS - FIGURE_EIGHT_EDGE_PAD_PX,
+      );
+      const ampY = Math.max(
+        0,
+        this.arenaH / 2 - SENTINEL_HITBOX_RADIUS - FIGURE_EIGHT_EDGE_PAD_PX,
+      );
+      const t = this.figurePhase;
+      const targetX = centerX + ampX * Math.sin(t);
+      const targetY = centerY + ampY * Math.sin(t) * Math.cos(t);
+      // dt (seconds) * 60 reproduces "per-frame at 60 fps" semantics
+      // so the lerp behaves the same regardless of frame rate.
+      const lerp = POSITION_LERP_PER_FRAME * (dt * 60);
+      this.x += (targetX - this.x) * lerp;
+      this.y += (targetY - this.y) * lerp;
+      // Hard clamp safety net — keeps body inside the arena even if
+      // the path or lerp ever overshoots.
+      const minX = SENTINEL_HITBOX_RADIUS;
+      const maxX = this.arenaW - SENTINEL_HITBOX_RADIUS;
+      const minY = SENTINEL_HITBOX_RADIUS;
+      const maxY = this.arenaH - SENTINEL_HITBOX_RADIUS;
+      if (this.x < minX) this.x = minX;
+      else if (this.x > maxX) this.x = maxX;
+      if (this.y < minY) this.y = minY;
+      else if (this.y > maxY) this.y = maxY;
+      this.vx = (targetX - this.x) * lerp * 60;
+      this.vy = (targetY - this.y) * lerp * 60;
+    } else {
+      // Stationary across every Ring Burst phase. Velocity zeroed
+      // so any future system reading vx/vy doesn't think the boss
+      // is drifting.
+      this.vx = 0;
+      this.vy = 0;
+    }
 
     // Track combat-state elapsed time so the first Ring Burst has
     // a grace period from the moment the player enters fight.
@@ -1089,7 +1118,7 @@ export class Sentinel implements Enemy {
         break;
       case "detach": {
         const t = Math.min(1, this.rbTimer / RB_DETACH_SEC);
-        const eased = 1 - (1 - t) * (1 - t); // easeOutQuad
+        const eased = easeInOutCubic(t);
         this.ringRadiusOuter =
           RB_RING_DEFAULT_OUTER +
           (RB_RING_EXPANDED_OUTER - RB_RING_DEFAULT_OUTER) * eased;
@@ -1122,7 +1151,7 @@ export class Sentinel implements Enemy {
         break;
       case "reassemble": {
         const t = Math.min(1, this.rbTimer / RB_REASSEMBLE_SEC);
-        const eased = t * t; // easeInQuad
+        const eased = easeInOutCubic(t);
         this.ringRadiusOuter =
           RB_RING_EXPANDED_OUTER +
           (RB_RING_DEFAULT_OUTER - RB_RING_EXPANDED_OUTER) * eased;
