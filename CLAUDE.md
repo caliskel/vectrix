@@ -680,8 +680,13 @@ transitions for score + Game Complete.
     recovery`. **Boss is stationary during all Ring Burst
     phases** (figure-8 movement gated on
     `ringBurstPhase === "idle"`; figurePhase keeps advancing in
-    the background so the boss eases onto the live curve point
-    on exit instead of resuming from the held position).
+    the background). On `recovery → idle` the boss snapshots
+    its frozen position into `movementTransition` and over
+    `MOVEMENT_TRANSITION_SEC = 1.5 s` blends the lemniscate
+    target from that snapshot to the live curve point with
+    `easeInOutCubic` — without this the ~7.6 s of accumulated
+    figurePhase drift would teleport the boss back onto the
+    curve the instant movement re-enables.
     Timings: telegraph 0.5 s (body jitter ±3 px, glow ramp
     ×1.6), detach 0.8 s (`easeInOutCubic` — slow start AND slow
     finish — rings ease from 110 / 85 / 60 → 180 / 130 / 95,

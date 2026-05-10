@@ -50,6 +50,14 @@ const PULSE_PERIOD_SEC = 2.0;
 const PULSE_AMPLITUDE = 0.05;
 const EYE_PULSE_PERIOD_SEC = 1.5;
 
+// After a Ring Burst the boss has been frozen in place for ~7.6 s
+// while figurePhase kept ticking — resuming straight to the live
+// lemniscate point would teleport-feel. The post-RB transition
+// blends the *target* from the boss's frozen position to the live
+// curve point over MOVEMENT_TRANSITION_SEC with easeInOutCubic so
+// the boss "wakes up" smoothly.
+const MOVEMENT_TRANSITION_SEC = 1.5;
+
 // Movement — lazy figure-8 (lemniscate) around the arena centre.
 // Independent of the player so the boss doesn't drift through walls
 // chasing them; the path stays bounded by amplitudes that already
@@ -616,6 +624,14 @@ export class Sentinel implements Enemy {
   private figurePhase = 0;
   private readonly arenaW: number;
   private readonly arenaH: number;
+  // Active during the 1.5 s ease-in after Ring Burst recovery —
+  // blends the lemniscate target from the frozen position to the
+  // live curve point so the boss doesn't snap.
+  private movementTransition: {
+    fromX: number;
+    fromY: number;
+    elapsedSec: number;
+  } | null = null;
 
   // Attack 1 — radial burst sub-state machine. radialIdleTimer
   // counts up only while no attack is active and only during
@@ -866,8 +882,28 @@ export class Sentinel implements Enemy {
         this.arenaH / 2 - SENTINEL_HITBOX_RADIUS - FIGURE_EIGHT_EDGE_PAD_PX,
       );
       const t = this.figurePhase;
-      const targetX = centerX + ampX * Math.sin(t);
-      const targetY = centerY + ampY * Math.sin(t) * Math.cos(t);
+      const trueTargetX = centerX + ampX * Math.sin(t);
+      const trueTargetY = centerY + ampY * Math.sin(t) * Math.cos(t);
+      // Post-Ring-Burst smooth resume — blend the target between
+      // the frozen position and the live curve point so the boss
+      // never teleports.
+      let targetX = trueTargetX;
+      let targetY = trueTargetY;
+      if (this.movementTransition) {
+        this.movementTransition.elapsedSec += dt;
+        const u = Math.min(
+          1,
+          this.movementTransition.elapsedSec / MOVEMENT_TRANSITION_SEC,
+        );
+        const eased = easeInOutCubic(u);
+        targetX =
+          this.movementTransition.fromX +
+          (trueTargetX - this.movementTransition.fromX) * eased;
+        targetY =
+          this.movementTransition.fromY +
+          (trueTargetY - this.movementTransition.fromY) * eased;
+        if (u >= 1) this.movementTransition = null;
+      }
       // dt (seconds) * 60 reproduces "per-frame at 60 fps" semantics
       // so the lerp behaves the same regardless of frame rate.
       const lerp = POSITION_LERP_PER_FRAME * (dt * 60);
@@ -1330,6 +1366,20 @@ export class Sentinel implements Enemy {
           this.ringBurstPhase = "idle";
           this.rbTimer = 0;
           this.rbCooldownTimer = RB_COOLDOWN_SEC;
+          // Smooth re-entry to figure-8: snapshot the frozen
+          // position so the movement update can blend to the
+          // live curve point. Skipped if the boss died during RB
+          // (state would already be "dying" or "defeated").
+          if (
+            this.state === "idle" ||
+            this.state === "attacking"
+          ) {
+            this.movementTransition = {
+              fromX: this.x,
+              fromY: this.y,
+              elapsedSec: 0,
+            };
+          }
         }
         break;
     }
@@ -1509,6 +1559,10 @@ export class Sentinel implements Enemy {
     this.eyeHitstopTimer = 0;
     this.pendingEyeHit = false;
     this.timeScale = 1;
+    // Drop any pending movement-resume blend so the dying cinematic
+    // owns the boss's position without a phantom lerp toward the
+    // live curve point.
+    this.movementTransition = null;
   }
 
   private updateDying(_ctxRoom: EnemyContext, dt: number): void {
