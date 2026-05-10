@@ -78,4 +78,8 @@ export interface Enemy {
    * camp on the player while i-frames tick down.
    */
   onContactDamage?(): void;
+  /** Marks this enemy as the one that drops the room's key on death.
+   *  rooms-game checks the flag in the kill path; only a single key
+   *  per room is supported for now. */
+  dropsKey: boolean;
 }

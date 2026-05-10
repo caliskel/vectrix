@@ -84,6 +84,7 @@ export class Hunter implements Enemy {
   knockbackDuration = 0;
   knockbackPeakX = 0;
   knockbackPeakY = 0;
+  dropsKey = false;
   private destroyed = false;
   private vx = 0;
   private vy = 0;

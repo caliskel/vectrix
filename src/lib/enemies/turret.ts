@@ -23,6 +23,7 @@ export class Turret implements Enemy {
   knockbackDuration = 0;
   knockbackPeakX = 0;
   knockbackPeakY = 0;
+  dropsKey = false;
   private aimAngle: number;
   private shootTimer: number;
   private dashIdAlreadyDamaged = -1;

@@ -1,6 +1,21 @@
 import { audio } from "../lib/audio";
 import { type Bullet, pushTrailSample } from "../lib/bullets";
 import {
+  createCamera,
+  snapCamera,
+  updateCamera,
+  type Camera,
+  type WorldBounds,
+} from "../lib/camera";
+import {
+  checkKeyPickup,
+  createKey,
+  drawKey,
+  drawKeyHudIcon,
+  type Key,
+  updateKey,
+} from "../lib/keys";
+import {
   PARTICLE_BASE_SPEED_MAX,
   PARTICLE_BASE_SPEED_MIN,
   PARTICLE_DASH_SPAWN_INTERVAL_MS,
@@ -57,6 +72,7 @@ import { buildRoom1, ROOM_H_PX, ROOM_W_PX } from "./room1";
 import { buildRoom2 } from "./room2";
 import { buildRoom3 } from "./room3";
 import { buildRoom4 } from "./room4";
+import { buildRoom5 } from "./room5";
 import type { Room } from "./room";
 
 const ACCEL_FACTOR = 9;
@@ -70,7 +86,7 @@ const LASER_DODGE_SCORE = 50;
 const LASER_HIT_PADDING = 6; // px added to player half for laser collision
 const SCREEN_SHAKE_DURATION_SEC = 0.2;
 const SCREEN_SHAKE_PX = 4;
-const ROOM_TOTAL = 4;
+const ROOM_TOTAL = 5;
 const ROOM_CLEAR_FLASH = 0.2;
 const ROOMS_BEST_KEY = "dash-proto:rooms-best";
 
@@ -348,12 +364,20 @@ export function start(canvas: HTMLCanvasElement): void {
   let rings: Ring[] = [];
   let floatingTexts: FloatingText[] = [];
   let lasers: Laser[] = [];
+  // Per-run key state. Camera is created once and snapped to each
+  // room's bounds on entry. currentKey lives at the kill site of the
+  // enemy flagged dropsKey; keyHeld flips when the player walks over
+  // it. Both reset per room transition.
+  const camera: Camera = createCamera();
+  let currentKey: Key | null = null;
+  let keyHeld = false;
 
   const rooms = new Map<string, Room>();
   rooms.set("room1", buildRoom1());
   rooms.set("room2", buildRoom2());
   rooms.set("room3", buildRoom3());
   rooms.set("room4", buildRoom4());
+  rooms.set("room5", buildRoom5());
 
   const state: GameState = {
     runState: "playing",
@@ -393,12 +417,14 @@ export function start(canvas: HTMLCanvasElement): void {
     player.cooldown = 0;
   }
   spawnPlayerInCurrentRoom();
+  snapCameraToRoom();
 
   function rebuildAllRooms() {
     rooms.set("room1", buildRoom1());
     rooms.set("room2", buildRoom2());
     rooms.set("room3", buildRoom3());
     rooms.set("room4", buildRoom4());
+  rooms.set("room5", buildRoom5());
   }
 
   function restartRun() {
@@ -425,9 +451,12 @@ export function start(canvas: HTMLCanvasElement): void {
     rings = [];
     floatingTexts = [];
     lasers = [];
+    currentKey = null;
+    keyHeld = false;
     tryAgainBounds = null;
     spawnPlayerInCurrentRoom();
     resetEyeState(player);
+    snapCameraToRoom();
   }
 
   function transitionToRoom(id: string) {
@@ -438,7 +467,39 @@ export function start(canvas: HTMLCanvasElement): void {
     rings = [];
     floatingTexts = [];
     lasers = [];
+    currentKey = null;
+    keyHeld = false;
     spawnPlayerInCurrentRoom();
+    snapCameraToRoom();
+  }
+
+  function roomBounds(): WorldBounds {
+    return {
+      minX: 0,
+      minY: 0,
+      maxX: currentRoom.width ?? ROOM_W_PX,
+      maxY: currentRoom.height ?? ROOM_H_PX,
+    };
+  }
+
+  function snapCameraToRoom(): void {
+    if (!currentRoom.useCamera) {
+      camera.x = 0;
+      camera.y = 0;
+      camera.targetX = 0;
+      camera.targetY = 0;
+      return;
+    }
+    updateCamera(
+      camera,
+      player.x,
+      player.y,
+      ROOM_W_PX,
+      ROOM_H_PX,
+      roomBounds(),
+      1,
+    );
+    snapCamera(camera);
   }
 
   // ------- input / menu -------
@@ -730,6 +791,10 @@ export function start(canvas: HTMLCanvasElement): void {
     if (state.clearedRoomIds.has(currentRoom.id)) return;
     if (currentRoom.enemies.length === 0) return; // empty rooms (room2) — skip
     if (aliveEnemies().length > 0) return;
+    // Door with requiresKey stays closed until the player has the key,
+    // even after every enemy is dead. Once the key is grabbed and
+    // we're already cleared, we'll open then via the same path.
+    if (currentRoom.door?.requiresKey && !keyHeld) return;
     state.clearedRoomIds.add(currentRoom.id);
     state.clearFlash = ROOM_CLEAR_FLASH;
     if (currentRoom.door) currentRoom.door.state = "open";
@@ -1095,10 +1160,41 @@ export function start(canvas: HTMLCanvasElement): void {
           if (e.isDead()) {
             emitEnemyKill(makeImpactCtx(), e);
             destroyEnemy(e);
+            // Drop the room's key at the kill site if this enemy
+            // was flagged. Only one key per room.
+            if (e.dropsKey && !currentKey) {
+              currentKey = createKey(e.x, e.y);
+            }
           } else {
             emitEnemyDamage(makeImpactCtx(), e, player.x, player.y);
           }
         }
+      }
+    }
+
+    // key tick + pickup
+    if (currentKey) {
+      updateKey(currentKey, dt);
+      if (
+        !keyHeld &&
+        !currentKey.collected &&
+        checkKeyPickup(currentKey, player.x, player.y)
+      ) {
+        currentKey.collected = true;
+        keyHeld = true;
+        audio.play.pickupGrab("hp");
+        addFloatingText(
+          floatingTexts,
+          "KEY ACQUIRED",
+          player.x,
+          player.y - settings.player.size,
+          {
+            size: 18,
+            color: "#ffd60a",
+            lifetime: 0.9,
+            vy: -40,
+          },
+        );
       }
     }
 
@@ -1142,6 +1238,19 @@ export function start(canvas: HTMLCanvasElement): void {
       transitionToRoom(currentRoom.nextRoomId);
     }
 
+    // follow camera — runs even on the failed-overlay branch since
+    // the eye still updates there (see early-return path)
+    if (currentRoom.useCamera) {
+      updateCamera(
+        camera,
+        player.x,
+        player.y,
+        ROOM_W_PX,
+        ROOM_H_PX,
+        roomBounds(),
+      );
+    }
+
     render();
     requestAnimationFrame(frame);
   }
@@ -1175,6 +1284,14 @@ export function start(canvas: HTMLCanvasElement): void {
     // from letterbox bars)
     ctx.fillStyle = "#0d1326";
     ctx.fillRect(0, 0, ROOM_W_PX, ROOM_H_PX);
+
+    // Camera scrolls the world inside the canonical letterbox. Non-
+    // camera rooms (1-3, 5 placeholder) draw at world == canvas.
+    const useCamera = !!currentRoom.useCamera;
+    if (useCamera) {
+      ctx.save();
+      ctx.translate(-camera.x, -camera.y);
+    }
 
     drawWalls(ctx, currentRoom.walls);
     if (currentRoom.door) drawDoor(ctx, currentRoom.door);
@@ -1284,6 +1401,9 @@ export function start(canvas: HTMLCanvasElement): void {
       ctx.restore();
     }
 
+    // key pickup (drawn above bullets / particles, below HUD)
+    if (currentKey && !currentKey.collected) drawKey(ctx, currentKey);
+
     // floating texts
     for (const ft of floatingTexts) {
       const alpha = 1 - ft.age / ft.lifetime;
@@ -1304,6 +1424,8 @@ export function start(canvas: HTMLCanvasElement): void {
       );
       ctx.restore();
     }
+
+    if (useCamera) ctx.restore();
 
     // room placeholder text
     if (currentRoom.message) {
@@ -1413,7 +1535,9 @@ export function start(canvas: HTMLCanvasElement): void {
             ? 3
             : currentRoom.id === "room4"
               ? 4
-              : 1;
+              : currentRoom.id === "room5"
+                ? 5
+                : 1;
     ctx.fillText(`${roomNum} / ${ROOM_TOTAL}`, colA, y0 + 14);
 
     const alive = aliveEnemies().length;
@@ -1445,6 +1569,18 @@ export function start(canvas: HTMLCanvasElement): void {
     ctx.fillStyle = "#ffffff";
     ctx.font = "600 22px ui-monospace, SFMono-Regular, Menlo, monospace";
     ctx.fillText(state.score.toLocaleString("en-US"), colB, heartsY);
+
+    // Key indicator (top-right). Shown only on rooms whose door
+    // requiresKey, so 1-3 stay clean.
+    if (currentRoom.door?.requiresKey) {
+      const kx = viewW - 40;
+      const ky = 26;
+      drawKeyHudIcon(ctx, kx, ky, keyHeld);
+      ctx.fillStyle = keyHeld ? "#ffd60a" : "rgba(255, 214, 10, 0.55)";
+      ctx.font = "500 11px ui-monospace, SFMono-Regular, Menlo, monospace";
+      ctx.textAlign = "right";
+      ctx.fillText("1 / 1", viewW - 20, ky + 14);
+    }
 
     ctx.restore();
   }

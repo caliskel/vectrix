@@ -397,11 +397,73 @@ Each room is rebuilt fresh by its `buildRoomN()` factory on
   right-wall door layout as Rooms 1–2 — door closed until the Hunter
   is destroyed. On clear: door opens → Room 4 placeholder.
 
-### Room 4 (placeholder)
+### Room 4
 
-- Closed border, no enemies, no door, `message: "Room 4 — coming
-  soon"`. Used to verify the Room 3 → Room 4 transition while
-  Room 4 content is in flight.
+Long horizontal corridor — first room that needs the follow camera.
+
+- World is 3600×600 (3× viewport width, taller than tall enough
+  to make camera scroll the only practical view). `useCamera =
+  true`, `width / height` set so `roomBounds()` returns the right
+  clamp. Camera is centered on the player; vertical clamp folds
+  the 600-tall world into the 800-tall canonical viewport with
+  100 px of letterbox-internal padding above and below.
+- Player spawns at (200, 300). Three **Turret**s at (900, 300),
+  (1900, 300), (2900, 300) and one **Watcher** at (3300, 300).
+  Three short pillar walls (60×120) at (1100, 280), (1900, 100),
+  (2700, 360) force weaving / dashing through. Enemies don't
+  collide with pillars (simplification).
+- The third turret has `dropsKey = true` — its kill spawns a Key
+  at the kill site. Door at (3570, 300) is `requiresKey: true`;
+  it stays closed until both every enemy is dead AND the player
+  picked up the key. On clear: door switches to "open" arrow,
+  +5 mult-up sting, → Room 5.
+
+### Room 5 (placeholder)
+
+- Closed border, no enemies, no door, `message: "Room 5 — coming
+  soon"`. Verifies the Room 4 → Room 5 transition while real
+  Room 5 content is in flight.
+
+## Camera system (`lib/camera.ts`)
+
+Follow camera with viewport clamping. `Camera` holds `{ x, y,
+targetX, targetY }`; `updateCamera(camera, targetX, targetY,
+viewportW, viewportH, bounds, lerp = 0.08)` lerps toward
+`target − viewport/2` clamped to `[bounds.minX, bounds.maxX −
+viewportW]` (same for Y). When `maxX < minX` (world smaller than
+viewport) the helper centers instead of oscillating. `snapCamera`
+forces the camera to its current target — used at room
+transitions so the entry frame doesn't whip-pan from the previous
+room's camera position.
+
+rooms-game opts into the camera per-room via `Room.useCamera`. In
+the render loop the world drawing block is wrapped in
+`ctx.save() → ctx.translate(-camera.x, -camera.y) → ... →
+ctx.restore()` so HUD and full-screen overlays stay in screen
+space. Non-camera rooms (1, 2, 3, 5 placeholder) skip the wrap
+entirely and treat world coords as canvas coords 1:1.
+
+## Keys system (`lib/keys.ts`)
+
+Per-room key pickup that gates the exit door alongside "all
+enemies dead". `Key` is `{ x, y, collected, age }`; `createKey`
+spawns at the kill site, `updateKey` advances spawn pop + bob,
+`drawKey` renders a golden diamond + stem + teeth with a neon
+glow, `checkKeyPickup(key, px, py)` is a 28 px radius proximity
+check, and `drawKeyHudIcon(ctx, x, y, collected)` paints the
+HUD slot (silhouette outline when not held, filled gold when
+held).
+
+Game flow: when an `Enemy.dropsKey` flagged enemy dies via
+`emitEnemyKill`, rooms-game stamps `currentKey = createKey(e.x,
+e.y)`. The frame loop ticks the key + checks pickup; on pickup
+`keyHeld = true`, an "KEY ACQUIRED" floating text rises from
+the player, and `audio.play.pickupGrab("hp")` plays as a
+placeholder cue. `checkRoomCleared` skips the open transition
+while `door.requiresKey && !keyHeld`, even if all enemies are
+dead — so the player must collect before exiting. `Door` gained
+a `requiresKey` flag (default false); when true and closed the
+door visual swaps the red X for a golden lock with a keyhole.
 
 ### Watcher (`lib/enemies/watcher.ts`)
 
@@ -550,8 +612,12 @@ settings overlay on Esc / Tab.
 
 ### TODO (rooms direction)
 
-- **Room 3** — currently a "coming soon" placeholder; needs real
-  content (probably the third enemy archetype + a small encounter).
+- **Room 5** — currently a "coming soon" placeholder; needs real
+  content (likely the next mechanic introduction or a small
+  multi-enemy encounter).
+- **Key icon visual polish** — the `drawKey` glyph is a diamond
+  + stem; readable but a bit primitive. A more iconic key shape
+  (or a proper sprite) would improve the HUD slot too.
 - **Laser sound** — Watcher reuses `audio.play.bulletBreak` for
   the firing cue; needs its own dedicated synth (saw sweep + noise
   burst would read cleanly).
