@@ -1425,7 +1425,6 @@ function render() {
   // player — eye-orb with pupil tracking the nearest bullet
   const pSize = settings.player.size;
   const dashing = player.dashTime > 0;
-  const dashIframe = player.dashIframeTime > 0;
   const cooling = player.cooldown > 0;
 
   let drawPlayer = true;
@@ -1434,23 +1433,20 @@ function render() {
   }
 
   if (drawPlayer) {
-    // Dash-state colours are design-locked to PALETTE.playerDash
-    // (cyan) so the dash always reads as the same beat. Non-dash
-    // ring / iris / pupil come from the player profile via
-    // drawPlayerEye's profile override.
-    const dashColor = PALETTE.playerDash;
-    const ringColor =
-      dashing || dashIframe ? dashColor : profile.outerRing;
-    const glow = state.effects.breaker ? PALETTE.pickupBreaker : ringColor;
-    const pupilColor =
-      dashing || dashIframe ? dashColor : profile.pupil;
+    // Body layers (ring / iris / pupil) come straight from the player
+    // profile — the eye's skin never flips between idle and dash. The
+    // halo around the outer ring is owned by drawPlayerEye and reads
+    // dash vs idle internally; the only override here is the Bullet
+    // Breaker pickup tint, which paints the halo orange while active.
     drawPlayerEye(ctx, player, pSize, {
-      ringColor,
-      glowColor: glow,
-      pupilColor,
-      ghostColor: dashColor,
+      ringColor: profile.outerRing,
+      pupilColor: profile.pupil,
+      ghostColor: profile.outerRing,
       dashDurationSec: settings.dash.durationMs / 1000,
       profile,
+      ...(state.effects.breaker
+        ? { glowColor: PALETTE.pickupBreaker }
+        : {}),
     });
   }
 

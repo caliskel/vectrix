@@ -144,8 +144,10 @@ export type PlayerProfile = {
   outerRing: string;
   iris: string;
   pupil: string;
-  /** Color of the sparks emitted while dashing. Doesn't recolor the eye
-   *  itself — the dash-state ring/pupil/glow stay on PALETTE.playerDash. */
+  /** "Dash energy" colour — drives the spark trail emitted while
+   *  dashing AND the halo (neon shadow) around the outer ring during
+   *  a dash. The eye body layers (ring/iris/pupil) keep their own
+   *  profile colours; only the halo and trail flip to this. */
   dashParticles: string;
 };
 
@@ -851,18 +853,23 @@ function pickIdleTarget(p: Player, maxOffset: number): void {
 
 export type EyeRenderOpts = {
   ringColor: string;
-  glowColor: string;
   pupilColor: string;
   ghostColor: string;
   dashDurationSec: number;
   /** Defaults to PALETTE.bg when neither this nor profile.iris is set. */
   irisColor?: string;
+  /** Halo (neon shadow) override around the outer ring. When omitted,
+   *  drawPlayerEye derives the halo from profile/state: profile.outerRing
+   *  in idle, profile.dashParticles during a dash. Pass an explicit
+   *  colour to tint the halo for a transient effect (sandbox uses this
+   *  for the Bullet Breaker pickup). */
+  glowColor?: string;
   blurStrong?: number;
   blurSoft?: number;
   /**
-   * When provided, overrides ringColor / pupilColor / irisColor with the
-   * profile's values — the eye reads as the player's saved customization
-   * regardless of dash/walk state.
+   * When provided, drives every body layer (ring / iris / pupil) and
+   * the dash halo (via dashParticles) — the eye reads as the player's
+   * saved customisation regardless of dash/walk state.
    */
   profile?: PlayerProfile;
 };
@@ -923,23 +930,21 @@ export function drawPlayerEye(
   const baseX = p.x + sx;
   const baseY = p.y + sy;
 
-  // Resolve final colors. Profile takes over for outer ring + pupil only
-  // when the eye is in its idle/walk state — during a dash (or its i-frame)
-  // we keep the original opts values (mode passes settings.player.colorDash)
-  // so the "locked-on" dash cue and ghost trail stay on the canonical
-  // dash color, regardless of customization. Iris always follows profile.
-  const inDashColorState = isDashing || p.dashIframeTime > 0;
-  const useProfileForBody = !!opts.profile && !inDashColorState;
-  const ringColor = useProfileForBody
-    ? (opts.profile as PlayerProfile).outerRing
-    : opts.ringColor;
-  const pupilColor = useProfileForBody
-    ? (opts.profile as PlayerProfile).pupil
-    : opts.pupilColor;
-  const glowColor = useProfileForBody
-    ? (opts.profile as PlayerProfile).outerRing
-    : opts.glowColor;
+  // Resolve final colors. Profile (when provided) drives every body
+  // layer in every state — the live skin no longer flips to a canonical
+  // dash colour. The halo around the outer ring is the only piece that
+  // reads dash vs idle: during a dash it picks profile.dashParticles
+  // so the "energy" layer reads as the same colour as the trail and
+  // the ghost copies. opts.glowColor stays an explicit override on top
+  // (sandbox uses it for the Bullet Breaker pickup tint).
+  const ringColor = opts.profile?.outerRing ?? opts.ringColor;
+  const pupilColor = opts.profile?.pupil ?? opts.pupilColor;
   const irisColor = opts.profile?.iris ?? opts.irisColor ?? PALETTE.bg;
+  const haloColor =
+    opts.glowColor ??
+    (isDashing
+      ? (opts.profile?.dashParticles ?? ringColor)
+      : ringColor);
   // Dash ghosts render as a full skin echo: ring/iris/pupil/highlight
   // all in profile colours, so the trailing copies match the live skin
   // exactly. Callers without a profile (safety fallback only — every
@@ -1108,7 +1113,7 @@ export function drawPlayerEye(
       ctx.lineWidth = 2;
       ctx.stroke();
     },
-    glowColor,
+    haloColor,
     opts.blurStrong ?? 25,
     opts.blurSoft ?? 10,
   );

@@ -1921,8 +1921,6 @@ export function start(canvas: HTMLCanvasElement): void {
 
     // player
     const pSize = settings.player.size;
-    const dashing = player.dashTime > 0;
-    const dashIframe = player.dashIframeTime > 0;
 
     let drawPlayer = true;
     if (state.hitIframe > 0) {
@@ -1930,18 +1928,14 @@ export function start(canvas: HTMLCanvasElement): void {
     }
 
     if (drawPlayer) {
-      // Dash colours are design-locked to PALETTE.playerDash; non-dash
-      // ring / iris / pupil come from the profile via drawPlayerEye.
-      const dashColor = PALETTE.playerDash;
-      const ringColor =
-        dashing || dashIframe ? dashColor : profile.outerRing;
-      const pupilColor =
-        dashing || dashIframe ? dashColor : profile.pupil;
+      // Body layers come straight from the player profile in every
+      // state. The dash halo is derived inside drawPlayerEye from
+      // profile.dashParticles, so the energy reads as the same colour
+      // as the trail and the ghost copies.
       drawPlayerEye(ctx, player, pSize, {
-        ringColor,
-        glowColor: ringColor,
-        pupilColor,
-        ghostColor: dashColor,
+        ringColor: profile.outerRing,
+        pupilColor: profile.pupil,
+        ghostColor: profile.outerRing,
         dashDurationSec: settings.dash.durationMs / 1000,
         profile,
       });
