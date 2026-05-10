@@ -7,6 +7,13 @@ import {
   WATCHER_BRAKE_SQUASH_X,
   WATCHER_BRAKE_STRETCH_Y,
   WATCHER_DECEL_FACTOR,
+  WATCHER_IDLE_DRIFT_AMPLITUDE_X,
+  WATCHER_IDLE_DRIFT_AMPLITUDE_Y,
+  WATCHER_IDLE_DRIFT_LERP,
+  WATCHER_IDLE_DRIFT_SPEED,
+  WATCHER_IDLE_PUPIL_INTERVAL_MAX_MS,
+  WATCHER_IDLE_PUPIL_INTERVAL_MIN_MS,
+  WATCHER_IDLE_PUPIL_LERP,
   WATCHER_SPEED_FACTOR,
 } from "../config";
 import { drawNeon } from "../neon";
@@ -90,6 +97,16 @@ export class Watcher implements Enemy {
   alertTimer = 0;
   awarenessSquashTime = 0;
   awarenessGlowBoost = 0;
+  // Idle posture — Watcher drifts in a slow figure-eight around its
+  // home position while sleeping, and the pupil wanders idle-look
+  // style instead of tracking the player.
+  private prevAwarenessState: AwarenessState = "idle";
+  private idleHomeX: number;
+  private idleHomeY: number;
+  private idleDriftPhase = 0;
+  private idlePupilTimer: number;
+  private idlePupilTargetX = 0;
+  private idlePupilTargetY = 0;
   private destroyed = false;
   vx = 0;
   vy = 0;
@@ -111,6 +128,9 @@ export class Watcher implements Enemy {
     this.x = x;
     this.y = y;
     this.hp = WATCHER_HP_MAX;
+    this.idleHomeX = x;
+    this.idleHomeY = y;
+    this.idlePupilTimer = randomIdlePupilInterval();
     initAwareness(this, ENEMY_WATCHER_DETECTION);
   }
 
@@ -129,15 +149,68 @@ export class Watcher implements Enemy {
 
   update(ctxRoom: EnemyContext): void {
     if (this.destroyed) return;
+    const { dt, player } = ctxRoom;
+
+    // Latch idle home on idle → non-idle transition so a future
+    // de-aggro returns the Watcher to wherever it was alerted, not
+    // its original spawn point.
+    if (
+      this.prevAwarenessState === "idle" &&
+      this.awarenessState !== "idle"
+    ) {
+      this.idleHomeX = this.x;
+      this.idleHomeY = this.y;
+      this.idleDriftPhase = 0;
+    }
+    this.prevAwarenessState = this.awarenessState;
+
     if (this.awarenessState !== "aggro") {
-      // Idle / alerting: no chase, no laser. The pupil can still
-      // wander via the existing pupil tracking pass below — but bail
-      // here so velocity stays zero and combat phases don't tick.
       this.vx = 0;
       this.vy = 0;
+      if (this.awarenessState === "idle") {
+        // Slow figure-eight drift. Y phase is multiplied by 0.7 so the
+        // axes go out of sync over the cycle.
+        this.idleDriftPhase += dt * 1000 * WATCHER_IDLE_DRIFT_SPEED;
+        const driftX =
+          Math.sin(this.idleDriftPhase) * WATCHER_IDLE_DRIFT_AMPLITUDE_X;
+        const driftY =
+          Math.sin(this.idleDriftPhase * 0.7) *
+          WATCHER_IDLE_DRIFT_AMPLITUDE_Y;
+        const targetX = this.idleHomeX + driftX;
+        const targetY = this.idleHomeY + driftY;
+        const k = 1 - Math.pow(1 - WATCHER_IDLE_DRIFT_LERP, dt * 60);
+        this.x += (targetX - this.x) * k;
+        this.y += (targetY - this.y) * k;
+        resolveEntityWallCollisions(this, ctxRoom.walls, WATCHER_RADIUS);
+
+        // Idle-look pupil — pick a new target every ~1.5 s; lerp
+        // pupil offset toward it with WATCHER_IDLE_PUPIL_LERP.
+        this.idlePupilTimer -= dt;
+        if (this.idlePupilTimer <= 0) {
+          const target = pickIdlePupilTarget(MAX_PUPIL_OFFSET);
+          this.idlePupilTargetX = target.x;
+          this.idlePupilTargetY = target.y;
+          this.idlePupilTimer = randomIdlePupilInterval();
+        }
+        const kp = 1 - Math.pow(1 - WATCHER_IDLE_PUPIL_LERP, dt * 60);
+        this.pupilOffsetX +=
+          (this.idlePupilTargetX - this.pupilOffsetX) * kp;
+        this.pupilOffsetY +=
+          (this.idlePupilTargetY - this.pupilOffsetY) * kp;
+      } else {
+        // alerting — frozen body, but the pupil snaps onto the player
+        // so the "I see you" read lines up with the "!" telegraph.
+        const dx = player.x - this.x;
+        const dy = player.y - this.y;
+        const inv = 1 / Math.max(Math.hypot(dx, dy), 1e-6);
+        const tx = dx * inv * MAX_PUPIL_OFFSET;
+        const ty = dy * inv * MAX_PUPIL_OFFSET;
+        const kp = 1 - Math.exp(-PUPIL_LERP_RATE * dt);
+        this.pupilOffsetX += (tx - this.pupilOffsetX) * kp;
+        this.pupilOffsetY += (ty - this.pupilOffsetY) * kp;
+      }
       return;
     }
-    const { dt, player } = ctxRoom;
 
     // Movement model per phase:
     //   idle     — direct-set velocity toward player (full chase).
@@ -447,4 +520,25 @@ export class Watcher implements Enemy {
     this.takeDamage(1);
     return true;
   }
+}
+
+function randomIdlePupilInterval(): number {
+  const minSec = WATCHER_IDLE_PUPIL_INTERVAL_MIN_MS / 1000;
+  const maxSec = WATCHER_IDLE_PUPIL_INTERVAL_MAX_MS / 1000;
+  return minSec + Math.random() * (maxSec - minSec);
+}
+
+// 15 % chance the pupil snaps to dead-center; otherwise pick a random
+// angle and a tier-weighted distance (60 % near, 30 % mid, 10 % far)
+// within `maxOffset`.
+function pickIdlePupilTarget(maxOffset: number): { x: number; y: number } {
+  if (Math.random() < 0.15) return { x: 0, y: 0 };
+  const tier = Math.random();
+  let centerR: number;
+  if (tier < 0.6) centerR = 0.3;
+  else if (tier < 0.9) centerR = 0.6;
+  else centerR = 0.9;
+  const angle = Math.random() * Math.PI * 2;
+  const dist = centerR * maxOffset;
+  return { x: Math.cos(angle) * dist, y: Math.sin(angle) * dist };
 }

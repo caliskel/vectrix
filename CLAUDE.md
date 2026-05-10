@@ -531,6 +531,20 @@ Fragile (HP 2) but dangerous at distance.
   idle → aiming with `endX/endY` captured at that instant; the
   beam doesn't follow the player. The laser self-expires after
   chargingDuration + firingDuration.
+- **Idle behavior** — while `awarenessState === "idle"` the body
+  drifts in a slow figure-eight around `idleHomeX/Y` (sin
+  amplitudes 30 px X / 8 px Y, Y phase × 0.7 so the axes desync,
+  drift period ≈ 7.8 s) and the pupil runs an idle-look pass:
+  every 1–2 s pick a new offset (60 % near, 30 % mid, 10 % far,
+  with a 15 % chance of dead-center "looking forward") and lerp
+  toward it at `WATCHER_IDLE_PUPIL_LERP = 0.08`. On the
+  idle → alerting transition the current position is latched as
+  the new home so a future de-aggro returns to the alert spot,
+  not the spawn. During alerting the body freezes and the pupil
+  snaps to the player so the "I see you" read aligns with the
+  "!" telegraph. Drift respects walls via
+  `resolveEntityWallCollisions` (constants live in `config.ts`
+  under `WATCHER_IDLE_*`).
 - HP 2; only damage path is dash-through during the dash i-frame
   (one damage per dash session via `dashIdAlreadyDamaged`). Outside
   the dash i-frame, contact deals normal player damage.

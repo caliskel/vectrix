@@ -242,6 +242,20 @@ export const WATCHER_BRAKE_STRETCH_Y = 1.12;
 export const WATCHER_BRAKE_SQUASH_DURATION_MS = 150;
 export const WATCHER_BRAKE_RECOVERY_MS = 200;
 
+// Watcher idle behavior — slow horizontal drift around its home spot
+// + pupil that wanders rather than tracking nothing. Active only
+// while awarenessState === "idle".
+export const WATCHER_IDLE_DRIFT_AMPLITUDE_X = 30;
+export const WATCHER_IDLE_DRIFT_AMPLITUDE_Y = 8;
+// Phase advance per millisecond — applied as `dt * 1000 * SPEED` so a
+// dt-in-seconds loop matches the user-facing "0.0008" rate (period
+// ≈ 7.8 s on the X axis).
+export const WATCHER_IDLE_DRIFT_SPEED = 0.0008;
+export const WATCHER_IDLE_DRIFT_LERP = 0.05;
+export const WATCHER_IDLE_PUPIL_LERP = 0.08;
+export const WATCHER_IDLE_PUPIL_INTERVAL_MIN_MS = 1000;
+export const WATCHER_IDLE_PUPIL_INTERVAL_MAX_MS = 2000;
+
 // Enemy awareness — sleeping detection radius + alert ramp before
 // combat kicks in. Each archetype has its own radius reflecting role
 // (Watcher sees furthest as a sniper; Hunter shortest, since it gets
