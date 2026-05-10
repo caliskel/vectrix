@@ -410,8 +410,9 @@ Long horizontal corridor — first room that needs the follow camera.
 - Player spawns at (200, 300). Three **Turret**s at (900, 300),
   (1900, 300), (2900, 300) and one **Watcher** at (3300, 300).
   Three short pillar walls (60×120) at (1100, 280), (1900, 100),
-  (2700, 360) force weaving / dashing through. Enemies don't
-  collide with pillars (simplification).
+  (2700, 360) force weaving / dashing through. The Watcher slides
+  along walls and pillars via `resolveEntityWallCollisions` (it's
+  no longer the clip-through eye it used to be).
 - The third turret has `dropsKey = true` — its kill spawns a Key
   at the kill site. Door at (3570, 300) is `requiresKey: true`;
   it stays closed until both every enemy is dead AND the player
@@ -455,10 +456,14 @@ the three states. `drawAwarenessExclamation` renders the "!" in
 world coords above the enemy during alerting.
 
 Detection radii live in `config.ts`: Turret 280, Watcher 350
-(sniper sight line), Hunter 220 (he gets in close fast). Resets
-implicitly on `restartRun` because rooms are rebuilt with fresh
-enemy instances; on room transitions the next room's enemies
-arrive in `idle` for the same reason.
+(sniper sight line), Hunter 220 (he gets in close fast).
+Per-instance overrides via `setDetectionRadius(enemy, n)` —
+Room 4's corridor staggers radii (Turret 1 = 400, Turret 2 = 500,
+Turret 3 = 500, Watcher = 600) so the hallway wakes enemies
+left-to-right as the player crosses it. Resets implicitly on
+`restartRun` because rooms are rebuilt with fresh enemy
+instances; on room transitions the next room's enemies arrive
+in `idle` for the same reason.
 
 The HUD top-center renders **DETECTED** (red) if any enemy is
 aggro, **ALERT** (orange) if any is alerting, otherwise nothing.
@@ -532,6 +537,31 @@ Fragile (HP 2) but dangerous at distance.
 - Death: +800 score, double ring (red outer + white inner), 12
   particles split between PALETTE.bullet and white,
   `bulletBreak` cue. `console.log("Watcher destroyed")` for tracing.
+- **Friendly fire** — every Watcher beam carries a unique `Laser.id`
+  and the room loop checks each living non-owner enemy against the
+  beam segment during the firing window. A hit (within
+  `enemy.hitboxRadius + 8 px`) is deduped per laser via the
+  enemy's `hitByLaserId` so a single firing only credits one hit
+  per target. On a non-fatal hit the standard MEDIUM impact runs
+  (white flash, knockback along the beam, ring + particles +
+  shake + `audio.play.hitMedium()`). On a fatal hit the kill burst
+  fires (`emitEnemyKill` + score from `destroyEnemy`) and the
+  player gets a flat `FRIENDLY_FIRE_BONUS = 200` on top with a
+  "FRIENDLY FIRE" floating text — luring an enemy onto the beam
+  is intentional play, not a glitch.
+
+### Wall collisions for moving enemies
+
+`lib/walls.ts` exposes `resolveEntityWallCollisions(entity, walls,
+halfSize)` — generic AABB resolve (entity needs `{ x, y, vx, vy }`)
+that pushes the entity out of any wall along the smallest
+penetration axis and zeroes the matching velocity component so
+it slides along the wall instead of locking. The previous
+`resolvePlayerWallCollisions` is now a thin alias. Watcher and
+Hunter call this after their move integration in `update()`,
+using their hitbox radius (Watcher 30, Hunter 14). Walls are
+exposed on `EnemyContext.walls` so each enemy can consume the
+current room's walls without rooms-game routing.
 
 ### Hunter (`lib/enemies/hunter.ts`)
 
@@ -662,9 +692,6 @@ settings overlay on Esc / Tab.
 - **Laser sound** — Watcher reuses `audio.play.bulletBreak` for
   the firing cue; needs its own dedicated synth (saw sweep + noise
   burst would read cleanly).
-- **Watcher wall collision** — currently the eye walks straight
-  through wall AABBs. Needs the same `resolvePlayerWallCollisions`
-  treatment as the player.
 - **More rooms.** Authoring pattern: one `buildRoomN()` factory per
   room, registered in `rooms-game.ts`. Eventually a small data file
   describing pattern timelines.

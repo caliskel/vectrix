@@ -10,6 +10,7 @@ import {
   WATCHER_SPEED_FACTOR,
 } from "../config";
 import { drawNeon } from "../neon";
+import { resolveEntityWallCollisions } from "../walls";
 import {
   awarenessGlowMul,
   awarenessSquashScale,
@@ -59,6 +60,11 @@ const PHASE_COOLDOWN_SEC = 0.8;
 
 type WatcherPhase = "idle" | "aiming" | "firing" | "cooldown";
 
+// Module-level laser id counter. Each spawned beam gets a unique id
+// so per-laser dedup (player dodge bonus + friendly-fire damage)
+// doesn't cross between firings.
+let nextLaserId = 1;
+
 const MAX_PUPIL_OFFSET = (IRIS_OUTER_R - PUPIL_RADIUS) * 0.7;
 const VELOCITY_SNAP_THRESHOLD = 5; // px/s; below this we kill drift to 0
 const BRAKE_SQUASH_SEC = WATCHER_BRAKE_SQUASH_DURATION_MS / 1000;
@@ -77,14 +83,16 @@ export class Watcher implements Enemy {
   knockbackPeakX = 0;
   knockbackPeakY = 0;
   dropsKey = false;
+  hitboxRadius = 30;
+  hitByLaserId = 0;
   awarenessState: AwarenessState = "idle";
   detectionRadius = ENEMY_WATCHER_DETECTION;
   alertTimer = 0;
   awarenessSquashTime = 0;
   awarenessGlowBoost = 0;
   private destroyed = false;
-  private vx = 0;
-  private vy = 0;
+  vx = 0;
+  vy = 0;
   private pupilOffsetX = 0;
   private pupilOffsetY = 0;
   private pupilLockX = 0;
@@ -184,6 +192,9 @@ export class Watcher implements Enemy {
     }
     this.x += this.vx * dt;
     this.y += this.vy * dt;
+    // Wall collisions — slide along the wall instead of clipping
+    // through. Half-size matches the orb's outer ring radius.
+    resolveEntityWallCollisions(this, ctxRoom.walls, WATCHER_RADIUS);
 
     // Tick brake squash timer
     if (this.brakeAge >= 0) {
@@ -236,6 +247,7 @@ export class Watcher implements Enemy {
         }
         this.brakeAge = 0;
         const laser: Laser = {
+          id: nextLaserId++,
           ownerType: "watcher",
           ownerEnemy: this,
           aimAngle: Math.atan2(dy, dx),

@@ -33,6 +33,8 @@ export class Turret implements Enemy {
   knockbackPeakX = 0;
   knockbackPeakY = 0;
   dropsKey = false;
+  hitboxRadius = 25;
+  hitByLaserId = 0;
   awarenessState: AwarenessState = "idle";
   detectionRadius = ENEMY_TURRET_DETECTION;
   alertTimer = 0;

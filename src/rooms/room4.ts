@@ -1,4 +1,5 @@
 import { makeDoor } from "../lib/door";
+import { setDetectionRadius } from "../lib/enemies/awareness";
 import { Turret } from "../lib/enemies/turret";
 import { Watcher } from "../lib/enemies/watcher";
 import type { Wall } from "../lib/walls";
@@ -44,6 +45,14 @@ export function buildRoom4(): Room {
   // Third turret holds the key — its kill spawns the pickup.
   turret3.dropsKey = true;
   const watcher = new Watcher(3300, 300);
+  // Stagger detection so the corridor wakes up paced — first turret
+  // fires roughly when the player crosses 500, second around 1400,
+  // third around 2400, Watcher kicks in last as the corridor's
+  // sentinel.
+  setDetectionRadius(turret1, 400);
+  setDetectionRadius(turret2, 500);
+  setDetectionRadius(turret3, 500);
+  setDetectionRadius(watcher, 600);
 
   return {
     id: "room4",

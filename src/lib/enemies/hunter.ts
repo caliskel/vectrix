@@ -9,6 +9,7 @@ import {
   HUNTER_TRAIL_MIN_VELOCITY,
 } from "../config";
 import { drawNeon } from "../neon";
+import { resolveEntityWallCollisions } from "../walls";
 import {
   awarenessGlowMul,
   awarenessSquashScale,
@@ -91,14 +92,16 @@ export class Hunter implements Enemy {
   knockbackPeakX = 0;
   knockbackPeakY = 0;
   dropsKey = false;
+  hitboxRadius = 14;
+  hitByLaserId = 0;
   awarenessState: AwarenessState = "idle";
   detectionRadius = ENEMY_HUNTER_DETECTION;
   alertTimer = 0;
   awarenessSquashTime = 0;
   awarenessGlowBoost = 0;
   private destroyed = false;
-  private vx = 0;
-  private vy = 0;
+  vx = 0;
+  vy = 0;
   private dashIdAlreadyDamaged = -1;
   private contactSquashTime = 0;
   // Cached so draw() can scale glow / speed lines without an EnemyContext
@@ -157,6 +160,8 @@ export class Hunter implements Enemy {
     }
     this.x += this.vx * dt;
     this.y += this.vy * dt;
+    // Slide along walls instead of clipping through.
+    resolveEntityWallCollisions(this, ctxRoom.walls, HUNTER_HITBOX_RADIUS);
     if (this.contactSquashTime > 0) {
       this.contactSquashTime = Math.max(0, this.contactSquashTime - dt);
     }

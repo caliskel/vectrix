@@ -1,6 +1,7 @@
 import type { Bullet } from "../bullets";
 import type { FloatingText, Particle, Ring } from "../particles";
 import type { Player } from "../player";
+import type { Wall } from "../walls";
 
 export type EnemyType = "turret" | "watcher" | "hunter";
 
@@ -23,6 +24,9 @@ export type AwarenessState = "idle" | "alerting" | "aggro";
 // current owner position; so the beam always pierces the full room
 // rather than stopping at the captured aim point.
 export type Laser = {
+  /** Unique per-instance id so per-laser dedup (player dodge bonus,
+   *  friendly-fire damage application) doesn't cross between lasers. */
+  id: number;
   ownerType: EnemyType;
   ownerEnemy: Enemy;
   aimAngle: number;
@@ -49,6 +53,9 @@ export type EnemyContext = {
   bulletsConfig: { speed: number; size: number; color: string };
   playerHalfSize: number;
   playerMaxSpeed: number;
+  /** Walls of the current room — moving enemies (Watcher, Hunter)
+   *  resolve collisions against these so they don't clip through. */
+  walls: Wall[];
 };
 
 export interface Enemy {
@@ -91,6 +98,14 @@ export interface Enemy {
    *  rooms-game checks the flag in the kill path; only a single key
    *  per room is supported for now. */
   dropsKey: boolean;
+  /** Approximate bounding radius — used for laser/segment proximity
+   *  checks (friendly fire, future area effects). overlapsPlayer
+   *  remains the canonical dash/contact test. */
+  hitboxRadius: number;
+  /** Last Laser.id that successfully damaged this enemy. Stops the
+   *  same firing beam from re-applying damage every frame across
+   *  the firing window. */
+  hitByLaserId: number;
   /** Awareness state machine (see AwarenessState above). Each enemy
    *  starts in `idle`; `updateEnemyAwareness` runs once per frame in
    *  rooms-game and handles transitions + audio. */

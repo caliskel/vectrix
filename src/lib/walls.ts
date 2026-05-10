@@ -3,20 +3,28 @@ import type { Player } from "./player";
 
 export type Wall = { x: number; y: number; w: number; h: number };
 
-// AABB resolve: pushes the player out of any wall it overlaps along the
-// axis with the smallest penetration, zeroing the matching velocity.
-export function resolvePlayerWallCollisions(
-  player: Player,
+/** Anything we resolve walls against. Player and the moving enemies
+ *  (Watcher, Hunter) all satisfy this shape, so the resolver is shared. */
+export type WallEntity = { x: number; y: number; vx: number; vy: number };
+
+/**
+ * AABB resolve: pushes the entity out of any wall it overlaps along
+ * the axis with the smallest penetration, zeroing the matching
+ * velocity component so the entity slides along the wall instead of
+ * locking in. Used by both player movement and enemy chases.
+ */
+export function resolveEntityWallCollisions(
+  entity: WallEntity,
   walls: Wall[],
   halfSize: number,
 ): { stoppedX: boolean; stoppedY: boolean } {
   let stoppedX = false;
   let stoppedY = false;
   for (const w of walls) {
-    const px1 = player.x - halfSize;
-    const px2 = player.x + halfSize;
-    const py1 = player.y - halfSize;
-    const py2 = player.y + halfSize;
+    const px1 = entity.x - halfSize;
+    const px2 = entity.x + halfSize;
+    const py1 = entity.y - halfSize;
+    const py2 = entity.y + halfSize;
     const wx1 = w.x;
     const wx2 = w.x + w.w;
     const wy1 = w.y;
@@ -28,24 +36,33 @@ export function resolvePlayerWallCollisions(
     const oBottom = wy2 - py1;
     const m = Math.min(oLeft, oRight, oTop, oBottom);
     if (m === oLeft) {
-      player.x -= oLeft;
-      if (player.vx > 0) player.vx = 0;
+      entity.x -= oLeft;
+      if (entity.vx > 0) entity.vx = 0;
       stoppedX = true;
     } else if (m === oRight) {
-      player.x += oRight;
-      if (player.vx < 0) player.vx = 0;
+      entity.x += oRight;
+      if (entity.vx < 0) entity.vx = 0;
       stoppedX = true;
     } else if (m === oTop) {
-      player.y -= oTop;
-      if (player.vy > 0) player.vy = 0;
+      entity.y -= oTop;
+      if (entity.vy > 0) entity.vy = 0;
       stoppedY = true;
     } else {
-      player.y += oBottom;
-      if (player.vy < 0) player.vy = 0;
+      entity.y += oBottom;
+      if (entity.vy < 0) entity.vy = 0;
       stoppedY = true;
     }
   }
   return { stoppedX, stoppedY };
+}
+
+/** Backwards-compatible alias for the previous player-only signature. */
+export function resolvePlayerWallCollisions(
+  player: Player,
+  walls: Wall[],
+  halfSize: number,
+): { stoppedX: boolean; stoppedY: boolean } {
+  return resolveEntityWallCollisions(player, walls, halfSize);
 }
 
 // True if the bullet's center sits inside any wall's AABB.

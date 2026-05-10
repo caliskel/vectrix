@@ -89,6 +89,8 @@ const WATCHER_KILL_SCORE = 800;
 const HUNTER_KILL_SCORE = 600;
 const LASER_DODGE_SCORE = 50;
 const LASER_HIT_PADDING = 6; // px added to player half for laser collision
+const LASER_FRIENDLY_FIRE_HALF_WIDTH = 8; // matches firing-beam visual width
+const FRIENDLY_FIRE_BONUS = 200;
 const SCREEN_SHAKE_DURATION_SEC = 0.2;
 const SCREEN_SHAKE_PX = 4;
 const ROOM_TOTAL = 5;
@@ -1049,6 +1051,7 @@ export function start(canvas: HTMLCanvasElement): void {
       },
       playerHalfSize: settings.player.size / 2,
       playerMaxSpeed: settings.player.maxSpeed,
+      walls: currentRoom.walls,
     };
     // Awareness ramps run BEFORE enemy update so combat ticks see the
     // freshly-promoted aggro state immediately.
@@ -1109,6 +1112,67 @@ export function start(canvas: HTMLCanvasElement): void {
           triggerShake(SCREEN_SHAKE_PX, SCREEN_SHAKE_DURATION_SEC);
           takeHit();
           break;
+        }
+      }
+    }
+
+    // friendly fire — Watcher lasers also damage other enemies that
+    // happen to stand on the beam during firing. Per-laser dedup via
+    // hitByLaserId so a beam only credits one hit per target across
+    // its firing window.
+    for (const l of lasers) {
+      if (l.age < l.chargingDuration) continue;
+      if (l.age >= l.chargingDuration + l.firingDuration) continue;
+      for (const e of currentRoom.enemies) {
+        if (e.isDead()) continue;
+        if (e === l.ownerEnemy) continue;
+        if (e.hitByLaserId === l.id) continue;
+        const reach = e.hitboxRadius + LASER_FRIENDLY_FIRE_HALF_WIDTH;
+        const d2 = pointSegmentDistanceSq(
+          e.x,
+          e.y,
+          l.ownerEnemy.x,
+          l.ownerEnemy.y,
+          l.endX,
+          l.endY,
+        );
+        if (d2 >= reach * reach) continue;
+        e.hitByLaserId = l.id;
+        const wasDead = e.isDead();
+        e.takeDamage(1);
+        if (e.isDead()) {
+          if (!wasDead) {
+            emitEnemyKill(makeImpactCtx(), e);
+            destroyEnemy(e);
+            state.score += FRIENDLY_FIRE_BONUS;
+            addFloatingText(
+              floatingTexts,
+              "FRIENDLY FIRE",
+              e.x,
+              e.y - 38,
+              {
+                size: 14,
+                color: "#facc15",
+                lifetime: 0.9,
+                vy: -30,
+              },
+            );
+            addFloatingText(
+              floatingTexts,
+              `+${FRIENDLY_FIRE_BONUS}`,
+              e.x,
+              e.y - 56,
+              {
+                size: 16,
+                color: "#facc15",
+                lifetime: 0.7,
+              },
+            );
+          }
+        } else {
+          // medium damage — knockback direction is along the beam
+          // (from owner toward target).
+          emitEnemyDamage(makeImpactCtx(), e, l.ownerEnemy.x, l.ownerEnemy.y);
         }
       }
     }
@@ -1290,10 +1354,9 @@ export function start(canvas: HTMLCanvasElement): void {
       (offsetY + shakeY) * dpr,
     );
 
-    // room background (slightly lighter so the play field stands apart
-    // from letterbox bars)
-    ctx.fillStyle = "#0d1326";
-    ctx.fillRect(0, 0, ROOM_W_PX, ROOM_H_PX);
+    // No inner contrast fill — the whole canvas (including letterbox
+    // bars) is uniform PALETTE.bg, set above. Camera rooms then scroll
+    // walls / world content over it.
 
     // Camera scrolls the world inside the canonical letterbox. Non-
     // camera rooms (1-3, 5 placeholder) draw at world == canvas.
