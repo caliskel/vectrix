@@ -710,32 +710,40 @@ transitions for score + Game Complete.
     muzzle flash at the boss centre.
   - **Sweep Laser** — phase 2+ only. **Double-pass cycle** —
     forward sweep then return — so the player has to dodge twice
-    per attack. Sub-phases: 800 ms telegraph (full-arena sector
-    preview at 0.10 ↔ 0.20 alpha pulse + dashed start-line +
-    small direction triangle marking CW vs CCW; the return arc
+    per attack. Sub-phases: **0.8 s telegraph** (full-arena
+    sector preview at 0.10 ↔ 0.20 alpha pulse + dashed start-line
+    + small direction triangle marking CW vs CCW; the return arc
     is intentionally NOT telegraphed — it's surprised through
-    the mid-pause flash), 900 ms firing-1 (180° sweep from the
-    captured start angle in the chosen direction), 150 ms
-    mid-pause (beam frozen at end-angle, core line-width pulses
-    6 → 12 → 6, outer-glow alpha 0.15 → 0.4 → 0.15, white
-    reverse-direction arrow at 80 px from boss with 0.8 ↔ 1.4
-    scale pulse, 2 px / 100 ms screen shake, alert chirp as
-    placeholder reverse cue), 900 ms firing-2 (180° back to
-    start angle, core white shifts to `#aaeeff` light cyan +
-    streaming particles flip cyan as a subtle "this is the
-    return pass" tell), 500 ms recovery (200 ms beam fade +
-    300 ms tail). Cooldown `SWEEP_LASER_BASE_COOLDOWN_SEC =
-    5 s × PHASE_CADENCE` from recovery end. Total damaging
-    window = firing-1 + mid-pause + firing-2 = 1.95 s, all
-    sharing the same ±0.04 rad collision band — including
-    mid-pause, so the end-angle isn't a free safe-zone.
-    Dash i-frames pass through any of the three. Beam emits one
-    short particle every 50 ms travelling outward at 600 px/s
-    so the energy reads as streaming. (Conflict resolution with
-    the other three attacks runs through the universal
-    mutual-exclusion gate; sub-phases here don't count as a new
-    attack — `isAnyAttackActive()` stays true across the whole
-    cycle.)
+    the mid-pause), **0.9 s firing-1** (fast 180° sweep from the
+    captured start angle in the chosen direction), **0.8 s
+    mid-pause**, **1.2 s firing-2** (slower 180° back to start
+    angle, core white shifts to `#aaeeff` light cyan + streaming
+    particles flip cyan as a subtle "this is the return pass"
+    tell), **0.5 s recovery** (200 ms beam fade + 300 ms tail).
+    Cooldown `SWEEP_LASER_BASE_COOLDOWN_SEC = 5 s × PHASE_CADENCE`
+    from recovery end. Total damaging window = firing-1 +
+    mid-pause + firing-2 = 2.9 s, all sharing the same ±0.04 rad
+    collision band — including mid-pause, so the end-angle isn't
+    a free safe-zone. Dash i-frames pass through any of the
+    three. Beam emits one short particle every 50 ms travelling
+    outward at 600 px/s so the energy reads as streaming.
+    Mid-pause runs longer than the player dash cooldown
+    (~640 ms after the ×1.6 boost), so the player can guarantee
+    a second dash for the return pass. Return slower than
+    forward by design — asymmetry creates a distinct read.
+    Mid-pause visuals: ±0.05 rad render-only wiggle (sin period
+    200 ms; doesn't affect collision) keeps the beam alive,
+    core line-width breathes 6 → 14 → 6 on `easeInOutSine`,
+    outer-glow alpha 0.15 → 0.45 → 0.15 in lockstep, white
+    reverse-direction arrow at 80 px from boss fades in over
+    100 ms then pulses 0.8 ↔ 1.4 scale on a 250 ms period. Final
+    100 ms layer a countdown: arrow scales to ×1.6 with a fast
+    1 → 0.4 → 1 alpha strobe and a chirp fires on the threshold
+    crossing, so firing-2 entry is impossible to miss. (Conflict
+    resolution with the other three attacks runs through the
+    universal mutual-exclusion gate; sub-phases here don't count
+    as a new attack — `isAnyAttackActive()` stays true across
+    the whole cycle.)
   - **Ring Burst** — phase 1's defining mechanic. The three
     shells detach + expand, the body goes ghosted, and the eye
     becomes the only damage path. Sub-state machine

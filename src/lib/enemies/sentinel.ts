@@ -466,8 +466,15 @@ const PHASE_TRANSITION_HP_MARKER_FLASH_SEC = 0.3;
 // end-angle isn't a free safe-zone. Total damaging window:
 // firing-1 + mid-pause + firing-2 = 1.95 s.
 const SWEEP_LASER_TELEGRAPH_SEC = 0.8;
-const SWEEP_LASER_FIRING_PASS_SEC = 0.9;
-const SWEEP_LASER_MID_PAUSE_SEC = 0.15;
+// Forward pass is fast — meant to feel sudden. Return pass is
+// 33% slower so the player can read the trajectory and burn the
+// second dash; the asymmetry between the two passes is the whole
+// rhythm of the attack. Mid-pause is now long enough that the
+// player's dash cooldown (~640 ms after the ×1.6 boost) fully
+// recharges — guaranteed two-dash window.
+const SWEEP_LASER_FIRING_1_SEC = 0.9;
+const SWEEP_LASER_MID_PAUSE_SEC = 0.8;
+const SWEEP_LASER_FIRING_2_SEC = 1.2;
 const SWEEP_LASER_RECOVERY_SEC = 0.5;
 const SWEEP_LASER_BASE_COOLDOWN_SEC = 5.0;
 const SWEEP_LASER_BEAM_HIT_HALF_ANGLE = 0.04; // ~2.3° each side
@@ -482,16 +489,24 @@ const SWEEP_LASER_RECOVERY_FADE_SEC = 0.2;
 const SWEEP_LASER_BEAM_PARTICLE_INTERVAL_SEC = 0.05;
 const SWEEP_LASER_BEAM_PARTICLE_SPEED = 600;
 const SWEEP_LASER_BEAM_PARTICLE_LIFETIME_SEC = 0.2;
-// Mid-pause visuals — the beam freezes at the end-angle and
-// flashes; pulse + arrow tell the player "it's about to swing back."
+// Mid-pause visuals — at 800 ms the beam can't just be still;
+// it breathes (slow easeInOutSine thickness pulse + wiggle), the
+// arrow pulses, and the last 100 ms add a final-flash + audio chirp
+// so the firing-2 entry doesn't catch the player flat-footed.
 const SWEEP_LASER_MID_PAUSE_CORE_LW_BASE = 6;
-const SWEEP_LASER_MID_PAUSE_CORE_LW_PEAK = 12;
+const SWEEP_LASER_MID_PAUSE_CORE_LW_PEAK = 14;
 const SWEEP_LASER_MID_PAUSE_GLOW_ALPHA_BASE = 0.15;
-const SWEEP_LASER_MID_PAUSE_GLOW_ALPHA_PEAK = 0.4;
+const SWEEP_LASER_MID_PAUSE_GLOW_ALPHA_PEAK = 0.45;
+const SWEEP_LASER_MID_PAUSE_WIGGLE_AMP_RAD = 0.05;
+const SWEEP_LASER_MID_PAUSE_WIGGLE_PERIOD_SEC = 0.2;
 const SWEEP_LASER_MID_PAUSE_ARROW_OFFSET = 80;
 const SWEEP_LASER_MID_PAUSE_ARROW_SIZE = 14;
 const SWEEP_LASER_MID_PAUSE_ARROW_SCALE_MIN = 0.8;
 const SWEEP_LASER_MID_PAUSE_ARROW_SCALE_MAX = 1.4;
+const SWEEP_LASER_MID_PAUSE_ARROW_PULSE_PERIOD_SEC = 0.25;
+const SWEEP_LASER_MID_PAUSE_ARROW_FADE_IN_SEC = 0.1;
+const SWEEP_LASER_MID_PAUSE_ARROW_FINAL_SEC = 0.1;
+const SWEEP_LASER_MID_PAUSE_ARROW_FINAL_SCALE = 1.6;
 const SWEEP_LASER_MID_PAUSE_SHAKE_PX = 2;
 const SWEEP_LASER_MID_PAUSE_SHAKE_SEC = 0.1;
 // Subtle white-to-cyan core shift so the return pass reads
@@ -2038,14 +2053,13 @@ export class Sentinel implements Enemy {
     }
 
     if (this.sweepLaserPhase === "firing-1") {
-      if (this.sweepLaserTimer >= SWEEP_LASER_FIRING_PASS_SEC) {
+      if (this.sweepLaserTimer >= SWEEP_LASER_FIRING_1_SEC) {
         this.sweepLaserPhase = "mid-pause";
         this.sweepLaserTimer = 0;
         // Reverse cue — small kinetic + audio confirmation that the
-        // beam is about to swing back. No drone synth in the audio
-        // module yet, so the alert chirp doubles as the "reversing"
-        // ping; replace with a dedicated swoosh once the boss audio
-        // pass lands.
+        // beam has stopped and is about to swing back. No drone
+        // synth yet, so reuse the alert chirp; the boss-audio pass
+        // will replace this with a swoosh + drone modulation.
         this.pendingShakePx = SWEEP_LASER_MID_PAUSE_SHAKE_PX;
         this.pendingShakeSec = SWEEP_LASER_MID_PAUSE_SHAKE_SEC;
         audio.play.alert();
@@ -2054,6 +2068,19 @@ export class Sentinel implements Enemy {
     }
 
     if (this.sweepLaserPhase === "mid-pause") {
+      // Final-100ms countdown chirp — fires once when the timer
+      // crosses (MID_PAUSE - FINAL) so the audio ramp peaks right
+      // before firing-2 starts. Crossing detection uses
+      // `prevTimer = sweepLaserTimer - dt` so we don't need a
+      // dedicated boolean field.
+      const finalChirpThreshold =
+        SWEEP_LASER_MID_PAUSE_SEC - SWEEP_LASER_MID_PAUSE_ARROW_FINAL_SEC;
+      if (
+        this.sweepLaserTimer >= finalChirpThreshold &&
+        this.sweepLaserTimer - dt < finalChirpThreshold
+      ) {
+        audio.play.alert();
+      }
       if (this.sweepLaserTimer >= SWEEP_LASER_MID_PAUSE_SEC) {
         this.sweepLaserPhase = "firing-2";
         this.sweepLaserTimer = 0;
@@ -2062,7 +2089,7 @@ export class Sentinel implements Enemy {
     }
 
     if (this.sweepLaserPhase === "firing-2") {
-      if (this.sweepLaserTimer >= SWEEP_LASER_FIRING_PASS_SEC) {
+      if (this.sweepLaserTimer >= SWEEP_LASER_FIRING_2_SEC) {
         this.sweepLaserPhase = "recovery";
         this.sweepLaserTimer = 0;
       }
@@ -2109,17 +2136,21 @@ export class Sentinel implements Enemy {
     if (this.sweepLaserPhase === "firing-1") {
       const t = Math.min(
         1,
-        this.sweepLaserTimer / SWEEP_LASER_FIRING_PASS_SEC,
+        this.sweepLaserTimer / SWEEP_LASER_FIRING_1_SEC,
       );
       return start + direction * Math.PI * t;
     }
     if (this.sweepLaserPhase === "mid-pause") {
+      // Static end-angle for damage / particle math. The visual
+      // wiggle is added on top in the render path so it doesn't
+      // bleed into the collision check (player on the static
+      // end-angle line stays in the hit zone regardless of wiggle).
       return endAngle;
     }
     if (this.sweepLaserPhase === "firing-2") {
       const t = Math.min(
         1,
-        this.sweepLaserTimer / SWEEP_LASER_FIRING_PASS_SEC,
+        this.sweepLaserTimer / SWEEP_LASER_FIRING_2_SEC,
       );
       return endAngle - direction * Math.PI * t;
     }
@@ -2423,7 +2454,19 @@ export class Sentinel implements Enemy {
 
   private renderSweepLaserBeam(ctx: CanvasRenderingContext2D): void {
     const accent = this.accentColor();
-    const a = this.currentSweepBeamAngle();
+    let a = this.currentSweepBeamAngle();
+    // Mid-pause render-only wiggle — the prepared shot visually
+    // "trembles" around the end-angle. The damage check uses the
+    // unwiggled angle (currentSweepBeamAngle returns the static
+    // end-angle in mid-pause), so wiggle never displaces collision.
+    if (this.sweepLaserPhase === "mid-pause") {
+      const wiggle =
+        Math.sin(
+          (this.sweepLaserTimer * Math.PI * 2) /
+            SWEEP_LASER_MID_PAUSE_WIGGLE_PERIOD_SEC,
+        ) * SWEEP_LASER_MID_PAUSE_WIGGLE_AMP_RAD;
+      a += wiggle;
+    }
     const reach = Math.hypot(this.arenaW, this.arenaH);
     const endX = this.x + Math.cos(a) * reach;
     const endY = this.y + Math.sin(a) * reach;
@@ -2437,28 +2480,28 @@ export class Sentinel implements Enemy {
       );
     }
     if (alpha <= 0) return;
-    // Mid-pause flash factor — triangle wave 0 → 1 → 0 across the
-    // 150 ms window. Drives both the core line-width pulse and the
-    // outer-glow alpha bump so the beam visibly "charges up" before
-    // the reverse pass.
-    let flash = 0;
+    // Mid-pause breath — easeInOutSine 0 → 1 → 0 across the 800 ms
+    // window. Slow inhale/exhale (sin(π·u) gives 0 → 1 → 0 with
+    // eased shoulders) instead of the prior triangle flash; reads
+    // as "the beam is charging the return shot."
+    let breath = 0;
     if (this.sweepLaserPhase === "mid-pause") {
       const u = Math.min(
         1,
         this.sweepLaserTimer / SWEEP_LASER_MID_PAUSE_SEC,
       );
-      flash = u < 0.5 ? u * 2 : (1 - u) * 2;
+      breath = Math.sin(Math.PI * u);
     }
     const coreLineWidth =
       SWEEP_LASER_MID_PAUSE_CORE_LW_BASE +
       (SWEEP_LASER_MID_PAUSE_CORE_LW_PEAK -
         SWEEP_LASER_MID_PAUSE_CORE_LW_BASE) *
-        flash;
+        breath;
     const outerGlowAlpha =
       SWEEP_LASER_MID_PAUSE_GLOW_ALPHA_BASE +
       (SWEEP_LASER_MID_PAUSE_GLOW_ALPHA_PEAK -
         SWEEP_LASER_MID_PAUSE_GLOW_ALPHA_BASE) *
-        flash;
+        breath;
     // Cyan core during firing-2 — subtle "this is the return pass"
     // tell the player picks up via peripheral vision.
     const coreColor =
@@ -2504,28 +2547,54 @@ export class Sentinel implements Enemy {
     ctx: CanvasRenderingContext2D,
     beamAngle: number,
   ): void {
+    const t = this.sweepLaserTimer;
+    const total = SWEEP_LASER_MID_PAUSE_SEC;
+    // Fade-in over the first 100 ms so the arrow doesn't pop on
+    // mid-pause entry.
+    const fadeIn = Math.min(
+      1,
+      t / SWEEP_LASER_MID_PAUSE_ARROW_FADE_IN_SEC,
+    );
+    // Continuous pulse — base scale oscillates between MIN and MAX
+    // on a 250 ms period, independent of the breath. The 0.8 ↔ 1.4
+    // range reads as "active prompt" without competing with the
+    // beam's own breath.
+    const pulsePhase =
+      (t * Math.PI * 2) / SWEEP_LASER_MID_PAUSE_ARROW_PULSE_PERIOD_SEC;
+    const pulse = (Math.sin(pulsePhase) + 1) / 2;
+    let scale =
+      SWEEP_LASER_MID_PAUSE_ARROW_SCALE_MIN +
+      (SWEEP_LASER_MID_PAUSE_ARROW_SCALE_MAX -
+        SWEEP_LASER_MID_PAUSE_ARROW_SCALE_MIN) *
+        pulse;
+    let alpha = fadeIn;
+    // Final-100ms countdown — arrow blows up to ×1.6 and the
+    // alpha snaps 1 → 0.4 → 1 so the player gets one last "GO" tick
+    // before firing-2 starts.
+    const finalStart = total - SWEEP_LASER_MID_PAUSE_ARROW_FINAL_SEC;
+    if (t >= finalStart) {
+      const u = Math.min(
+        1,
+        (t - finalStart) / SWEEP_LASER_MID_PAUSE_ARROW_FINAL_SEC,
+      );
+      scale = SWEEP_LASER_MID_PAUSE_ARROW_FINAL_SCALE;
+      // Triangle wave 1 → 0.4 → 1 — fast strobe.
+      alpha = u < 0.5 ? 1 - u * 1.2 : 0.4 + (u - 0.5) * 1.2;
+    }
+    if (alpha <= 0) return;
+    const size = SWEEP_LASER_MID_PAUSE_ARROW_SIZE * scale;
     const baseX =
       this.x + Math.cos(beamAngle) * SWEEP_LASER_MID_PAUSE_ARROW_OFFSET;
     const baseY =
       this.y + Math.sin(beamAngle) * SWEEP_LASER_MID_PAUSE_ARROW_OFFSET;
     const reverseDir = (-this.sweepLaserDirection) as 1 | -1;
-    const u = Math.min(
-      1,
-      this.sweepLaserTimer / SWEEP_LASER_MID_PAUSE_SEC,
-    );
-    const pulse = u < 0.5 ? u * 2 : (1 - u) * 2;
-    const scale =
-      SWEEP_LASER_MID_PAUSE_ARROW_SCALE_MIN +
-      (SWEEP_LASER_MID_PAUSE_ARROW_SCALE_MAX -
-        SWEEP_LASER_MID_PAUSE_ARROW_SCALE_MIN) *
-        pulse;
-    const size = SWEEP_LASER_MID_PAUSE_ARROW_SIZE * scale;
     const tangentA = beamAngle + reverseDir * (Math.PI / 2);
     const apexX = baseX + Math.cos(tangentA) * size * 1.2;
     const apexY = baseY + Math.sin(tangentA) * size * 1.2;
     const sideA = beamAngle + reverseDir * (Math.PI / 2 + 0.6);
     const sideB = beamAngle + reverseDir * (Math.PI / 2 - 0.6);
     ctx.save();
+    ctx.globalAlpha = alpha;
     ctx.fillStyle = "#ffffff";
     ctx.shadowColor = "#ffffff";
     ctx.shadowBlur = 12;
