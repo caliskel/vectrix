@@ -1,5 +1,6 @@
 import { audio } from "../audio";
 import {
+  ENEMY_WATCHER_DETECTION,
   WATCHER_ACCEL_LERP,
   WATCHER_BRAKE_RECOVERY_MS,
   WATCHER_BRAKE_SQUASH_DURATION_MS,
@@ -9,8 +10,19 @@ import {
   WATCHER_SPEED_FACTOR,
 } from "../config";
 import { drawNeon } from "../neon";
+import {
+  awarenessGlowMul,
+  awarenessSquashScale,
+  initAwareness,
+} from "./awareness";
 import { applyEnemyKnockback, drawEnemyHitFlash } from "./fx";
-import type { Enemy, EnemyContext, EnemyType, Laser } from "./types";
+import type {
+  AwarenessState,
+  Enemy,
+  EnemyContext,
+  EnemyType,
+  Laser,
+} from "./types";
 
 // Layered eye visual. Outer ring is stroke-only so the dark gap
 // between ring and iris reads as a real hole through the orb. Three
@@ -65,6 +77,11 @@ export class Watcher implements Enemy {
   knockbackPeakX = 0;
   knockbackPeakY = 0;
   dropsKey = false;
+  awarenessState: AwarenessState = "idle";
+  detectionRadius = ENEMY_WATCHER_DETECTION;
+  alertTimer = 0;
+  awarenessSquashTime = 0;
+  awarenessGlowBoost = 0;
   private destroyed = false;
   private vx = 0;
   private vy = 0;
@@ -86,6 +103,7 @@ export class Watcher implements Enemy {
     this.x = x;
     this.y = y;
     this.hp = WATCHER_HP_MAX;
+    initAwareness(this, ENEMY_WATCHER_DETECTION);
   }
 
   isDead(): boolean {
@@ -103,6 +121,14 @@ export class Watcher implements Enemy {
 
   update(ctxRoom: EnemyContext): void {
     if (this.destroyed) return;
+    if (this.awarenessState !== "aggro") {
+      // Idle / alerting: no chase, no laser. The pupil can still
+      // wander via the existing pupil tracking pass below — but bail
+      // here so velocity stays zero and combat phases don't tick.
+      this.vx = 0;
+      this.vy = 0;
+      return;
+    }
     const { dt, player } = ctxRoom;
 
     // Movement model per phase:
@@ -256,6 +282,14 @@ export class Watcher implements Enemy {
     ctx.save();
     applyEnemyKnockback(ctx, this);
 
+    const awarenessSquash = awarenessSquashScale(this);
+    if (awarenessSquash !== 1) {
+      ctx.translate(this.x, this.y);
+      ctx.scale(awarenessSquash, awarenessSquash);
+      ctx.translate(-this.x, -this.y);
+    }
+    const glowMul = awarenessGlowMul(this);
+
     // Brake squash transform — held at full squash for the squash phase,
     // then linearly recovers toward 1.0 over the recovery phase. Axis
     // aligns with motion direction so the orb compresses along travel.
@@ -293,8 +327,8 @@ export class Watcher implements Enemy {
         ctx.stroke();
       },
       "#f8fafc",
-      8,
-      3,
+      8 * glowMul,
+      3 * glowMul,
     );
 
     // 2-4. Iris stack — three opaque solid discs. The illusion of depth

@@ -1,8 +1,14 @@
 import { makeBullet } from "../bullets";
+import { ENEMY_TURRET_DETECTION } from "../config";
 import { drawNeon } from "../neon";
 import { PALETTE } from "../palette";
+import {
+  awarenessGlowMul,
+  awarenessSquashScale,
+  initAwareness,
+} from "./awareness";
 import { applyEnemyKnockback, drawEnemyHitFlash } from "./fx";
-import type { Enemy, EnemyContext, EnemyType } from "./types";
+import type { AwarenessState, Enemy, EnemyContext, EnemyType } from "./types";
 
 const TURRET_RADIUS = 25;
 const TURRET_BARREL_LEN = 28;
@@ -10,6 +16,9 @@ const TURRET_BARREL_WIDTH = 12;
 const SHOOT_INTERVAL = 1.4;
 const TELEGRAPH_WINDOW = 0.3;
 const AIM_LERP_RATE = 10; // frame-rate-independent (1 - exp(-rate*dt))
+const IDLE_AIM_LERP_RATE = 1.5; // slower drift while sleeping
+const IDLE_AIM_RETARGET_MIN_SEC = 2.5;
+const IDLE_AIM_RETARGET_MAX_SEC = 3.5;
 const TURRET_HP_MAX = 3;
 
 export class Turret implements Enemy {
@@ -24,7 +33,14 @@ export class Turret implements Enemy {
   knockbackPeakX = 0;
   knockbackPeakY = 0;
   dropsKey = false;
+  awarenessState: AwarenessState = "idle";
+  detectionRadius = ENEMY_TURRET_DETECTION;
+  alertTimer = 0;
+  awarenessSquashTime = 0;
+  awarenessGlowBoost = 0;
   private aimAngle: number;
+  private idleTargetAngle: number;
+  private idleRetargetTimer: number;
   private shootTimer: number;
   private dashIdAlreadyDamaged = -1;
   private destroyed = false;
@@ -33,8 +49,11 @@ export class Turret implements Enemy {
     this.x = x;
     this.y = y;
     this.hp = TURRET_HP_MAX;
-    this.aimAngle = 0;
+    this.aimAngle = Math.random() * Math.PI * 2;
+    this.idleTargetAngle = this.aimAngle;
+    this.idleRetargetTimer = randomIdleRetarget();
     this.shootTimer = SHOOT_INTERVAL;
+    initAwareness(this, ENEMY_TURRET_DETECTION);
   }
 
   isDead(): boolean {
@@ -52,6 +71,25 @@ export class Turret implements Enemy {
 
   update(ctxRoom: EnemyContext): void {
     if (this.destroyed) return;
+    if (this.awarenessState !== "aggro") {
+      // Idle / alerting — slowly drift the barrel to a random heading
+      // every ~3 s so the turret reads as awake but not engaged. No
+      // shooting; alerting is a pure visual telegraph.
+      this.idleRetargetTimer -= ctxRoom.dt;
+      if (this.idleRetargetTimer <= 0) {
+        this.idleTargetAngle = Math.random() * Math.PI * 2;
+        this.idleRetargetTimer = randomIdleRetarget();
+      }
+      let diff = this.idleTargetAngle - this.aimAngle;
+      diff = ((diff + Math.PI) % (Math.PI * 2)) - Math.PI;
+      if (diff < -Math.PI) diff += Math.PI * 2;
+      const k = 1 - Math.exp(-IDLE_AIM_LERP_RATE * ctxRoom.dt);
+      this.aimAngle += diff * k;
+      // Reset shoot timer so the first volley after waking up still
+      // gets the full telegraph, instead of firing on tick zero.
+      this.shootTimer = SHOOT_INTERVAL;
+      return;
+    }
     const target = Math.atan2(
       ctxRoom.player.y - this.y,
       ctxRoom.player.x - this.x,
@@ -98,6 +136,15 @@ export class Turret implements Enemy {
     ctx.save();
     applyEnemyKnockback(ctx, this);
 
+    const awarenessSquash = awarenessSquashScale(this);
+    if (awarenessSquash !== 1) {
+      ctx.translate(this.x, this.y);
+      ctx.scale(awarenessSquash, awarenessSquash);
+      ctx.translate(-this.x, -this.y);
+    }
+
+    const glowMul = awarenessGlowMul(this);
+
     // body: double-stroke ring
     drawNeon(
       ctx,
@@ -113,8 +160,8 @@ export class Turret implements Enemy {
         ctx.stroke();
       },
       col,
-      22,
-      8,
+      22 * glowMul,
+      8 * glowMul,
     );
 
     // core
@@ -195,6 +242,13 @@ export class Turret implements Enemy {
     this.takeDamage(1);
     return true;
   }
+}
+
+function randomIdleRetarget(): number {
+  return (
+    IDLE_AIM_RETARGET_MIN_SEC +
+    Math.random() * (IDLE_AIM_RETARGET_MAX_SEC - IDLE_AIM_RETARGET_MIN_SEC)
+  );
 }
 
 export const TURRET_RADIUS_PX = TURRET_RADIUS;

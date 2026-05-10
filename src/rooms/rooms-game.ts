@@ -31,6 +31,11 @@ import {
   type Settings,
 } from "../lib/config";
 import { drawDoor, playerOverlapsDoor } from "../lib/door";
+import {
+  drawAwarenessExclamation,
+  drawEnemyDetection,
+  updateEnemyAwareness,
+} from "../lib/enemies/awareness";
 import type { Enemy, Laser } from "../lib/enemies/types";
 import {
   emitBulletHit,
@@ -1045,6 +1050,11 @@ export function start(canvas: HTMLCanvasElement): void {
       playerHalfSize: settings.player.size / 2,
       playerMaxSpeed: settings.player.maxSpeed,
     };
+    // Awareness ramps run BEFORE enemy update so combat ticks see the
+    // freshly-promoted aggro state immediately.
+    for (const e of currentRoom.enemies) {
+      updateEnemyAwareness(e, player.x, player.y, dt);
+    }
     for (const e of currentRoom.enemies) e.update(enemyCtx);
 
     // age + cull lasers (self-expire by total duration)
@@ -1296,11 +1306,20 @@ export function start(canvas: HTMLCanvasElement): void {
     drawWalls(ctx, currentRoom.walls);
     if (currentRoom.door) drawDoor(ctx, currentRoom.door);
 
+    // detection rings (drawn under everything so they read as a
+    // ground-level radar pulse, not an overlay on top of the enemy)
+    for (const e of currentRoom.enemies) {
+      drawEnemyDetection(ctx, e, player.x, player.y);
+    }
+
     // lasers (under enemies so the beam appears to emerge from behind)
     for (const l of lasers) drawLaser(ctx, l);
 
     // enemies
     for (const e of currentRoom.enemies) e.draw(ctx);
+
+    // alerting "!" sits above the enemy body
+    for (const e of currentRoom.enemies) drawAwarenessExclamation(ctx, e);
 
     // bullets (trail then live)
     const bSize = settings.bullets.size;
@@ -1569,6 +1588,34 @@ export function start(canvas: HTMLCanvasElement): void {
     ctx.fillStyle = "#ffffff";
     ctx.font = "600 22px ui-monospace, SFMono-Regular, Menlo, monospace";
     ctx.fillText(state.score.toLocaleString("en-US"), colB, heartsY);
+
+    // Awareness indicator (top-center) — DETECTED red while any
+    // enemy is in aggro, ALERT yellow while any is alerting, hidden
+    // when all are idle. Pulses to call attention without being
+    // sticky.
+    let anyAggro = false;
+    let anyAlerting = false;
+    for (const e of currentRoom.enemies) {
+      if (e.isDead()) continue;
+      if (e.awarenessState === "aggro") anyAggro = true;
+      else if (e.awarenessState === "alerting") anyAlerting = true;
+    }
+    if (anyAggro || anyAlerting) {
+      const text = anyAggro ? "DETECTED" : "ALERT";
+      const color = anyAggro ? "#ff2d55" : "#fb923c";
+      const pulse =
+        0.65 + 0.35 * (Math.sin(performance.now() * 0.012) + 1) * 0.5;
+      ctx.save();
+      ctx.globalAlpha = pulse;
+      ctx.font = "600 12px system-ui, -apple-system, sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "top";
+      ctx.shadowColor = color;
+      ctx.shadowBlur = 12;
+      ctx.fillStyle = color;
+      ctx.fillText(text, viewW / 2, 4);
+      ctx.restore();
+    }
 
     // Key indicator (top-right). Shown only on rooms whose door
     // requiresKey, so 1-3 stay clean.

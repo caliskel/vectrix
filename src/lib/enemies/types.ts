@@ -4,6 +4,15 @@ import type { Player } from "../player";
 
 export type EnemyType = "turret" | "watcher" | "hunter";
 
+/**
+ * Awareness state for the per-enemy detection ramp:
+ *   idle      — sleeping; no attacks, no chase, only ambient idle anim
+ *   alerting  — player just entered detectionRadius; "!" telegraph and
+ *               brief squash + glow boost over ALERT_DURATION_MS
+ *   aggro     — combat behavior (the existing update logic)
+ */
+export type AwarenessState = "idle" | "alerting" | "aggro";
+
 // Beam/laser entity owned by the room (not by any single enemy) so any
 // enemy can stamp one into the room state. Self-expires by age.
 //
@@ -82,4 +91,21 @@ export interface Enemy {
    *  rooms-game checks the flag in the kill path; only a single key
    *  per room is supported for now. */
   dropsKey: boolean;
+  /** Awareness state machine (see AwarenessState above). Each enemy
+   *  starts in `idle`; `updateEnemyAwareness` runs once per frame in
+   *  rooms-game and handles transitions + audio. */
+  awarenessState: AwarenessState;
+  /** Detection radius in px — distance at which the player triggers
+   *  the idle → alerting transition. Per archetype default lives in
+   *  config.ts (`ENEMY_TURRET_DETECTION` etc). */
+  detectionRadius: number;
+  /** Seconds elapsed in the alerting phase. Drives "!" rise and
+   *  drives the timed transition to aggro. */
+  alertTimer: number;
+  /** Seconds remaining of the brief 0.85× squash that plays when the
+   *  enemy first notices the player. */
+  awarenessSquashTime: number;
+  /** Seconds remaining of the post-alert glow boost — outer-ring
+   *  blur is multiplied by AWARENESS_GLOW_BOOST_MUL while > 0. */
+  awarenessGlowBoost: number;
 }

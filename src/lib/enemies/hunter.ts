@@ -1,4 +1,5 @@
 import {
+  ENEMY_HUNTER_DETECTION,
   HUNTER_TRAIL_BUFFER_SIZE,
   HUNTER_TRAIL_GLOW_BLUR,
   HUNTER_TRAIL_INTERVAL_MS,
@@ -8,8 +9,13 @@ import {
   HUNTER_TRAIL_MIN_VELOCITY,
 } from "../config";
 import { drawNeon } from "../neon";
+import {
+  awarenessGlowMul,
+  awarenessSquashScale,
+  initAwareness,
+} from "./awareness";
 import { applyEnemyKnockback, drawEnemyHitFlash } from "./fx";
-import type { Enemy, EnemyContext, EnemyType } from "./types";
+import type { AwarenessState, Enemy, EnemyContext, EnemyType } from "./types";
 
 // Hunter — fast inertial chaser. Accelerates toward the player but
 // can't turn instantly, so it skids and overshoots; the player can
@@ -85,6 +91,11 @@ export class Hunter implements Enemy {
   knockbackPeakX = 0;
   knockbackPeakY = 0;
   dropsKey = false;
+  awarenessState: AwarenessState = "idle";
+  detectionRadius = ENEMY_HUNTER_DETECTION;
+  alertTimer = 0;
+  awarenessSquashTime = 0;
+  awarenessGlowBoost = 0;
   private destroyed = false;
   private vx = 0;
   private vy = 0;
@@ -99,6 +110,7 @@ export class Hunter implements Enemy {
     this.x = x;
     this.y = y;
     this.hp = HUNTER_HP_MAX;
+    initAwareness(this, ENEMY_HUNTER_DETECTION);
   }
 
   isDead(): boolean {
@@ -116,6 +128,14 @@ export class Hunter implements Enemy {
 
   update(ctxRoom: EnemyContext): void {
     if (this.destroyed) return;
+    if (this.awarenessState !== "aggro") {
+      // Sleeping / alerting — no chase, no trail. Velocity decays so
+      // a Hunter that was already moving when something resets it
+      // glides to a stop instead of teleporting.
+      this.vx *= 0.85;
+      this.vy *= 0.85;
+      return;
+    }
     const { dt, player } = ctxRoom;
     this.maxSpeed = ctxRoom.playerMaxSpeed * HUNTER_SPEED_FACTOR;
 
@@ -189,12 +209,16 @@ export class Hunter implements Enemy {
     const speedNorm =
       this.maxSpeed > 0 ? Math.min(1, speed / this.maxSpeed) : 0;
     const glowBlur =
-      GLOW_BLUR_MIN + (GLOW_BLUR_MAX - GLOW_BLUR_MIN) * speedNorm;
+      (GLOW_BLUR_MIN + (GLOW_BLUR_MAX - GLOW_BLUR_MIN) * speedNorm) *
+      awarenessGlowMul(this);
 
     ctx.save();
     applyEnemyKnockback(ctx, this);
     ctx.translate(this.x, this.y);
     ctx.rotate(angle);
+
+    const awarenessSquash = awarenessSquashScale(this);
+    if (awarenessSquash !== 1) ctx.scale(awarenessSquash, awarenessSquash);
 
     // Stretch into a bullet shape when fast (along motion, squash perp)
     if (speed > STRETCH_SPEED_THRESHOLD) {

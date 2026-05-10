@@ -424,6 +424,47 @@ Long horizontal corridor — first room that needs the follow camera.
   soon"`. Verifies the Room 4 → Room 5 transition while real
   Room 5 content is in flight.
 
+## Enemy awareness system (`lib/enemies/awareness.ts`)
+
+Every enemy starts in `idle` and won't fight back until the player
+crosses its `detectionRadius`. The state machine has three steps:
+
+  idle      — sleeping. Combat update is gated, so Turret only
+              drifts its barrel to a random angle every ~3 s,
+              Watcher just sits and lets its pupil bob, Hunter
+              parks its velocity. Detection radius pulses faintly
+              under the player's feet as a slate-blue dashed ring.
+  alerting  — player just entered the radius. ALERT_DURATION_MS
+              (500 ms) of pure visual telegraph: a red "!" rises
+              30 → 35 px above the enemy and fades out the last
+              50 ms, the body squashes to 0.85× for 100 ms, the
+              outer-ring glow boosts ×1.5 for 300 ms, and a single
+              triangle-synth ping fires (`audio.play.alert()`).
+  aggro     — combat behavior runs as before. Sticky — once aggro,
+              the enemy stays aggro for the rest of the run; a
+              `radius * 1.5` regress was considered and skipped to
+              keep the code small.
+
+`updateEnemyAwareness` ticks the state machine each frame in the
+rooms loop (before `enemy.update`, so combat sees the freshest
+state). `drawEnemyDetection` paints the ring under every live
+enemy with `(detectionRadius * 1.3 - dist) / (detectionRadius *
+0.5)` clamped visibility, capped at α 0.3 — the player only sees
+it when close. Color shifts slate → orange → enemy.color across
+the three states. `drawAwarenessExclamation` renders the "!" in
+world coords above the enemy during alerting.
+
+Detection radii live in `config.ts`: Turret 280, Watcher 350
+(sniper sight line), Hunter 220 (he gets in close fast). Resets
+implicitly on `restartRun` because rooms are rebuilt with fresh
+enemy instances; on room transitions the next room's enemies
+arrive in `idle` for the same reason.
+
+The HUD top-center renders **DETECTED** (red) if any enemy is
+aggro, **ALERT** (orange) if any is alerting, otherwise nothing.
+Text pulses via `sin(now)` so it draws the eye without being
+loud.
+
 ## Camera system (`lib/camera.ts`)
 
 Follow camera with viewport clamping. `Camera` holds `{ x, y,

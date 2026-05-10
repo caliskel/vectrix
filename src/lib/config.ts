@@ -242,6 +242,20 @@ export const WATCHER_BRAKE_STRETCH_Y = 1.12;
 export const WATCHER_BRAKE_SQUASH_DURATION_MS = 150;
 export const WATCHER_BRAKE_RECOVERY_MS = 200;
 
+// Enemy awareness — sleeping detection radius + alert ramp before
+// combat kicks in. Each archetype has its own radius reflecting role
+// (Watcher sees furthest as a sniper; Hunter shortest, since it gets
+// in close fast). Player entering the radius transitions idle → alerting,
+// alerting holds for ALERT_DURATION_MS, then flips to aggro.
+export const ENEMY_TURRET_DETECTION = 280;
+export const ENEMY_WATCHER_DETECTION = 350;
+export const ENEMY_HUNTER_DETECTION = 220;
+export const ALERT_DURATION_MS = 500;
+export const AWARENESS_SQUASH_DURATION_MS = 100;
+export const AWARENESS_SQUASH_AMOUNT = 0.85;
+export const AWARENESS_GLOW_BOOST_DURATION_MS = 300;
+export const AWARENESS_GLOW_BOOST_MUL = 1.5;
+
 // Hunter motion trail — shrunk + faded copies of the body left
 // behind every TRAIL_INTERVAL_MS while moving. Samples age out so a
 // stopped Hunter's trail fades naturally instead of lingering.

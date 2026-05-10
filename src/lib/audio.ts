@@ -64,6 +64,9 @@ class AudioEngine {
   private hitHeavyMembrane?: MembraneSynth;
   private hitHeavyNoise?: NoiseSynth;
 
+  // Enemy awareness alert ping
+  private alertSynth?: Synth;
+
   // Sound 7: mult tier up
   private multSynth?: Synth;
 
@@ -98,6 +101,7 @@ class AudioEngine {
     this.setupHitLight();
     this.setupHitMedium();
     this.setupHitHeavy();
+    this.setupAlert();
     this.setupMultUp();
     this.setupRunEnd();
   }
@@ -221,6 +225,15 @@ class AudioEngine {
     }).connect(dist);
   }
 
+  // Alert: single short triangle ping — "tink" — at the moment an
+  // enemy notices the player and snaps from idle into alerting.
+  private setupAlert(): void {
+    this.alertSynth = new Synth({
+      oscillator: { type: "triangle" },
+      envelope: { attack: 0.001, decay: 0.08, sustain: 0, release: 0.02 },
+    }).connect(this.sfx!);
+  }
+
   // Heavy: long sub membrane + bandpassed white-noise burst —
   // "BOOM-shhh" for kills, the loudest impact in the game.
   private setupHitHeavy(): void {
@@ -308,6 +321,7 @@ class AudioEngine {
     hitLight: (): void => this.playHitLight(),
     hitMedium: (): void => this.playHitMedium(),
     hitHeavy: (): void => this.playHitHeavy(),
+    alert: (): void => this.playAlert(),
     smash: (strength: number): void => this.playSmash(strength),
     multUp: (tier: number): void => this.playMultUp(tier),
     runEnd: (): void => this.playRunEnd(),
@@ -424,6 +438,13 @@ class AudioEngine {
       const t = toneNow();
       this.hitHeavyMembrane.triggerAttackRelease(80, 0.4, t);
       this.hitHeavyNoise.triggerAttackRelease(0.2, t);
+    } catch {}
+  }
+
+  private playAlert(): void {
+    if (!this.alertSynth) return;
+    try {
+      this.alertSynth.triggerAttackRelease(660, 0.08, toneNow(), 0.4);
     } catch {}
   }
 
