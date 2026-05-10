@@ -788,6 +788,10 @@ transitions for score + Game Complete.
   panic moment (beats sweep on a tied cooldown so the dash
   doesn't get pre-empted by a routine laser); sweep is the
   phase-2+ signature; aimed is point threat; radial is filler.
+  **Corner turret spawn** runs as a *parallel* timer (phase 3
+  only) — staggered Turret spawns NOT subject to mutual exclusion;
+  the queue ticks in parallel with whatever attack the boss is
+  running.
   - **Radial Burst** — 1.4 s total cycle: 0.4 s telegraph +
     single firing frame (12 bullets fanned at 350 px/s) +
     0.3 s recovery + 0.65 s idle gap. Spawns from the live
@@ -917,6 +921,46 @@ transitions for score + Game Complete.
     + layered `hitHeavy` + `alert` (arrival explosion) +
     `hitHeavy` (rushing) as placeholders until the BWOAH /
     bossWarp synths land.
+  - **4 corner turrets** — phase 3 only. At the same climax
+    that fires the phase-3 cadence boost, Sentinel queues four
+    `Turret`s — one per arena corner, inset 100 px from the
+    walls — staggered on a domino cadence: 0.2 / 0.6 / 1.0 /
+    1.4 s after the cinematic releases. Each carries a 700 ms
+    spawn-invuln window (pink `#ff6688` ring r 15 → 80 + 8
+    particles 180–260 px/s + scale 0 → 1 ramp; can't shoot or
+    take damage during this window). Per-turret overrides:
+    HP 2 (default), fire interval 1.5 s, bullet speed 200 px/s
+    (slower than the room default so the player can read four
+    parallel streams), detection radius 2500 px (>> arena
+    diagonal so permanently aggro post-invuln), `canDeaggro`
+    forced off. Stationary — no idle drift. **Killable**, dash
+    twice for kill (standard MEDIUM + HEAVY impacts). **No
+    respawn**: each cleared corner is one less stream of
+    bullets for the rest of the fight, so the player trades
+    boss damage time for breathing room. **Allied to the boss**:
+    Sentinel's own bullets / sweep beam don't damage the
+    turrets (bullet-vs-enemy collision isn't wired against
+    boss-side bullets, and the sweep beam only damage-checks
+    the player, so this is automatic). Lifetime cap = 4 — the
+    `spawnedTurrets` list is one-shot and never refills.
+    Turret constructor accepts new opts:
+    `{ startsAggressive, fireIntervalSec, bulletSpeed,
+    spawnInvulnerableSec }`. `spawnInvulnerableTime` field
+    gates `update` (no aim/shoot) and `takeDamage` (no-op)
+    while ramping the visual scale.
+  - **Boss-death cascade.** When Sentinel HP hits 0,
+    `enterDying` populates a forced-kill queue with the alive
+    corner Turrets (50 ms between). Each scheduled entry fires
+    `takeDamage(hp)` to force the kill and pushes the Turret
+    into `pendingCascadeKills`; rooms-game drains the buffer
+    in `consumeSentinelEffects` and runs the standard
+    `emitEnemyKill` + `destroyEnemy` pipeline (impact rings,
+    particles, shake, audio, +N floating score). The cascade
+    overlaps the start of the boss's 6 s death cinematic, so
+    by the time Sentinel finishes scale-down the arena is
+    clean and Game Complete opens with no leftover enemies to
+    block it. Already-dead Turrets (the player cleared them
+    earlier) are skipped.
   - **Ring Burst** — phase 1's defining mechanic. The three
     shells detach + expand, the body goes ghosted, and the eye
     becomes the only damage path. Sub-state machine
@@ -1429,10 +1473,9 @@ settings overlay on Esc / Tab.
 
 - **Sentinel boss** — Phases 1 + 2 + 3 ship. Phase 1 has three
   attacks (radial / aimed / Ring Burst); phase 2 adds Sweep
-  Laser; phase 3 adds **Charge** and runs the rotation at
-  `PHASE_CADENCE = 0.65` (≈54 % faster than phase 1). Cadence
-  multiplier ramp + the 2 s phase-transition cinematic are
-  wired across both boundaries.
+  Laser; phase 3 adds **Charge** + the parallel **4 corner
+  turret** spawn. Cadence multiplier ramp + the 2 s
+  phase-transition cinematic are wired across both boundaries.
   **Mechanic engagement is mandatory**: HP_MAX 60 with the body
   invulnerable outside RB-`vulnerable`, so the eye in Ring Burst
   is the *only* damage path. Boss audio for sweep laser / phase
