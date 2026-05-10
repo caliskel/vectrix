@@ -662,19 +662,17 @@ const CHARGE_RECOVERY_FLASH_LW1 = 0.5;
 const CHARGE_RECOVERY_FLASH_LIFETIME_SEC = 0.5;
 
 // === Phase 3 corner turrets ===
-// 4 stationary turrets spawned one-per-corner shortly after phase-3
-// entry, sequenced so the player reads "the corners are sealing
-// off" — domino effect rather than four-at-once. Killable, no
-// respawn; allied to the boss so its own bullets / sweep / radial
-// can't damage them.
+// 2 stationary turrets spawned in opposite diagonal corners
+// (top-left + bottom-right) shortly after phase-3 entry. Killable,
+// no respawn; allied to the boss so its own bullets / sweep /
+// radial can't damage them. Was 4 (one per corner); the layered
+// crossfire was too noisy on top of phase-3's already-loud
+// rotation, so it's pared down to a single diagonal that still
+// forces the player to manage both halves of the arena.
 const CORNER_TURRET_INSET_PX = 100;
-// Delays (sec) from phase-3 entry — the dramatic hunter fires at
-// 0 s and each corner follows on a 400 ms cadence starting at
-// 200 ms (so the hunter has time to register visually before the
-// corners start sealing in).
-const CORNER_TURRET_SPAWN_DELAYS_SEC: [number, number, number, number] = [
-  0.2, 0.6, 1.0, 1.4,
-];
+// Delays (sec) from phase-3 entry — 400 ms apart so the second
+// turret reads as a follow-up rather than a simultaneous spawn.
+const CORNER_TURRET_SPAWN_DELAYS_SEC: [number, number] = [0.2, 0.6];
 const CORNER_TURRET_FIRE_INTERVAL_SEC = 1.5;
 const CORNER_TURRET_BULLET_SPEED = 200;
 // Bigger than the arena diagonal so the turret is permanently aggro
@@ -2912,21 +2910,19 @@ export class Sentinel implements Enemy {
     return out;
   }
 
-  /** Schedule the four corner-turret spawn requests with a
-   *  staggered domino-effect delay. Called from the phase-2 → 3
-   *  transition climax; the actual tick happens once the cinematic
-   *  releases its grip on updateCombat. */
+  /** Schedule the two corner-turret spawn requests in opposite
+   *  diagonal corners (top-left + bottom-right). Called from the
+   *  phase-2 → 3 transition climax; the actual tick happens once
+   *  the cinematic releases its grip on updateCombat. */
   private queueCornerTurretSpawns(): void {
     if (this.cornerTurretsQueued) return;
     this.cornerTurretsQueued = true;
     const inset = CORNER_TURRET_INSET_PX;
     const corners: [number, number][] = [
       [inset, inset],
-      [this.arenaW - inset, inset],
-      [inset, this.arenaH - inset],
       [this.arenaW - inset, this.arenaH - inset],
     ];
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < corners.length; i++) {
       const [x, y] = corners[i];
       this.cornerTurretSpawnQueue.push({
         x,

@@ -921,16 +921,20 @@ transitions for score + Game Complete.
     + layered `hitHeavy` + `alert` (arrival explosion) +
     `hitHeavy` (rushing) as placeholders until the BWOAH /
     bossWarp synths land.
-  - **4 corner turrets** — phase 3 only. At the same climax
-    that fires the phase-3 cadence boost, Sentinel queues four
-    `Turret`s — one per arena corner, inset 100 px from the
-    walls — staggered on a domino cadence: 0.2 / 0.6 / 1.0 /
-    1.4 s after the cinematic releases. Each carries a 700 ms
-    spawn-invuln window (pink `#ff6688` ring r 15 → 80 + 8
-    particles 180–260 px/s + scale 0 → 1 ramp; can't shoot or
-    take damage during this window). Per-turret overrides:
+  - **2 corner turrets** — phase 3 only. At the same climax
+    that fires the phase-3 cadence boost, Sentinel queues two
+    `Turret`s in opposite diagonal corners (top-left + bottom-
+    right), inset 100 px from the walls, staggered on a 400 ms
+    cadence: 0.2 / 0.6 s after the cinematic releases. Was
+    four-per-corner originally; the layered crossfire was too
+    noisy on top of phase 3's already-loud rotation, so it's
+    pared down to a single diagonal that still forces the
+    player to manage both halves of the arena. Each carries a
+    700 ms spawn-invuln window (pink `#ff6688` ring r 15 → 80
+    + 8 particles 180–260 px/s + scale 0 → 1 ramp; can't shoot
+    or take damage during this window). Per-turret overrides:
     HP 2 (default), fire interval 1.5 s, bullet speed 200 px/s
-    (slower than the room default so the player can read four
+    (slower than the room default so the player can read both
     parallel streams), detection radius 2500 px (>> arena
     diagonal so permanently aggro post-invuln), `canDeaggro`
     forced off. Stationary — no idle drift. **Killable**, dash
@@ -941,7 +945,7 @@ transitions for score + Game Complete.
     Sentinel's own bullets / sweep beam don't damage the
     turrets (bullet-vs-enemy collision isn't wired against
     boss-side bullets, and the sweep beam only damage-checks
-    the player, so this is automatic). Lifetime cap = 4 — the
+    the player, so this is automatic). Lifetime cap = 2 — the
     `spawnedTurrets` list is one-shot and never refills.
     Turret constructor accepts new opts:
     `{ startsAggressive, fireIntervalSec, bulletSpeed,
@@ -1473,8 +1477,8 @@ settings overlay on Esc / Tab.
 
 - **Sentinel boss** — Phases 1 + 2 + 3 ship. Phase 1 has three
   attacks (radial / aimed / Ring Burst); phase 2 adds Sweep
-  Laser; phase 3 adds **Charge** + the parallel **4 corner
-  turret** spawn. Cadence multiplier ramp + the 2 s
+  Laser; phase 3 adds **Charge** + the parallel **2 corner
+  turret** spawn (top-left + bottom-right diagonal). Cadence multiplier ramp + the 2 s
   phase-transition cinematic are wired across both boundaries.
   **Mechanic engagement is mandatory**: HP_MAX 60 with the body
   invulnerable outside RB-`vulnerable`, so the eye in Ring Burst
