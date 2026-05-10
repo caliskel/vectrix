@@ -84,8 +84,8 @@ export const PLAYER_SIZE = 32;
 export const PLAYER_MAX_SPEED = 440;
 export const PLAYER_WALK_FACTOR = 0.4;
 export const DASH_DISTANCE = 120;
-export const DASH_DURATION_MS = 120;
-export const DASH_IFRAMES_MS = 150;
+export const DASH_DURATION_MS = 140;
+export const DASH_IFRAMES_MS = DASH_DURATION_MS + 80;
 export const DASH_COOLDOWN_MS = 800;
 
 // Player particle trail tuning. Plain constants (not in Settings) — these

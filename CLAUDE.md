@@ -242,9 +242,12 @@ Source: `src/lib/config.ts` and `src/lib/score.ts`.
 
 Player physics and dash are global constants in `config.ts`
 (`PLAYER_SIZE`, `PLAYER_MAX_SPEED`, `PLAYER_WALK_FACTOR`,
-`DASH_DISTANCE`, `DASH_DURATION_MS`, `DASH_IFRAMES_MS`,
-`DASH_COOLDOWN_MS`); not exposed in any Settings menu so they stay
-identical across sandbox / rooms / tutorial.
+`DASH_DISTANCE`, `DASH_DURATION_MS = 140`,
+`DASH_IFRAMES_MS = 220`, `DASH_COOLDOWN_MS = 800`); not exposed
+in any Settings menu so they stay identical across sandbox /
+rooms / tutorial. `DASH_IFRAMES_MS = DASH_DURATION_MS + 80` by
+design — i-frames cover the entire dash and 80 ms after landing
+as a forgiving tail buffer (Hollow Knight / Celeste style).
 
 Storage key: `dash-proto:settings:v5` (v3 → v4 stripped the
 player + dash physics; v4 → v5 lifted keybinds into their own
