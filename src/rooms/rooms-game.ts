@@ -1,5 +1,6 @@
 import { audio } from "../lib/audio";
 import { createDevMenu, type DevMenu } from "../lib/dev-menu";
+import { drawFpsOverlay, recordFrame } from "../lib/fps-meter";
 import {
   drawGodModeBadge,
   isGodMode,
@@ -1039,6 +1040,7 @@ export function start(canvas: HTMLCanvasElement): void {
   let lastTime = performance.now();
 
   function frame(now: number) {
+    recordFrame(now);
     let dt = (now - lastTime) / 1000;
     lastTime = now;
     if (dt > 0.05) dt = 0.05;
@@ -1977,6 +1979,7 @@ export function start(canvas: HTMLCanvasElement): void {
     drawHUD();
     drawBossOverlay();
     drawGodModeBadge(ctx, viewW);
+    drawFpsOverlay(ctx, viewW);
 
     if (state.runState === "failed") drawFailedOverlay();
   }
