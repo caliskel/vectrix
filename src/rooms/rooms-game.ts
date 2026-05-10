@@ -101,7 +101,13 @@ const TURRET_KILL_SCORE = 500;
 const WATCHER_KILL_SCORE = 800;
 const HUNTER_KILL_SCORE = 600;
 const SENTINEL_KILL_SCORE = 5000;
-// Boss-room sequence timings (seconds)
+// HUD layout — drawHUD lays out two columns (ROOM/SCORE labels +
+// values) starting at y=18 and ending around y=104 with the hearts
+// row. HUD_BOTTOM_Y matches the bottom of the hearts/score block;
+// the boss HP bar drops 24 px under it so the two never overlap.
+const HUD_BOTTOM_Y = 104;
+const BOSS_HP_BAR_TOP_PADDING_PX = 24;
+const BOSS_HP_LABEL_GAP_PX = 6;
 const LASER_DODGE_SCORE = 50;
 const LASER_HIT_PADDING = 6; // px added to player half for laser collision
 const LASER_FRIENDLY_FIRE_HALF_WIDTH = 8; // matches firing-beam visual width
@@ -1926,13 +1932,18 @@ export function start(canvas: HTMLCanvasElement): void {
       const barH = 18;
       const barW = viewW - sideMargin * 2;
       const barX = sideMargin;
-      const barY = 78;
+      // Label sits BOSS_HP_LABEL_GAP_PX above the bar; bar itself
+      // drops a fixed pad under HUD_BOTTOM_Y so the two layouts
+      // never collide.
+      const labelLineHeight = 13;
+      const labelY = HUD_BOTTOM_Y + BOSS_HP_BAR_TOP_PADDING_PX;
+      const barY = labelY + labelLineHeight + BOSS_HP_LABEL_GAP_PX;
       ctx.save();
       ctx.font = "700 13px ui-monospace, SFMono-Regular, Menlo, monospace";
       ctx.fillStyle = PALETTE.bullet;
       ctx.textAlign = "left";
-      ctx.textBaseline = "middle";
-      ctx.fillText("SENTINEL", barX, barY - 12);
+      ctx.textBaseline = "top";
+      ctx.fillText("SENTINEL", barX, labelY);
 
       ctx.fillStyle = "rgba(255, 45, 85, 0.2)";
       ctx.fillRect(barX, barY, barW, barH);
@@ -1946,7 +1957,7 @@ export function start(canvas: HTMLCanvasElement): void {
       ctx.font = "500 11px ui-monospace, SFMono-Regular, Menlo, monospace";
       ctx.fillStyle = "#ffffff";
       ctx.textAlign = "right";
-      ctx.fillText(`${sentinel.hp} / 30`, barX + barW, barY - 12);
+      ctx.fillText(`${sentinel.hp} / 30`, barX + barW, labelY);
       ctx.restore();
     }
     // Sentinel-owned screen overlays — fade rect, "SENTINEL" /

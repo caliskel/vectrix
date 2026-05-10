@@ -46,12 +46,16 @@ const PULSE_AMPLITUDE = 0.05;
 const EYE_PULSE_PERIOD_SEC = 1.5;
 const EYE_PULSE_AMPLITUDE = 0.05;
 
-// Movement: orbit around a lerped player-tracking anchor
-const ORBIT_CENTER_LERP = 0.02;
-const ORBIT_RX = 400;
-const ORBIT_RY = 300;
-const ORBIT_PHASE_RATE = 0.45; // rad/s
-const POSITION_LERP = 0.05;
+// Movement — lazy figure-8 (lemniscate) around the arena centre.
+// Independent of the player so the boss doesn't drift through walls
+// chasing them; the path stays bounded by amplitudes that already
+// pad off the room edges. dt-normalised lerp keeps the first
+// post-intro frame from teleporting onto the curve.
+const FIGURE_EIGHT_PERIOD_SEC = 12;
+const FIGURE_EIGHT_EDGE_PAD_PX = 60; // amplitude inset from each wall
+const POSITION_LERP_PER_FRAME = 0.04; // applied at 60 fps via realDt * 60
+const DEFAULT_ARENA_W = 1600;
+const DEFAULT_ARENA_H = 1200;
 
 // Attack — radial burst
 const ATTACK_PERIOD_SEC = 2.5;
@@ -163,10 +167,10 @@ export class Sentinel implements Enemy {
   private pulsePhase = Math.random() * Math.PI * 2;
   private eyePulsePhase = Math.random() * Math.PI * 2;
 
-  // movement
-  private orbitCenterX: number;
-  private orbitCenterY: number;
-  private orbitPhase: number;
+  // movement — figure-8 around the arena centre
+  private figurePhase = 0;
+  private readonly arenaW: number;
+  private readonly arenaH: number;
 
   // attack
   private attackPhase: AttackPhase = "between";
@@ -194,13 +198,19 @@ export class Sentinel implements Enemy {
   private deathX = 0;
   private deathY = 0;
 
-  constructor(x: number, y: number) {
+  constructor(
+    x: number,
+    y: number,
+    opts: { arenaW?: number; arenaH?: number } = {},
+  ) {
     this.x = x;
     this.y = y;
     this.hp = SENTINEL_HP_MAX;
-    this.orbitCenterX = x;
-    this.orbitCenterY = y;
-    this.orbitPhase = Math.random() * Math.PI * 2;
+    // Arena bounds drive the figure-8 amplitude + safety clamp.
+    // Defaulted to Room 5's 1600×1200 if room5.ts ever forgets to
+    // pass them through.
+    this.arenaW = opts.arenaW ?? DEFAULT_ARENA_W;
+    this.arenaH = opts.arenaH ?? DEFAULT_ARENA_H;
     initAwareness(this, 0);
     // Always combat-active; we gate behaviour off `state`, not the
     // awareness machine.
@@ -316,20 +326,43 @@ export class Sentinel implements Enemy {
   // -------- combat (idle / attacking) --------
 
   private updateCombat(ctxRoom: EnemyContext, dt: number): void {
-    const { player } = ctxRoom;
-
-    // Orbital movement.
-    this.orbitCenterX += (player.x - this.orbitCenterX) * ORBIT_CENTER_LERP;
-    this.orbitCenterY += (player.y - this.orbitCenterY) * ORBIT_CENTER_LERP;
-    this.orbitPhase += ORBIT_PHASE_RATE * dt;
-    const targetX =
-      this.orbitCenterX + Math.cos(this.orbitPhase) * ORBIT_RX;
-    const targetY =
-      this.orbitCenterY + Math.sin(this.orbitPhase) * ORBIT_RY;
-    this.x += (targetX - this.x) * POSITION_LERP;
-    this.y += (targetY - this.y) * POSITION_LERP;
-    this.vx = (targetX - this.x) * POSITION_LERP * 60;
-    this.vy = (targetY - this.y) * POSITION_LERP * 60;
+    // Figure-8 (lemniscate) around the arena centre — fully
+    // independent of the player. amplitudes are inset by hitbox +
+    // FIGURE_EIGHT_EDGE_PAD_PX so the path never crosses walls. dt
+    // is in seconds — figurePhase walks the lemniscate at one full
+    // loop every FIGURE_EIGHT_PERIOD_SEC.
+    this.figurePhase +=
+      (Math.PI * 2 * dt) / FIGURE_EIGHT_PERIOD_SEC;
+    const centerX = this.arenaW / 2;
+    const centerY = this.arenaH / 2;
+    const ampX = Math.max(
+      0,
+      this.arenaW / 2 - SENTINEL_HITBOX_RADIUS - FIGURE_EIGHT_EDGE_PAD_PX,
+    );
+    const ampY = Math.max(
+      0,
+      this.arenaH / 2 - SENTINEL_HITBOX_RADIUS - FIGURE_EIGHT_EDGE_PAD_PX,
+    );
+    const t = this.figurePhase;
+    const targetX = centerX + ampX * Math.sin(t);
+    const targetY = centerY + ampY * Math.sin(t) * Math.cos(t);
+    // dt (seconds) * 60 reproduces "per-frame at 60 fps" semantics
+    // so the lerp behaves the same regardless of frame rate.
+    const lerp = POSITION_LERP_PER_FRAME * (dt * 60);
+    this.x += (targetX - this.x) * lerp;
+    this.y += (targetY - this.y) * lerp;
+    // Hard clamp safety net — keeps body inside the arena even if
+    // the path or lerp ever overshoots.
+    const minX = SENTINEL_HITBOX_RADIUS;
+    const maxX = this.arenaW - SENTINEL_HITBOX_RADIUS;
+    const minY = SENTINEL_HITBOX_RADIUS;
+    const maxY = this.arenaH - SENTINEL_HITBOX_RADIUS;
+    if (this.x < minX) this.x = minX;
+    else if (this.x > maxX) this.x = maxX;
+    if (this.y < minY) this.y = minY;
+    else if (this.y > maxY) this.y = maxY;
+    this.vx = (targetX - this.x) * lerp * 60;
+    this.vy = (targetY - this.y) * lerp * 60;
 
     // Attack cycle. cycleTimer counts up across phases.
     this.cycleTimer += dt;

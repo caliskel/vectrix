@@ -37,7 +37,12 @@ export function buildRoom5(): Room {
   return {
     id: "room5",
     walls,
-    enemies: [new Sentinel(SENTINEL_X, SENTINEL_Y)],
+    enemies: [
+      new Sentinel(SENTINEL_X, SENTINEL_Y, {
+        arenaW: ROOM_W,
+        arenaH: ROOM_H,
+      }),
+    ],
     door: makeDoor(
       ROOM_W - WALL_T / 2,
       DOOR_CENTER_Y,

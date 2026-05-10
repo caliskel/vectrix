@@ -640,12 +640,17 @@ transitions for score + Game Complete.
   - 1700–3300 ms: red 60 px "SENTINEL" title fades in
     (1700–1900) / holds (1900–3000) / fades out (3000–3300).
   At 3300 ms the boss flips to `"idle"` and the HP bar appears.
-- **idle / attacking**: orbital pursuit (orbit-centre lerp 0.02,
-  Rx 400 / Ry 300, position lerp 0.05) + radial-burst cycle on
-  a 2.5 s cadence (0.4 s telegraph + 12 bullets at 350 px/s +
-  0.3 s recovery). Damage via dash-through (1 HP per dash)
-  works only in these two states. The HP bar sits under the
-  HUD header showing current/30.
+- **idle / attacking**: figure-8 path around arena center (12 s
+  period), independent of player position; amplitudes inset by
+  hitbox + 60 px so the lemniscate can't kiss the walls, and a
+  hard `[hitbox, arena − hitbox]` clamp backs it up. Movement
+  only ticks in these two combat states (intro and dying both
+  hold the boss still). Radial-burst cycle on a 2.5 s cadence
+  (0.4 s telegraph + 12 bullets at 350 px/s + 0.3 s recovery)
+  spawns from the live boss position. Damage via dash-through
+  (1 HP per dash) works only in these two states. The HP bar
+  sits below the HUD block (HUD_BOTTOM_Y + 24 px pad) so the
+  ROOM/HP/SCORE row never overlaps the boss bar.
 - **dying** (6050 ms): triggered by `takeDamage` driving HP to
   0. `shouldFreezeWorld()` is true again — the death cinematic
   is the focus. `Sentinel.timeScale` ramps `1.0 → 0.3` over the
