@@ -449,8 +449,7 @@ const RB_EYE_HIT_SHAKE_SEC = 0.2;
 // PHASE_CADENCE so the rotation tightens as the fight escalates,
 // without touching the inner telegraph / fire / recovery beats
 // (those stay readable). New attacks unlock per phase: sweep laser
-// in phase 2, charge + minion spawns in phase 3 (placeholder for
-// the next iteration).
+// in phase 2, mine field + corner turret spawns in phase 3.
 // Phase boundaries scale with the bumped HP — phase 1 is HP 60→40,
 // phase 2 is HP 40→20, phase 3 is HP 20→0. Same 1/3-of-HP-per-phase
 // proportion as the old 30 → 20 → 10 → 0 split.
@@ -577,108 +576,6 @@ const SWEEP_LASER_MID_PAUSE_SHAKE_SEC = 0.1;
 // Subtle white-to-cyan core shift so the return pass reads
 // differently from the forward pass at a glance.
 const SWEEP_LASER_RETURN_CORE_COLOR = "#aaeeff";
-
-// === Charge attack — phase 3 only ===
-// vanish: boss fades out at current position, implosion particles
-// telegraph: appears at the arena edge, draws a fixed warning line
-// rushing: linear dash across the arena along the line (2 HP on hit)
-// recovery: body settles, glow ramps down to baseline
-const CHARGE_VANISH_SEC = 0.35;
-const CHARGE_TELEGRAPH_SEC = 0.9;
-const CHARGE_RUSHING_SEC = 0.4;
-const CHARGE_RECOVERY_SEC = 0.6;
-const CHARGE_BASE_COOLDOWN_SEC = 9.0;
-const CHARGE_HIT_RADIUS = 50;
-const CHARGE_DAMAGE = 2;
-// Player-position prediction window — at telegraph entry the boss
-// captures `(player.vx, player.vy) * CHARGE_PLAYER_PREDICT_SEC` so
-// the line aims at where the player WILL be by the time the dash
-// lands. Player can outrun the prediction with a sideways dash.
-const CHARGE_PLAYER_PREDICT_SEC = 0.6;
-// Vanish fade now runs the full vanish window — easeInQuart pulls
-// the body all the way to invisible right as vanish → telegraph
-// fires, so the player gets a clean visual hand-off to the
-// appearance explosion at the new position.
-const CHARGE_VANISH_FADE_OUT_SEC = CHARGE_VANISH_SEC;
-// Telegraph fade-in eased out (longer + smoother) so the body
-// "settles in" rather than popping to full opacity after the
-// initial appearance flash.
-const CHARGE_TELEGRAPH_FADE_IN_SEC = 0.6;
-const CHARGE_VANISH_PARTICLE_COUNT = 24;
-// Inverse shockwave at vanish entry — collapses inward as the
-// boss implodes. Mirrors the appearance explosion's outward
-// shockwaves so the two attack endpoints read as a matched pair.
-const CHARGE_VANISH_SHOCKWAVE_R_START = 180;
-const CHARGE_VANISH_SHOCKWAVE_R_END = 20;
-const CHARGE_VANISH_SHOCKWAVE_LW_START = 1;
-const CHARGE_VANISH_SHOCKWAVE_LW_END = 6;
-const CHARGE_VANISH_SHOCKWAVE_COLOR = "#ff5577";
-// Appearance explosion at vanish → telegraph transition (boss
-// materialises at chargeStart). Damage-free — visual punctuation.
-const CHARGE_APPEAR_SHOCKWAVE_1_R0 = 20;
-const CHARGE_APPEAR_SHOCKWAVE_1_R1 = 180;
-const CHARGE_APPEAR_SHOCKWAVE_1_LW0 = 10;
-const CHARGE_APPEAR_SHOCKWAVE_1_LW1 = 1;
-const CHARGE_APPEAR_SHOCKWAVE_1_LIFETIME_SEC = 0.5;
-const CHARGE_APPEAR_SHOCKWAVE_1_COLOR = "#ff2266";
-// Second wave starts 80 ms later (`startR` is bumped to 40 so the
-// rings don't perfectly overlap).
-const CHARGE_APPEAR_SHOCKWAVE_2_R0 = 40;
-const CHARGE_APPEAR_SHOCKWAVE_2_R1 = 240;
-const CHARGE_APPEAR_SHOCKWAVE_2_LW0 = 5;
-const CHARGE_APPEAR_SHOCKWAVE_2_LW1 = 0.5;
-const CHARGE_APPEAR_SHOCKWAVE_2_LIFETIME_SEC = 0.7;
-const CHARGE_APPEAR_SHOCKWAVE_2_COLOR = "#ffffff";
-const CHARGE_APPEAR_PARTICLE_COUNT = 20;
-const CHARGE_APPEAR_PARTICLE_SPEED_MIN = 250;
-const CHARGE_APPEAR_PARTICLE_SPEED_MAX = 400;
-const CHARGE_APPEAR_PARTICLE_LIFETIME_SEC = 0.6;
-const CHARGE_APPEAR_FLASH_SEC = 0.2;
-const CHARGE_APPEAR_FLASH_PEAK_ALPHA = 0.6;
-const CHARGE_APPEAR_SHAKE_PX = 6;
-const CHARGE_APPEAR_SHAKE_SEC = 0.15;
-const CHARGE_VANISH_PARTICLE_RADIUS = 80;
-const CHARGE_VANISH_PARTICLE_SPEED_MIN = 200;
-const CHARGE_VANISH_PARTICLE_SPEED_MAX = 300;
-const CHARGE_VANISH_PARTICLE_LIFETIME_SEC = 0.25;
-const CHARGE_VANISH_COLOR = "#ff2266";
-const CHARGE_TELEGRAPH_OUTER_LW = 32;
-const CHARGE_TELEGRAPH_OUTER_OPACITY = 0.1;
-const CHARGE_TELEGRAPH_MID_LW = 18;
-const CHARGE_TELEGRAPH_MID_OPACITY = 0.3;
-const CHARGE_TELEGRAPH_CORE_LW = 6;
-const CHARGE_TELEGRAPH_CORE_OPACITY = 0.7;
-const CHARGE_TELEGRAPH_DASH_PATTERN: [number, number] = [12, 12];
-const CHARGE_TELEGRAPH_DASH_RATE = 100;
-const CHARGE_TELEGRAPH_OUTER_COLOR = "#ff2266";
-const CHARGE_TELEGRAPH_CORE_COLOR = "#ff5577";
-const CHARGE_TELEGRAPH_END_MARKER_PERIOD_SEC = 0.3;
-const CHARGE_TELEGRAPH_END_MARKER_SCALE_MIN = 0.9;
-const CHARGE_TELEGRAPH_END_MARKER_SCALE_MAX = 1.3;
-const CHARGE_TELEGRAPH_END_MARKER_SIZE = 18;
-const CHARGE_TELEGRAPH_ARROW_SIZE = 24;
-// Final-flash window — last 200 ms of telegraph the line opacity
-// strobes 5 times so the player can't miss the rushing entry.
-const CHARGE_TELEGRAPH_FINAL_FLASH_SEC = 0.2;
-const CHARGE_TELEGRAPH_FINAL_FLASH_PULSES = 5;
-// Edge inset so chargeStart sits inside the arena (boss visible)
-// rather than spawning behind the wall.
-const CHARGE_EDGE_INSET = 10;
-const CHARGE_TARGET_INSET = 30;
-// Rushing visuals
-const CHARGE_RUSHING_GHOST_LIFETIME_SEC = 0.3;
-const CHARGE_RUSHING_GLOW_MUL = 1.4;
-const CHARGE_RUSHING_WAKE_RATE_PER_SEC = 16;
-const CHARGE_RUSHING_WAKE_LIFETIME_SEC = 0.4;
-const CHARGE_RUSHING_WAKE_SPEED = 140;
-const CHARGE_RUSHING_SHAKE_PX = 4;
-const CHARGE_RUSHING_SHAKE_SEC = 0.1;
-// Recovery flash ring spawned at rushing → recovery transition.
-const CHARGE_RECOVERY_FLASH_R0 = 30;
-const CHARGE_RECOVERY_FLASH_R1 = 200;
-const CHARGE_RECOVERY_FLASH_LW0 = 5;
-const CHARGE_RECOVERY_FLASH_LW1 = 0.5;
-const CHARGE_RECOVERY_FLASH_LIFETIME_SEC = 0.5;
 
 // === Phase 3 corner turrets ===
 // 2 stationary turrets spawned in opposite diagonal corners
@@ -894,34 +791,6 @@ function shortestAngleDiff(target: number, current: number): number {
   return d;
 }
 
-function clamp(value: number, lo: number, hi: number): number {
-  return value < lo ? lo : value > hi ? hi : value;
-}
-
-/** Shortest distance from point (px, py) to the line segment
- *  (ax, ay) → (bx, by). Used by the Charge attack damage check —
- *  the segment is the boss's full dash path, hit radius is
- *  CHARGE_HIT_RADIUS. */
-function pointSegmentDistance(
-  px: number,
-  py: number,
-  ax: number,
-  ay: number,
-  bx: number,
-  by: number,
-): number {
-  const dx = bx - ax;
-  const dy = by - ay;
-  const lenSq = dx * dx + dy * dy;
-  if (lenSq < 1e-6) return Math.hypot(px - ax, py - ay);
-  let t = ((px - ax) * dx + (py - ay) * dy) / lenSq;
-  if (t < 0) t = 0;
-  else if (t > 1) t = 1;
-  const projX = ax + dx * t;
-  const projY = ay + dy * t;
-  return Math.hypot(px - projX, py - projY);
-}
-
 // Reusable empty-list sentinels so the happy path (no work this
 // frame) doesn't allocate.
 const EMPTY_TURRET_LIST: Turret[] = [];
@@ -950,20 +819,6 @@ type SweepPhase =
 // Pink residue painted behind the moving beam — captured each frame
 // of the firing window, ages out over `SWEEP_TRAIL_MAX_AGE_SEC`.
 type SweepTrailEntry = { angle: number; age: number };
-
-// Charge attack — phase 3 signature. vanish + telegraph are the
-// "wind-up", rushing is the actual dash, recovery is the
-// "follow-through" before the boss can act again.
-type ChargePhase =
-  | "idle"
-  | "vanish"
-  | "telegraph"
-  | "rushing"
-  | "recovery";
-
-// Ghost silhouette painted along the dash path during rushing —
-// fading afterimage of the boss body.
-type ChargeGhostFrame = { x: number; y: number; age: number };
 
 type RingBurstPhase =
   | "idle"
@@ -1023,8 +878,7 @@ export class Sentinel implements Enemy {
    *  flag only fires when the hit should actually count. */
   requestPlayerHit = false;
   /** Damage amount routed alongside `requestPlayerHit`. Defaults to
-   *  1 HP for normal contact / RB ring / sweep beam; the Charge
-   *  attack bumps it to 2 HP for the rushing impact. rooms-game
+   *  1 HP for normal contact / RB ring / sweep beam. rooms-game
    *  reads this in `consumeSentinelEffects` and resets it back to 1. */
   requestedPlayerHitDamage = 1;
 
@@ -1174,31 +1028,6 @@ export class Sentinel implements Enemy {
   private sweepLaserDashOffset = 0;
   private sweepLaserBeamParticleTimer = 0;
   private sweepTrail: SweepTrailEntry[] = [];
-
-  // === Charge attack (phase 3) ===
-  private chargePhase: ChargePhase = "idle";
-  private chargeTimer = 0;
-  private chargeIdleTimer = 0;
-  private chargeStartX = 0;
-  private chargeStartY = 0;
-  private chargeEndX = 0;
-  private chargeEndY = 0;
-  private chargeAngle = 0;
-  // Crossing-detection latch for the once-per-vanish implosion.
-  private chargeImplosionFired = false;
-  private chargeGhostFrames: ChargeGhostFrame[] = [];
-  private chargeWakeTimer = 0;
-  // Fire-once flag for the rushing-entry shake (separate from the
-  // wake timer so a slow first-frame dt can't double-trigger).
-  private chargeRushingShakeFired = false;
-  // Dedup the contact-damage flag so a single rushing pass deals
-  // 2 HP exactly once even if the player overlaps the segment for
-  // several frames before i-frames latch.
-  private chargeHitLanded = false;
-  /** Countdown for the white "appear flash" overlay painted on top
-   *  of the body during the first 200 ms of telegraph. Spawned in
-   *  enterChargeTelegraph; ticked down in tickCharge. */
-  private chargeAppearFlashTimer = 0;
 
   // === Phase 3 corner turrets ===
   /** Latched true once the four corner-turret spawn requests are
@@ -1444,12 +1273,10 @@ export class Sentinel implements Enemy {
     // would teleport-feel after the long vulnerable hold).
     this.figurePhase +=
       (Math.PI * 2 * dt) / FIGURE_EIGHT_PERIOD_SEC;
-    // Movement is owned by the active attack when either Ring Burst
-    // OR Charge is non-idle — both attacks lock the boss position
-    // (RB freezes, Charge teleports + dashes). Figure-8 only ticks
+    // Movement is owned by the active attack when Ring Burst is
+    // non-idle — RB locks the boss position. Figure-8 only ticks
     // when the boss is "free" between attacks.
-    const movementOwnedByAttack =
-      this.ringBurstPhase !== "idle" || this.chargePhase !== "idle";
+    const movementOwnedByAttack = this.ringBurstPhase !== "idle";
     if (!movementOwnedByAttack) {
       const centerX = this.arenaW / 2;
       const centerY = this.arenaH / 2;
@@ -1532,10 +1359,9 @@ export class Sentinel implements Enemy {
     // === 1. Progress whichever attack is currently in flight ===
     // Mutual exclusion guarantees at most one of these is non-idle,
     // so the call order is irrelevant. Each tick* short-circuits on
-    // its own idle state — the cost of all five calls is a single
+    // its own idle state — the cost of all four calls is a single
     // branch when nothing is firing.
     this.tickRingBurst(ctxRoom, dt);
-    this.tickCharge(ctxRoom, dt);
     this.tickSweepLaser(ctxRoom, dt);
     this.tickRadialBurst(ctxRoom, dt);
     this.tickAimedShot(ctxRoom, dt);
@@ -1551,7 +1377,6 @@ export class Sentinel implements Enemy {
       if (this.radialPhase === "idle") this.radialIdleTimer += dt;
       if (this.aimedPhase === "idle") this.aimedIdleTimer += dt;
       if (this.sweepLaserPhase === "idle") this.sweepLaserIdleTimer += dt;
-      if (this.chargePhase === "idle") this.chargeIdleTimer += dt;
       if (this.ringBurstPhase === "idle" && this.rbCooldownTimer > 0) {
         this.rbCooldownTimer = Math.max(0, this.rbCooldownTimer - dt);
       }
@@ -1561,12 +1386,10 @@ export class Sentinel implements Enemy {
     // Each tryStart* short-circuits if any attack is already active
     // (including one started earlier in this same call chain), so on
     // a tied cooldown expiry the first one in this list wins.
-    // Priority: ring burst > charge > sweep > aimed > radial.
-    // RB is the defining mechanic. Charge is the phase-3 panic
-    // moment — beats sweep on a tied cooldown. Sweep is the
-    // phase-2+ signature. Aimed is point threat. Radial is filler.
+    // Priority: ring burst > sweep > aimed > radial.
+    // RB is the defining mechanic. Sweep is the phase-2+ signature.
+    // Aimed is point threat. Radial is filler.
     this.tryStartRingBurst();
-    this.tryStartCharge(ctxRoom);
     this.tryStartSweepLaser(ctxRoom);
     this.tryStartAimedShot(ctxRoom);
     this.tryStartRadialBurst();
@@ -1739,29 +1562,6 @@ export class Sentinel implements Enemy {
     this.beginSweepLaserTelegraph(ctxRoom);
   }
 
-  private tryStartCharge(ctxRoom: EnemyContext): void {
-    if (this.isAnyAttackActive()) return;
-    if (this.bossPhase < 3) return;
-    const cadence = PHASE_CADENCE[this.bossPhase];
-    if (this.chargeIdleTimer < CHARGE_BASE_COOLDOWN_SEC * cadence) return;
-    this.beginCharge(ctxRoom);
-  }
-
-  private beginCharge(_ctxRoom: EnemyContext): void {
-    // Vanish phase only owns the boss's CURRENT position — the
-    // chargeStart/End computation happens at the vanish → telegraph
-    // transition (enterChargeTelegraph) so the prediction uses the
-    // freshest player velocity.
-    this.chargePhase = "vanish";
-    this.chargeTimer = 0;
-    this.chargeImplosionFired = false;
-    this.chargeGhostFrames = [];
-    this.chargeWakeTimer = 0;
-    this.chargeRushingShakeFired = false;
-    this.chargeHitLanded = false;
-    this.bodyOpacity = 1;
-  }
-
   private tryStartAimedShot(ctxRoom: EnemyContext): void {
     if (this.isAnyAttackActive()) return;
     const cadence = PHASE_CADENCE[this.bossPhase];
@@ -1829,13 +1629,8 @@ export class Sentinel implements Enemy {
 
   private bodyDamageActive(): boolean {
     // Body is "solid" only when nothing weird is happening to its
-    // shape. RB ghosting drops body collision; Charge owns its own
-    // damage path (segment hit) and routes player damage there, so
-    // the body itself doesn't contact-hit during vanish / telegraph
-    // / rushing / recovery. Same gate also suppresses the dash
-    // whiff during charge so it doesn't fire on a player who
-    // happens to overlap the boss mid-cinematic.
-    if (this.chargePhase !== "idle") return false;
+    // shape. RB ghosting drops body collision during detach /
+    // vulnerable / reassemble.
     return (
       this.ringBurstPhase === "idle" ||
       this.ringBurstPhase === "telegraph" ||
@@ -2238,8 +2033,7 @@ export class Sentinel implements Enemy {
       this.radialPhase !== "idle" ||
       this.aimedPhase !== "idle" ||
       this.sweepLaserPhase !== "idle" ||
-      this.ringBurstPhase !== "idle" ||
-      this.chargePhase !== "idle"
+      this.ringBurstPhase !== "idle"
     );
   }
 
@@ -2628,349 +2422,6 @@ export class Sentinel implements Enemy {
       return endAngle - direction * Math.PI * t;
     }
     return start;
-  }
-
-  // === Charge attack (phase 3) ===
-  // Sub-state machine. Cooldown ticking + start gating handled by
-  // the central scheduler in updateCombat. While non-idle, the
-  // figure-8 movement is suppressed (movementOwnedByAttack); the
-  // boss owns its own position throughout.
-  private tickCharge(ctxRoom: EnemyContext, dt: number): void {
-    if (this.chargePhase === "idle") return;
-    this.chargeTimer += dt;
-
-    // Age + cull ghost frames — runs every charge frame so they
-    // dissolve naturally inside CHARGE_RUSHING_GHOST_LIFETIME_SEC
-    // (recovery is shorter than that, so they're all gone before
-    // the boss is allowed to act again).
-    if (this.chargeGhostFrames.length > 0) {
-      for (const g of this.chargeGhostFrames) g.age += dt;
-      this.chargeGhostFrames = this.chargeGhostFrames.filter(
-        (g) => g.age < CHARGE_RUSHING_GHOST_LIFETIME_SEC,
-      );
-    }
-
-    if (this.chargePhase === "vanish") {
-      // Body fade-out 1 → 0 over the full vanish window, eased on
-      // easeInQuart so the body lingers visible most of the way
-      // and then drops off sharply right before the appearance
-      // explosion fires.
-      const u = Math.min(1, this.chargeTimer / CHARGE_VANISH_FADE_OUT_SEC);
-      const easedFade = u * u * u * u; // easeInQuart
-      this.bodyOpacity = 1 - easedFade;
-      // Implosion FX fire once at vanish entry: 40 particles
-      // collapsing inward + a single inverse-shockwave ring
-      // (`r 180 → 20`, `lw 1 → 6`) for the "sucked in" read. The
-      // ring's natural alpha-ramp via age handles the visual fade.
-      if (!this.chargeImplosionFired) {
-        this.chargeImplosionFired = true;
-        ctxRoom.rings.push({
-          x: this.x,
-          y: this.y,
-          age: 0,
-          lifetime: CHARGE_VANISH_SEC,
-          startR: CHARGE_VANISH_SHOCKWAVE_R_START,
-          endR: CHARGE_VANISH_SHOCKWAVE_R_END,
-          startLineWidth: CHARGE_VANISH_SHOCKWAVE_LW_START,
-          endLineWidth: CHARGE_VANISH_SHOCKWAVE_LW_END,
-          color: CHARGE_VANISH_SHOCKWAVE_COLOR,
-          glowBlur: 14,
-        });
-        for (let i = 0; i < CHARGE_VANISH_PARTICLE_COUNT; i++) {
-          const a =
-            (i / CHARGE_VANISH_PARTICLE_COUNT) * Math.PI * 2 +
-            Math.random() * 0.1;
-          const r = CHARGE_VANISH_PARTICLE_RADIUS;
-          const sx = this.x + Math.cos(a) * r;
-          const sy = this.y + Math.sin(a) * r;
-          const speed =
-            CHARGE_VANISH_PARTICLE_SPEED_MIN +
-            Math.random() *
-              (CHARGE_VANISH_PARTICLE_SPEED_MAX -
-                CHARGE_VANISH_PARTICLE_SPEED_MIN);
-          // Inward velocity: from particle position toward boss
-          // centre. Negative direction along (cos a, sin a).
-          ctxRoom.particles.push({
-            x: sx,
-            y: sy,
-            vx: -Math.cos(a) * speed,
-            vy: -Math.sin(a) * speed,
-            initialSize: 3,
-            color: CHARGE_VANISH_COLOR,
-            age: 0,
-            lifetime: CHARGE_VANISH_PARTICLE_LIFETIME_SEC,
-            glowStrong: 10,
-            glowSoft: 4,
-            drag: 0.95,
-          });
-        }
-        // Audio placeholder — reuse alert chirp; bossWarp synth
-        // (filtered noise sweep) is a follow-up in the audio pass.
-        audio.play.alert();
-      }
-      if (this.chargeTimer >= CHARGE_VANISH_SEC) {
-        this.enterChargeTelegraph(ctxRoom);
-      }
-      return;
-    }
-
-    if (this.chargePhase === "telegraph") {
-      // Body fade-in 0 → 1 over CHARGE_TELEGRAPH_FADE_IN_SEC, eased
-      // on easeOutCubic so the body "settles in" instead of popping
-      // straight to opaque. Holds at 1 for the rest of telegraph.
-      const u = Math.min(1, this.chargeTimer / CHARGE_TELEGRAPH_FADE_IN_SEC);
-      const eased = 1 - (1 - u) * (1 - u) * (1 - u); // easeOutCubic
-      this.bodyOpacity = eased;
-      // Tick down the appearance-flash overlay (drawn in renderBody
-      // when > 0).
-      if (this.chargeAppearFlashTimer > 0) {
-        this.chargeAppearFlashTimer = Math.max(
-          0,
-          this.chargeAppearFlashTimer - dt,
-        );
-      }
-      if (this.chargeTimer >= CHARGE_TELEGRAPH_SEC) {
-        this.chargePhase = "rushing";
-        this.chargeTimer = 0;
-        this.chargeRushingShakeFired = false;
-        this.chargeHitLanded = false;
-        this.chargeWakeTimer = 0;
-        this.bodyOpacity = 1;
-      }
-      return;
-    }
-
-    if (this.chargePhase === "rushing") {
-      // Boss position lerps linearly start → end over the rushing
-      // window. Ghost trail captured each frame, wake particles
-      // emitted at a fixed rate.
-      const u = Math.min(1, this.chargeTimer / CHARGE_RUSHING_SEC);
-      this.x =
-        this.chargeStartX + (this.chargeEndX - this.chargeStartX) * u;
-      this.y =
-        this.chargeStartY + (this.chargeEndY - this.chargeStartY) * u;
-      // Rushing-entry shake — fire once on the first rushing frame.
-      if (!this.chargeRushingShakeFired) {
-        this.chargeRushingShakeFired = true;
-        this.pendingShakePx = CHARGE_RUSHING_SHAKE_PX;
-        this.pendingShakeSec = CHARGE_RUSHING_SHAKE_SEC;
-        // Heavy impact placeholder — bossCharge/BWOAH synth is a
-        // follow-up. hitHeavy is the closest existing cue.
-        audio.play.hitHeavy();
-      }
-      // Damage check — point-segment distance against the full
-      // chargeStart→chargeEnd line. Latched once via
-      // chargeHitLanded so a single rushing pass deals exactly
-      // CHARGE_DAMAGE.
-      if (!this.chargeHitLanded) {
-        const player = ctxRoom.player;
-        if (player.dashIframeTime <= 0) {
-          const d = pointSegmentDistance(
-            player.x,
-            player.y,
-            this.chargeStartX,
-            this.chargeStartY,
-            this.chargeEndX,
-            this.chargeEndY,
-          );
-          if (d < CHARGE_HIT_RADIUS) {
-            this.requestPlayerHit = true;
-            this.requestedPlayerHitDamage = CHARGE_DAMAGE;
-            this.chargeHitLanded = true;
-          }
-        }
-      }
-      // Ghost capture — every frame.
-      this.chargeGhostFrames.push({ x: this.x, y: this.y, age: 0 });
-      // Wake particles — fixed rate, perpendicular to chargeAngle
-      // (so they fan out sideways from the trail).
-      this.chargeWakeTimer += dt;
-      const wakeInterval = 1 / CHARGE_RUSHING_WAKE_RATE_PER_SEC;
-      while (this.chargeWakeTimer >= wakeInterval) {
-        this.chargeWakeTimer -= wakeInterval;
-        const sideAngle =
-          this.chargeAngle +
-          (Math.random() < 0.5 ? Math.PI / 2 : -Math.PI / 2);
-        ctxRoom.particles.push({
-          x: this.x,
-          y: this.y,
-          vx: Math.cos(sideAngle) * CHARGE_RUSHING_WAKE_SPEED,
-          vy: Math.sin(sideAngle) * CHARGE_RUSHING_WAKE_SPEED,
-          initialSize: 3,
-          color: CHARGE_VANISH_COLOR,
-          age: 0,
-          lifetime: CHARGE_RUSHING_WAKE_LIFETIME_SEC,
-          glowStrong: 10,
-          glowSoft: 4,
-          drag: 0.95,
-        });
-      }
-      if (this.chargeTimer >= CHARGE_RUSHING_SEC) {
-        // Snap to exact end position so any sub-pixel slop is
-        // resolved before recovery.
-        this.x = this.chargeEndX;
-        this.y = this.chargeEndY;
-        this.chargePhase = "recovery";
-        this.chargeTimer = 0;
-        // Recovery flash — pink ring blooms from the boss centre.
-        ctxRoom.rings.push({
-          x: this.x,
-          y: this.y,
-          age: 0,
-          lifetime: CHARGE_RECOVERY_FLASH_LIFETIME_SEC,
-          startR: CHARGE_RECOVERY_FLASH_R0,
-          endR: CHARGE_RECOVERY_FLASH_R1,
-          color: CHARGE_TELEGRAPH_OUTER_COLOR,
-          startLineWidth: CHARGE_RECOVERY_FLASH_LW0,
-          endLineWidth: CHARGE_RECOVERY_FLASH_LW1,
-          glowBlur: 14,
-        });
-      }
-      return;
-    }
-
-    if (this.chargePhase === "recovery") {
-      if (this.chargeTimer >= CHARGE_RECOVERY_SEC) {
-        this.chargePhase = "idle";
-        this.chargeTimer = 0;
-        // Reset idle timer to 0 — it counts up toward
-        // CHARGE_BASE_COOLDOWN_SEC * cadence in tryStartCharge,
-        // so the wait between charges starts fresh from here.
-        this.chargeIdleTimer = 0;
-        // Smooth re-entry to figure-8: snapshot the frozen position
-        // so the movement update can blend to the live curve point
-        // (same MOVEMENT_TRANSITION_SEC easing as RB recovery).
-        if (this.state === "idle" || this.state === "attacking") {
-          this.movementTransition = {
-            fromX: this.x,
-            fromY: this.y,
-            elapsedSec: 0,
-          };
-        }
-      }
-      return;
-    }
-  }
-
-  private enterChargeTelegraph(ctxRoom: EnemyContext): void {
-    // Compute end first (predicted player position), then start
-    // (mirror across arena from end). Both are clamped inside the
-    // arena so the boss is visible at the line's endpoints.
-    const player = ctxRoom.player;
-    const predictX = player.x + player.vx * CHARGE_PLAYER_PREDICT_SEC;
-    const predictY = player.y + player.vy * CHARGE_PLAYER_PREDICT_SEC;
-    const targetMin = SENTINEL_HITBOX_RADIUS + CHARGE_TARGET_INSET;
-    const endX = clamp(predictX, targetMin, this.arenaW - targetMin);
-    const endY = clamp(predictY, targetMin, this.arenaH - targetMin);
-    // Direction from player to boss "edge spawn" — pick a normalized
-    // back-vector and walk it out to the arena edge.
-    const dx = this.x - endX;
-    const dy = this.y - endY;
-    let bx = dx;
-    let by = dy;
-    const m = Math.hypot(bx, by);
-    if (m < 1) {
-      // Old position is essentially on top of end — fall back to a
-      // random direction so we don't divide by zero.
-      const a = Math.random() * Math.PI * 2;
-      bx = Math.cos(a);
-      by = Math.sin(a);
-    } else {
-      bx /= m;
-      by /= m;
-    }
-    // Walk out along (bx, by) until we hit a wall, capture that
-    // intersection as chargeStart.
-    const edgeMin = SENTINEL_HITBOX_RADIUS + CHARGE_EDGE_INSET;
-    const edgeMaxX = this.arenaW - edgeMin;
-    const edgeMaxY = this.arenaH - edgeMin;
-    // Parametric ray: (endX + bx*t, endY + by*t). Find smallest
-    // positive t that hits one of the four edge lines.
-    const candidates: number[] = [];
-    if (bx > 0.0001) candidates.push((edgeMaxX - endX) / bx);
-    if (bx < -0.0001) candidates.push((edgeMin - endX) / bx);
-    if (by > 0.0001) candidates.push((edgeMaxY - endY) / by);
-    if (by < -0.0001) candidates.push((edgeMin - endY) / by);
-    let t = Infinity;
-    for (const c of candidates) {
-      if (c > 0 && c < t) t = c;
-    }
-    if (!Number.isFinite(t)) t = 800;
-    const startX = clamp(endX + bx * t, edgeMin, edgeMaxX);
-    const startY = clamp(endY + by * t, edgeMin, edgeMaxY);
-
-    this.chargeStartX = startX;
-    this.chargeStartY = startY;
-    this.chargeEndX = endX;
-    this.chargeEndY = endY;
-    this.chargeAngle = Math.atan2(endY - startY, endX - startX);
-    this.x = startX;
-    this.y = startY;
-    this.chargePhase = "telegraph";
-    this.chargeTimer = 0;
-    this.bodyOpacity = 0;
-    // Appearance explosion — two outward shockwaves + 32 particles
-    // split white/accent + screen shake + an additive flash overlay
-    // (drawn over the body for the first CHARGE_APPEAR_FLASH_SEC of
-    // telegraph). Damage-free; pure visual punctuation of the
-    // teleport. The flash timer is ticked down in the telegraph
-    // branch of tickCharge.
-    ctxRoom.rings.push({
-      x: startX,
-      y: startY,
-      age: 0,
-      lifetime: CHARGE_APPEAR_SHOCKWAVE_1_LIFETIME_SEC,
-      startR: CHARGE_APPEAR_SHOCKWAVE_1_R0,
-      endR: CHARGE_APPEAR_SHOCKWAVE_1_R1,
-      startLineWidth: CHARGE_APPEAR_SHOCKWAVE_1_LW0,
-      endLineWidth: CHARGE_APPEAR_SHOCKWAVE_1_LW1,
-      color: CHARGE_APPEAR_SHOCKWAVE_1_COLOR,
-      glowBlur: 18,
-    });
-    ctxRoom.rings.push({
-      x: startX,
-      y: startY,
-      age: 0,
-      lifetime: CHARGE_APPEAR_SHOCKWAVE_2_LIFETIME_SEC,
-      startR: CHARGE_APPEAR_SHOCKWAVE_2_R0,
-      endR: CHARGE_APPEAR_SHOCKWAVE_2_R1,
-      startLineWidth: CHARGE_APPEAR_SHOCKWAVE_2_LW0,
-      endLineWidth: CHARGE_APPEAR_SHOCKWAVE_2_LW1,
-      color: CHARGE_APPEAR_SHOCKWAVE_2_COLOR,
-      glowBlur: 12,
-    });
-    const halfPart = CHARGE_APPEAR_PARTICLE_COUNT / 2;
-    for (let i = 0; i < CHARGE_APPEAR_PARTICLE_COUNT; i++) {
-      const a =
-        (i / CHARGE_APPEAR_PARTICLE_COUNT) * Math.PI * 2 +
-        Math.random() * 0.15;
-      const ps =
-        CHARGE_APPEAR_PARTICLE_SPEED_MIN +
-        Math.random() *
-          (CHARGE_APPEAR_PARTICLE_SPEED_MAX -
-            CHARGE_APPEAR_PARTICLE_SPEED_MIN);
-      ctxRoom.particles.push({
-        x: startX,
-        y: startY,
-        vx: Math.cos(a) * ps,
-        vy: Math.sin(a) * ps,
-        initialSize: 3,
-        color: i < halfPart ? CHARGE_APPEAR_SHOCKWAVE_1_COLOR : "#ffffff",
-        age: 0,
-        lifetime: CHARGE_APPEAR_PARTICLE_LIFETIME_SEC,
-        glowStrong: 10,
-        glowSoft: 4,
-        drag: 0.94,
-      });
-    }
-    this.chargeAppearFlashTimer = CHARGE_APPEAR_FLASH_SEC;
-    this.pendingShakePx = CHARGE_APPEAR_SHAKE_PX;
-    this.pendingShakeSec = CHARGE_APPEAR_SHAKE_SEC;
-    // Heavy impact stand-in until a proper bossWarp synth exists —
-    // hitHeavy alone reads as "the world thumped" and the alert
-    // chirp on top adds the high-frequency snap.
-    audio.play.hitHeavy();
-    audio.play.alert();
   }
 
   /** Drained by rooms-game after the boss tick. Returns any
@@ -3393,15 +2844,6 @@ export class Sentinel implements Enemy {
     this.sweepLaserTimer = 0;
     this.sweepLaserIdleTimer = 0;
     this.sweepTrail = [];
-    // Charge — same idea: line / particles / ghost trail wouldn't
-    // make sense once the boss is dying.
-    this.chargePhase = "idle";
-    this.chargeTimer = 0;
-    this.chargeIdleTimer = 0;
-    this.chargeGhostFrames = [];
-    this.chargeImplosionFired = false;
-    this.chargeRushingShakeFired = false;
-    this.chargeHitLanded = false;
     // Corner turret spawn queue stops — anything not yet spawned
     // is dropped (the bay door is closed). Already-spawned turrets
     // are caught by the cascade kill below.
@@ -3546,41 +2988,12 @@ export class Sentinel implements Enemy {
     if (this.sweepLaserPhase === "telegraph") {
       this.renderSweepLaserTelegraph(ctx);
     }
-    // Charge telegraph — drawn under the body so the body silhouette
-    // sits on top of the warning line. Telegraph is the only Charge
-    // phase whose visuals are independent of the body draw.
-    if (this.chargePhase === "telegraph") {
-      this.renderChargeTelegraph(ctx);
-    }
-    // Rushing ghost trail — drawn under the live body so the
-    // brightest silhouette is the actual boss, not the afterimages.
-    if (
-      this.chargePhase === "rushing" &&
-      this.chargeGhostFrames.length > 0
-    ) {
-      this.renderChargeGhosts(ctx);
-    }
     // Phase-3 mines — drawn under the body so the boss stays the
     // focal point. Mines are spawned with player + boss exclusion
     // zones so the body rarely covers one anyway, and the strobe
     // window in the last 200 ms cuts through any overlap.
     this.renderMines(ctx);
     this.renderBody(ctx, 1);
-    // Appearance flash — additive white disc painted over the body
-    // for the first CHARGE_APPEAR_FLASH_SEC of telegraph. Decays
-    // linearly from `peak * (timer / total)` so it lands cleanly
-    // as the body fade-in (easeOutCubic) is just starting.
-    if (this.chargeAppearFlashTimer > 0) {
-      const u = this.chargeAppearFlashTimer / CHARGE_APPEAR_FLASH_SEC;
-      ctx.save();
-      ctx.globalCompositeOperation = "lighter";
-      ctx.fillStyle = "#ffffff";
-      ctx.globalAlpha = CHARGE_APPEAR_FLASH_PEAK_ALPHA * u;
-      ctx.beginPath();
-      ctx.arc(this.x, this.y, SENTINEL_HITBOX_RADIUS, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.restore();
-    }
     if (
       this.sweepLaserPhase === "firing-1" ||
       this.sweepLaserPhase === "mid-pause" ||
@@ -3592,128 +3005,6 @@ export class Sentinel implements Enemy {
     if (this.streamers.length > 0) {
       this.renderStreamers(ctx);
     }
-  }
-
-  private renderChargeTelegraph(ctx: CanvasRenderingContext2D): void {
-    const ax = this.chargeStartX;
-    const ay = this.chargeStartY;
-    const bx = this.chargeEndX;
-    const by = this.chargeEndY;
-    // Final-flash window — last CHARGE_TELEGRAPH_FINAL_FLASH_SEC of
-    // telegraph the line opacity strobes 5x so the rushing entry is
-    // impossible to miss.
-    let opacityMul = 1;
-    const finalStart =
-      CHARGE_TELEGRAPH_SEC - CHARGE_TELEGRAPH_FINAL_FLASH_SEC;
-    if (this.chargeTimer >= finalStart) {
-      const u = Math.min(
-        1,
-        (this.chargeTimer - finalStart) / CHARGE_TELEGRAPH_FINAL_FLASH_SEC,
-      );
-      // Triangle wave at CHARGE_TELEGRAPH_FINAL_FLASH_PULSES tics
-      // across the window — alpha bobs 0.7 ↔ 1.0.
-      const phase = u * CHARGE_TELEGRAPH_FINAL_FLASH_PULSES * Math.PI * 2;
-      opacityMul = 0.85 + 0.15 * ((Math.sin(phase) + 1) / 2);
-    }
-    // Outer / mid / core glow stack — same pattern as the sweep
-    // beam. Drawn first so the markers (drawn next) paint on top.
-    ctx.save();
-    ctx.strokeStyle = CHARGE_TELEGRAPH_OUTER_COLOR;
-    ctx.lineWidth = CHARGE_TELEGRAPH_OUTER_LW;
-    ctx.globalAlpha = CHARGE_TELEGRAPH_OUTER_OPACITY * opacityMul;
-    ctx.beginPath();
-    ctx.moveTo(ax, ay);
-    ctx.lineTo(bx, by);
-    ctx.stroke();
-    ctx.lineWidth = CHARGE_TELEGRAPH_MID_LW;
-    ctx.globalAlpha = CHARGE_TELEGRAPH_MID_OPACITY * opacityMul;
-    ctx.beginPath();
-    ctx.moveTo(ax, ay);
-    ctx.lineTo(bx, by);
-    ctx.stroke();
-    // Core dashed line — running offset for the "live" motion read.
-    ctx.strokeStyle = CHARGE_TELEGRAPH_CORE_COLOR;
-    ctx.lineWidth = CHARGE_TELEGRAPH_CORE_LW;
-    ctx.globalAlpha = CHARGE_TELEGRAPH_CORE_OPACITY * opacityMul;
-    ctx.setLineDash(CHARGE_TELEGRAPH_DASH_PATTERN);
-    ctx.lineDashOffset =
-      -((this.chargeTimer * CHARGE_TELEGRAPH_DASH_RATE) %
-        (CHARGE_TELEGRAPH_DASH_PATTERN[0] +
-          CHARGE_TELEGRAPH_DASH_PATTERN[1]));
-    ctx.beginPath();
-    ctx.moveTo(ax, ay);
-    ctx.lineTo(bx, by);
-    ctx.stroke();
-    ctx.setLineDash([]);
-    ctx.restore();
-
-    // End markers — pulsing diamond at chargeStart, arrow at
-    // chargeEnd pointing along the dash direction.
-    const pulsePhase =
-      (this.chargeTimer * Math.PI * 2) /
-      CHARGE_TELEGRAPH_END_MARKER_PERIOD_SEC;
-    const pulse = (Math.sin(pulsePhase) + 1) / 2;
-    const scale =
-      CHARGE_TELEGRAPH_END_MARKER_SCALE_MIN +
-      (CHARGE_TELEGRAPH_END_MARKER_SCALE_MAX -
-        CHARGE_TELEGRAPH_END_MARKER_SCALE_MIN) *
-        pulse;
-
-    ctx.save();
-    ctx.fillStyle = CHARGE_TELEGRAPH_OUTER_COLOR;
-    ctx.shadowColor = CHARGE_TELEGRAPH_OUTER_COLOR;
-    ctx.shadowBlur = 14;
-    ctx.globalAlpha = opacityMul;
-    // Diamond at chargeStart.
-    const diamondSize = CHARGE_TELEGRAPH_END_MARKER_SIZE * scale;
-    ctx.beginPath();
-    ctx.moveTo(ax, ay - diamondSize);
-    ctx.lineTo(ax + diamondSize, ay);
-    ctx.lineTo(ax, ay + diamondSize);
-    ctx.lineTo(ax - diamondSize, ay);
-    ctx.closePath();
-    ctx.fill();
-    // Arrow at chargeEnd.
-    const arrowSize = CHARGE_TELEGRAPH_ARROW_SIZE * scale;
-    const ang = this.chargeAngle;
-    const apexX = bx + Math.cos(ang) * arrowSize;
-    const apexY = by + Math.sin(ang) * arrowSize;
-    const sideA = ang + Math.PI - 0.5;
-    const sideB = ang + Math.PI + 0.5;
-    ctx.beginPath();
-    ctx.moveTo(apexX, apexY);
-    ctx.lineTo(
-      bx + Math.cos(sideA) * arrowSize * 0.6,
-      by + Math.sin(sideA) * arrowSize * 0.6,
-    );
-    ctx.lineTo(
-      bx + Math.cos(sideB) * arrowSize * 0.6,
-      by + Math.sin(sideB) * arrowSize * 0.6,
-    );
-    ctx.closePath();
-    ctx.fill();
-    ctx.restore();
-  }
-
-  private renderChargeGhosts(ctx: CanvasRenderingContext2D): void {
-    // Ghost silhouette = pink filled disc at the recorded position,
-    // alpha + radius scale by remaining life. Cheaper than rendering
-    // a full hex shell stack and reads as "afterimage" without
-    // competing with the live body.
-    ctx.save();
-    ctx.fillStyle = CHARGE_TELEGRAPH_OUTER_COLOR;
-    ctx.shadowColor = CHARGE_TELEGRAPH_OUTER_COLOR;
-    ctx.shadowBlur = 18;
-    for (const g of this.chargeGhostFrames) {
-      const fade = 1 - g.age / CHARGE_RUSHING_GHOST_LIFETIME_SEC;
-      if (fade <= 0) continue;
-      ctx.globalAlpha = 0.4 * fade;
-      const r = SENTINEL_HITBOX_RADIUS * (0.5 + 0.5 * fade);
-      ctx.beginPath();
-      ctx.arc(g.x, g.y, r, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    ctx.restore();
   }
 
   private renderSweepLaserTelegraph(ctx: CanvasRenderingContext2D): void {
@@ -4501,18 +3792,11 @@ export class Sentinel implements Enemy {
           (RB_TELEGRAPH_GLOW_BOOST - 1) *
             Math.min(1, this.rbTimer / RB_TELEGRAPH_SEC)
         : 1;
-    // Charge rushing flares the silhouette — body looks like it's
-    // riding a wave of energy through the dash. Stacks
-    // multiplicatively with the RB telegraph boost (they're mutually
-    // exclusive in practice, but the math is fine either way).
-    const chargeGlowMul =
-      this.chargePhase === "rushing" ? CHARGE_RUSHING_GLOW_MUL : 1;
     const bodyGlowAlpha =
       (BODY_GLOW_ALPHA_MIN +
         ((Math.sin(this.bodyBreathPhase) + 1) / 2) *
           (BODY_GLOW_ALPHA_MAX - BODY_GLOW_ALPHA_MIN)) *
-      rbGlowMul *
-      chargeGlowMul;
+      rbGlowMul;
 
     // Body silhouette — single hex frame painted as a glow + main
     // pair (was a `drawNeon` two-pass shadowBlur stack + nested
@@ -4521,8 +3805,8 @@ export class Sentinel implements Enemy {
     // tracks bodyGlowAlpha for the breath sync; main is the
     // canonical 2.5 px accent stroke. Whole pair is wrapped in
     // bodyOpacity so it ghosts during Ring Burst detach /
-    // vulnerable / reassemble. Telegraph / charge widen the glow
-    // line so the silhouette flares without an extra stroke pass.
+    // vulnerable / reassemble. Radial-burst telegraph widens the
+    // glow line so the silhouette flares without an extra stroke pass.
     const hexAccent = this.accentColor();
     ctx.save();
     ctx.rotate(this.rotation);

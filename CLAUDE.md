@@ -776,18 +776,15 @@ transitions for score + Game Complete.
   the cinematic.
 
   The boss runs **three parallel attack sub-machines** in phase
-  1, four in phase 2, **five in phase 3** (the new Charge attack
-  joins the rotation). **Mutual exclusion**: only one attack
-  sub-state machine can be in a non-idle phase at any moment.
-  While any attack is active, all other cooldown timers are
-  paused (so a long-running attack never lets others pile up
-  readiness mid-flight, which would fire the next attack
+  1, **four in phase 2** (sweep laser joins). **Mutual exclusion**:
+  only one attack sub-state machine can be in a non-idle phase at
+  any moment. While any attack is active, all other cooldown
+  timers are paused (so a long-running attack never lets others
+  pile up readiness mid-flight, which would fire the next attack
   instantly on recovery end). Tie-break priority on simultaneous
-  cooldown expiry: **ring burst > charge > sweep > aimed >
-  radial** — RB is the defining mechanic; Charge is the phase-3
-  panic moment (beats sweep on a tied cooldown so the dash
-  doesn't get pre-empted by a routine laser); sweep is the
-  phase-2+ signature; aimed is point threat; radial is filler.
+  cooldown expiry: **ring burst > sweep > aimed > radial** — RB
+  is the defining mechanic; sweep is the phase-2+ signature;
+  aimed is point threat; radial is filler.
   **Corner turret spawn** runs as a *parallel* timer (phase 3
   only) — staggered Turret spawns NOT subject to mutual exclusion;
   the queue ticks in parallel with whatever attack the boss is
@@ -870,57 +867,6 @@ transitions for score + Game Complete.
     through the universal mutual-exclusion gate; sub-phases
     here don't count as a new attack — `isAnyAttackActive()`
     stays true across the whole cycle.)
-  - **Charge** — phase 3 only. Boss vanishes from its current
-    position, reappears at the arena edge, telegraphs a fixed
-    line through the predicted player position, then dashes
-    along that line at lethal speed. Sub-state machine
-    `idle / vanish / telegraph / rushing / recovery`. Cooldown
-    `CHARGE_BASE_COOLDOWN_SEC = 9 s × PHASE_CADENCE` from
-    recovery end. Timings: **0.35 s vanish** (body opacity
-    `easeInQuart` 1 → 0 across the full window so the fade
-    lingers and then drops sharply at the hand-off; one-shot
-    40-particle implosion at vanish entry — particles ride a
-    80 px radius inward at 200–350 px/s — paired with a single
-    *inverse shockwave* ring r 180 → 20 / lw 1 → 6 in
-    `#ff5577` that collapses toward the boss so vanish reads
-    as "sucked in" rather than just faded out), **0.9 s
-    telegraph** (body fades 0 → 1 over 600 ms eased on
-    `easeOutCubic` at the captured chargeStart, dashed warning
-    line painted from chargeStart to chargeEnd with outer /
-    mid / core glow stack `#ff2266` / `#ff5577` plus pulsing
-    diamond + arrow markers at the endpoints; final 200 ms
-    strobe the line opacity 5× as the rushing-entry
-    countdown), **0.4 s rushing** (linear boss lerp start →
-    end, 4 px / 100 ms shake on entry, body glow ×1.4, ghost
-    trail captured each frame as a fading pink silhouette,
-    sideways wake particles at 16/s), **0.6 s recovery** (pink
-    release ring r 30 → 200 over 500 ms, movement transition
-    snapshots back into the figure-8 the same way RB recovery
-    does).
-    **Arrival explosion** fires at the vanish → telegraph
-    transition (boss materialises at chargeStart): two outward
-    shockwaves (`#ff2266` r 20 → 180 / lw 10 → 1 over 500 ms +
-    `#ffffff` r 40 → 240 / lw 5 → 0.5 over 700 ms), 32
-    particles split 16 accent / 16 white at 250–400 px/s, a
-    200 ms additive white "appear flash" overlay painted on
-    top of the body (`globalCompositeOperation = "lighter"`,
-    peak `0.6` alpha decaying linearly), and a 6 px / 150 ms
-    screen shake. Damage-free — pure visual punctuation of the
-    teleport; standing on the appearance point doesn't cost
-    HP until the body itself materialises.
-    Player target = `player.position + player.velocity * 0.6 s`
-    locked at vanish → telegraph; no homing afterwards. Damage:
-    point-segment distance from player to the full charge line
-    < `CHARGE_HIT_RADIUS = 50 px` deals **2 HP** (latched once
-    per pass via `chargeHitLanded` so the player can't get
-    multi-hit by overlapping the segment for several frames
-    before i-frames latch). Body remains invulnerable through
-    every charge phase — `bodyDamageActive()` short-circuits
-    when `chargePhase !== "idle"` so the dash isn't a
-    drive-by damage opportunity. Audio reuses `alert` (vanish)
-    + layered `hitHeavy` + `alert` (arrival explosion) +
-    `hitHeavy` (rushing) as placeholders until the BWOAH /
-    bossWarp synths land.
   - **2 corner turrets** — phase 3 only. At the same climax
     that fires the phase-3 cadence boost, Sentinel queues two
     `Turret`s in opposite diagonal corners (top-left + bottom-
@@ -1047,8 +993,7 @@ transitions for score + Game Complete.
     gameplay information, and accounted for ~30 % of per-frame
     stroke operations on the boss. Particle counts on the same
     pass: RB detach 18 → 12, eye-hit halves 12 → 8, phase
-    transition climax 32 → 20, charge vanish implosion 40 → 24,
-    charge arrival explosion 32 → 20, radial-burst streamers
+    transition climax 32 → 20, radial-burst streamers
     24 → 12. The radial-burst's second (delayed) shockwave was
     also dropped — it overlapped with the first too much to
     earn its keep.
@@ -1515,16 +1460,16 @@ settings overlay on Esc / Tab.
 
 - **Sentinel boss** — Phases 1 + 2 + 3 ship. Phase 1 has three
   attacks (radial / aimed / Ring Burst); phase 2 adds Sweep
-  Laser; phase 3 adds **Charge** + the parallel **2 corner
+  Laser; phase 3 adds **Mine field** + the parallel **2 corner
   turret** spawn (top-left + bottom-right diagonal). Cadence multiplier ramp + the 2 s
   phase-transition cinematic are wired across both boundaries.
   **Mechanic engagement is mandatory**: HP_MAX 60 with the body
   invulnerable outside RB-`vulnerable`, so the eye in Ring Burst
   is the *only* damage path. Boss audio for sweep laser / phase
-  transition / Ring Burst telegraph / Charge vanish + rushing
-  still reuses `alert` / `hitHeavy` placeholders — proper
-  layered synths (drone for sweep, BWOAH for Charge, bossWarp
-  for vanish) are the next iteration.
+  transition / Ring Burst telegraph / mine detonation still
+  reuses `alert` / `hitHeavy` placeholders — proper layered
+  synths (drone for sweep, dedicated mine pop) are the next
+  iteration.
 - **Key icon visual polish** — the `drawKey` glyph is a diamond
   + stem; readable but a bit primitive. A more iconic key shape
   (or a proper sprite) would improve the HUD slot too.
