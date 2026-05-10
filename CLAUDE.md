@@ -1018,17 +1018,36 @@ transitions for score + Game Complete.
   `phaseMarkerFlashTimer2to3` for rooms-game to read.
 - **dying** (6050 ms): triggered by `takeDamage` driving HP to
   0. `shouldFreezeWorld()` is true again — the death cinematic
-  is the focus. `Sentinel.timeScale` ramps `1.0 → 0.3` over the
-  first 200 ms, holds at 0.3 until 1000 ms, then eases back to
-  1.0 across the weakpoint window. Six fragments per ring
-  spawn at 1000 / 1500 / 2000 ms (line segments 20×4 px,
-  250 px/s outward, ±4 rad/s spin, 1500 ms life with a 500 ms
-  fade-out). The central weakpoint scales 1 → 4 + glow 22 →
-  60 across 2500–3000 ms. A 0.7-alpha white flash hits at
-  3000 ms (peak 3050, end 3300). A green "VICTORY" title fades
-  in over 3050–3350 ms and holds. The cinematic timer runs on
-  `unscaledDt` so the slow-mo doesn't recursively slow the
-  cinematic itself.
+  is the focus, but rooms-game keeps coasting the player (dash
+  completion, friction, perimeter clamp, eye animation) so the
+  body doesn't freeze mid-pose when the cinematic kicks in.
+  `Sentinel.timeScale` ramps `1.0 → 0.3` over the first 200 ms,
+  holds at 0.3 until 1000 ms, then eases back to 1.0 across the
+  weakpoint window. Six fragments per ring spawn at 1000 / 1500
+  / 2000 ms (line segments 20×4 px, 250 px/s outward, ±4 rad/s
+  spin, 1500 ms life with a 500 ms fade-out). The central
+  weakpoint scales 1 → 4 + glow 22 → 60 across 2500–3000 ms.
+  Cinematic shake schedule: 4 px constant through the slow-mo
+  hold (0–1000 ms), 3 → 12 px ramp through the buildup window
+  (2200–3000 ms), 16 px / 250 ms one-shot at the detonation
+  moment, then 1 px ambient settling tremor through the
+  VICTORY hold (3500–6050 ms). During the buildup window the
+  boss inhales — every 50 ms an absorption particle spawns on
+  a r 140 ring around the death position and flies inward at
+  250–400 px/s, so the detonation feels earned. At 3000 ms the
+  detonation fires once: 32 radial particles split accent /
+  white at 350–550 px/s, three concentric shockwaves stacked
+  on the death position (accent r 20→200 lw 5→0.5 / 400 ms,
+  white r 40→320 lw 7→0.5 / 600 ms, green r 60→520 lw 4→0.5 /
+  900 ms — accent crashes out first, white follows, green
+  drifts as the visual hand-off into VICTORY). The flash
+  itself peaks at 0.95 alpha (was 0.7) at 3050 ms and fades to
+  0 by 3300 ms. Audio: layered `hitHeavy` placeholder on the
+  detonation. A green "VICTORY" title fades in over 3050–3350
+  ms with an `easeOutBack`-style scale pulse (0.85 → 1.05 →
+  1.0 over the same window) so the text lands with weight.
+  The cinematic timer runs on `unscaledDt` so the slow-mo
+  doesn't recursively slow the cinematic itself.
 - **defeated**: terminal. `isDead()` flips to true. rooms-game's
   `reconcileSentinelTransitions` catches the transition and
   pops the Game Complete DOM overlay; runState flips to

@@ -122,6 +122,60 @@ const DYING_VICTORY_START_MS = 3050;
 const DYING_VICTORY_FADE_IN_END_MS = 3350;
 const DYING_TOTAL_MS = 6050; // 3050 + 3000 ms hold
 
+// === Pre-detonation buildup (2200..3000 ms) ===
+// Tension before the flash: shake escalates from 3 px to 12 px and
+// inward "absorption" particles converge on the boss centre so the
+// detonation moment feels earned rather than a sudden flash.
+const DYING_BUILDUP_START_MS = 2200;
+const DYING_BUILDUP_SHAKE_MIN_PX = 3;
+const DYING_BUILDUP_SHAKE_MAX_PX = 12;
+const DYING_BUILDUP_PARTICLE_INTERVAL_SEC = 0.05;
+const DYING_BUILDUP_PARTICLE_RING_RADIUS = 140;
+const DYING_BUILDUP_PARTICLE_SPEED_MIN = 250;
+const DYING_BUILDUP_PARTICLE_SPEED_MAX = 400;
+const DYING_BUILDUP_PARTICLE_LIFETIME_SEC = 0.25;
+
+// === Detonation moment (one-shot at DYING_FLASH_START_MS) ===
+const DYING_DETONATION_PARTICLE_COUNT = 32;
+const DYING_DETONATION_PARTICLE_SPEED_MIN = 350;
+const DYING_DETONATION_PARTICLE_SPEED_MAX = 550;
+const DYING_DETONATION_PARTICLE_LIFETIME_SEC = 0.8;
+const DYING_DETONATION_SHAKE_PX = 16;
+const DYING_DETONATION_SHAKE_SEC = 0.25;
+// Three concentric shockwaves at different rates — fast accent ring
+// snaps out first, white middle ring follows, green outer ring drifts
+// out slowest as a hand-off into VICTORY.
+const DYING_DETONATION_RING1_R0 = 20;
+const DYING_DETONATION_RING1_R1 = 200;
+const DYING_DETONATION_RING1_LW0 = 5;
+const DYING_DETONATION_RING1_LW1 = 0.5;
+const DYING_DETONATION_RING1_LIFETIME_SEC = 0.4;
+const DYING_DETONATION_RING2_R0 = 40;
+const DYING_DETONATION_RING2_R1 = 320;
+const DYING_DETONATION_RING2_LW0 = 7;
+const DYING_DETONATION_RING2_LW1 = 0.5;
+const DYING_DETONATION_RING2_LIFETIME_SEC = 0.6;
+const DYING_DETONATION_RING3_R0 = 60;
+const DYING_DETONATION_RING3_R1 = 520;
+const DYING_DETONATION_RING3_LW0 = 4;
+const DYING_DETONATION_RING3_LW1 = 0.5;
+const DYING_DETONATION_RING3_LIFETIME_SEC = 0.9;
+
+// Brighter peak — 0.95 instead of 0.7 reads as "the screen actually
+// blew out" without burning to pure white.
+const DYING_FLASH_PEAK_ALPHA = 0.95;
+
+// Ambient settling tremor under the VICTORY title (1 px) so the
+// arena feels alive after the detonation rather than freezing dead.
+const DYING_AMBIENT_SHAKE_PX = 1;
+const DYING_AMBIENT_SHAKE_START_MS = 3500;
+
+// VICTORY scale-pulse — text starts slightly smaller, eases past 1
+// with an overshoot, then settles. Multiplies the text scale during
+// the fade-in window.
+const DYING_VICTORY_SCALE_START = 0.85;
+const DYING_VICTORY_SCALE_OVERSHOOT = 1.05;
+
 const FRAGMENT_LIFETIME_MS = 1500;
 const FRAGMENT_FADE_OUT_MS = 500;
 const FRAGMENT_SPEED = 250;
@@ -1027,6 +1081,12 @@ export class Sentinel implements Enemy {
   private innerExploded = false;
   private weakpointScale = 1;
   private weakpointGlowBlur = 22;
+  /** Cadence timer for the buildup absorption particles. */
+  private buildupParticleTimer = 0;
+  /** Latched true the first frame DYING_FLASH_START_MS is crossed
+   *  so the detonation burst (particles + 3 shockwaves + big shake)
+   *  fires exactly once, not every frame inside the flash window. */
+  private detonationFired = false;
   /** Captured boss centre at the moment dying starts. The death
    *  cinematic anchors fragments + weakpoint + flash on this point
    *  rather than the live x/y so the boss doesn't drift while
@@ -2610,7 +2670,7 @@ export class Sentinel implements Enemy {
     this.phaseMarkerFlashTimer2to3 = -1;
   }
 
-  private updateDying(_ctxRoom: EnemyContext, dt: number): void {
+  private updateDying(ctxRoom: EnemyContext, dt: number): void {
     this.stateTimer += dt * 1000;
     const t = this.stateTimer;
 
@@ -2631,11 +2691,70 @@ export class Sentinel implements Enemy {
       this.timeScale = 1;
     }
 
-    // Constant 4 px shake during the slow-mo hold; the user spec calls
-    // for "screen shake 4px постоянный" through the slowmo window.
+    // Shake schedule: 4 px constant through the slow-mo hold; nothing
+    // through the dead beat between hold-end and the buildup window;
+    // 3 → 12 px ramp through the buildup; 16 px one-shot at the
+    // detonation moment (fired below); 1 px ambient settling tremor
+    // through the VICTORY hold.
     if (t < DYING_SLOWMO_HOLD_END_MS) {
       this.pendingShakePx = 4;
       this.pendingShakeSec = dt; // refresh each frame
+    } else if (t >= DYING_BUILDUP_START_MS && t < DYING_FLASH_START_MS) {
+      const u =
+        (t - DYING_BUILDUP_START_MS) /
+        (DYING_FLASH_START_MS - DYING_BUILDUP_START_MS);
+      this.pendingShakePx =
+        DYING_BUILDUP_SHAKE_MIN_PX +
+        (DYING_BUILDUP_SHAKE_MAX_PX - DYING_BUILDUP_SHAKE_MIN_PX) * u;
+      this.pendingShakeSec = dt;
+    } else if (t >= DYING_AMBIENT_SHAKE_START_MS && t < DYING_TOTAL_MS) {
+      this.pendingShakePx = DYING_AMBIENT_SHAKE_PX;
+      this.pendingShakeSec = dt;
+    }
+
+    // ---- Buildup particles: every DYING_BUILDUP_PARTICLE_INTERVAL_SEC
+    // seconds, spawn one absorption particle on a ring around the
+    // boss centre that flies inward. Reads as the boss's shell being
+    // sucked into the impending detonation.
+    if (t >= DYING_BUILDUP_START_MS && t < DYING_FLASH_START_MS) {
+      this.buildupParticleTimer += dt;
+      while (
+        this.buildupParticleTimer >= DYING_BUILDUP_PARTICLE_INTERVAL_SEC
+      ) {
+        this.buildupParticleTimer -= DYING_BUILDUP_PARTICLE_INTERVAL_SEC;
+        const a = Math.random() * Math.PI * 2;
+        const sx = this.deathX + Math.cos(a) * DYING_BUILDUP_PARTICLE_RING_RADIUS;
+        const sy = this.deathY + Math.sin(a) * DYING_BUILDUP_PARTICLE_RING_RADIUS;
+        // Inward velocity = away from spawn toward death centre.
+        const sp =
+          DYING_BUILDUP_PARTICLE_SPEED_MIN +
+          Math.random() *
+            (DYING_BUILDUP_PARTICLE_SPEED_MAX -
+              DYING_BUILDUP_PARTICLE_SPEED_MIN);
+        ctxRoom.particles.push({
+          x: sx,
+          y: sy,
+          vx: -Math.cos(a) * sp,
+          vy: -Math.sin(a) * sp,
+          initialSize: 4,
+          color: SENTINEL_COLOR,
+          age: 0,
+          lifetime: DYING_BUILDUP_PARTICLE_LIFETIME_SEC,
+          glowStrong: 10,
+          glowSoft: 4,
+          drag: 0.96,
+        });
+      }
+    }
+
+    // ---- Detonation moment: one-shot when t crosses 3000 ms. Fires
+    // 32 radial particles (half accent / half white), three concentric
+    // shockwaves at different speeds (accent → white → green for the
+    // hand-off to VICTORY), and a 16 px shake. The flash itself comes
+    // from drawDyingOverlay.
+    if (!this.detonationFired && t >= DYING_FLASH_START_MS) {
+      this.detonationFired = true;
+      this.fireDeathDetonation(ctxRoom);
     }
 
     // ---- fragment spawns: outer / middle / inner at the spec'd
@@ -2706,6 +2825,80 @@ export class Sentinel implements Enemy {
         age: 0,
       });
     }
+  }
+
+  /** Detonation moment of the death cinematic — fires once when
+   *  stateTimer crosses DYING_FLASH_START_MS. Pushes 32 radial
+   *  particles, three concentric shockwaves (accent / white /
+   *  green hand-off into VICTORY), and a single 16 px shake into
+   *  ctxRoom + the shake channel. The full-screen white flash is
+   *  drawn separately by drawDyingOverlay. */
+  private fireDeathDetonation(ctxRoom: EnemyContext): void {
+    // Particles — alternate accent + white so the radial spray reads
+    // as both a "boss exploded" (accent) and a flash kick (white).
+    for (let i = 0; i < DYING_DETONATION_PARTICLE_COUNT; i++) {
+      const a =
+        (i / DYING_DETONATION_PARTICLE_COUNT) * Math.PI * 2 +
+        Math.random() * 0.05;
+      const sp =
+        DYING_DETONATION_PARTICLE_SPEED_MIN +
+        Math.random() *
+          (DYING_DETONATION_PARTICLE_SPEED_MAX -
+            DYING_DETONATION_PARTICLE_SPEED_MIN);
+      ctxRoom.particles.push({
+        x: this.deathX,
+        y: this.deathY,
+        vx: Math.cos(a) * sp,
+        vy: Math.sin(a) * sp,
+        initialSize: i % 2 === 0 ? 5 : 4,
+        color: i % 2 === 0 ? SENTINEL_COLOR : "#ffffff",
+        age: 0,
+        lifetime: DYING_DETONATION_PARTICLE_LIFETIME_SEC,
+        glowStrong: 12,
+        glowSoft: 5,
+        drag: 0.93,
+      });
+    }
+    // Three shockwaves stacked at the death position.
+    ctxRoom.rings.push({
+      x: this.deathX,
+      y: this.deathY,
+      age: 0,
+      lifetime: DYING_DETONATION_RING1_LIFETIME_SEC,
+      startR: DYING_DETONATION_RING1_R0,
+      endR: DYING_DETONATION_RING1_R1,
+      color: SENTINEL_COLOR,
+      startLineWidth: DYING_DETONATION_RING1_LW0,
+      endLineWidth: DYING_DETONATION_RING1_LW1,
+      glowBlur: 18,
+    });
+    ctxRoom.rings.push({
+      x: this.deathX,
+      y: this.deathY,
+      age: 0,
+      lifetime: DYING_DETONATION_RING2_LIFETIME_SEC,
+      startR: DYING_DETONATION_RING2_R0,
+      endR: DYING_DETONATION_RING2_R1,
+      color: "#ffffff",
+      startLineWidth: DYING_DETONATION_RING2_LW0,
+      endLineWidth: DYING_DETONATION_RING2_LW1,
+      glowBlur: 14,
+    });
+    ctxRoom.rings.push({
+      x: this.deathX,
+      y: this.deathY,
+      age: 0,
+      lifetime: DYING_DETONATION_RING3_LIFETIME_SEC,
+      startR: DYING_DETONATION_RING3_R0,
+      endR: DYING_DETONATION_RING3_R1,
+      color: VICTORY_COLOR,
+      startLineWidth: DYING_DETONATION_RING3_LW0,
+      endLineWidth: DYING_DETONATION_RING3_LW1,
+      glowBlur: 12,
+    });
+    this.pendingShakePx = DYING_DETONATION_SHAKE_PX;
+    this.pendingShakeSec = DYING_DETONATION_SHAKE_SEC;
+    audio.play.hitHeavy();
   }
 
   // -------- draw (world space) --------
@@ -3778,18 +3971,20 @@ export class Sentinel implements Enemy {
     viewH: number,
   ): void {
     const t = this.stateTimer;
-    // White flash: 0 → 0.7 across [3000, 3050], 0.7 → 0 across
-    // [3050, 3300].
+    // White flash: 0 → DYING_FLASH_PEAK_ALPHA across
+    // [3000, 3050], peak → 0 across [3050, 3300]. Bumped from 0.7
+    // to 0.95 so the screen actually blows out at the detonation
+    // moment without burning fully white.
     if (t >= DYING_FLASH_START_MS && t < DYING_FLASH_END_MS) {
       let alpha;
       if (t < DYING_FLASH_PEAK_MS) {
         alpha =
-          0.7 *
+          DYING_FLASH_PEAK_ALPHA *
           ((t - DYING_FLASH_START_MS) /
             (DYING_FLASH_PEAK_MS - DYING_FLASH_START_MS));
       } else {
         alpha =
-          0.7 *
+          DYING_FLASH_PEAK_ALPHA *
           (1 -
             (t - DYING_FLASH_PEAK_MS) /
               (DYING_FLASH_END_MS - DYING_FLASH_PEAK_MS));
@@ -3802,22 +3997,41 @@ export class Sentinel implements Enemy {
         ctx.restore();
       }
     }
-    // VICTORY title — fade in over 300ms starting at 3050, then hold.
+    // VICTORY title — fade in over 300 ms starting at 3050, then hold.
+    // Scale-pulse on entry: starts at 0.85, overshoots past 1.05, then
+    // settles at 1.0. The scale is keyed on the same fade-in window so
+    // the pulse lands exactly when the text is at full opacity.
     if (t >= DYING_VICTORY_START_MS) {
-      const alpha = Math.min(
-        1,
-        (t - DYING_VICTORY_START_MS) /
-          (DYING_VICTORY_FADE_IN_END_MS - DYING_VICTORY_START_MS),
-      );
+      const fadeWindow =
+        DYING_VICTORY_FADE_IN_END_MS - DYING_VICTORY_START_MS;
+      const u = Math.min(1, (t - DYING_VICTORY_START_MS) / fadeWindow);
+      const alpha = u;
+      // easeOutBack-ish overshoot: 0..0.6 ramps start → overshoot,
+      // 0.6..1.0 settles overshoot → 1.0. Same shape used for the
+      // intro scale on the boss body.
+      let scale: number;
+      if (u < 0.6) {
+        const s = u / 0.6;
+        scale =
+          DYING_VICTORY_SCALE_START +
+          (DYING_VICTORY_SCALE_OVERSHOOT - DYING_VICTORY_SCALE_START) * s;
+      } else {
+        const s = (u - 0.6) / 0.4;
+        scale =
+          DYING_VICTORY_SCALE_OVERSHOOT +
+          (1 - DYING_VICTORY_SCALE_OVERSHOOT) * s;
+      }
       ctx.save();
       ctx.globalAlpha = alpha;
+      ctx.translate(viewW / 2, viewH / 2);
+      ctx.scale(scale, scale);
       ctx.font = "700 60px ui-monospace, SFMono-Regular, Menlo, monospace";
       ctx.fillStyle = VICTORY_COLOR;
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
       ctx.shadowColor = VICTORY_COLOR;
       ctx.shadowBlur = 24;
-      ctx.fillText("VICTORY", viewW / 2, viewH / 2);
+      ctx.fillText("VICTORY", 0, 0);
       ctx.restore();
     }
   }

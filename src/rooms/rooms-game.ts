@@ -1117,6 +1117,64 @@ export function start(canvas: HTMLCanvasElement): void {
         }
       }
       particles = particles.filter((p) => p.age < p.lifetime);
+      // Player coast — keep the body alive so it doesn't freeze
+      // mid-dash / mid-squash when the boss death cinematic kicks
+      // in. Inputs are already cleared above; what we tick here is
+      // just the dash-completion path, friction, position, the
+      // visual timers (dashIframeTime / cooldown / hitIframe) so
+      // the colour returns to neutral, and a perimeter clamp (no
+      // smash audio — feels weird mid-VICTORY). Wall + bullet
+      // collisions are intentionally skipped: combat is over.
+      if (player.dashTime > 0) {
+        player.dashTime -= dt;
+        const v = dashSpeed(DASH_DISTANCE, DASH_DURATION_MS);
+        player.vx = player.dashDirX * v;
+        player.vy = player.dashDirY * v;
+        if (player.dashTime <= 0) {
+          player.dashTime = 0;
+          player.cooldown = DASH_COOLDOWN_MS / 1000;
+          player.vx *= 0.35;
+          player.vy *= 0.35;
+        }
+      } else {
+        const damp = Math.exp(-FRICTION * dt);
+        player.vx *= damp;
+        player.vy *= damp;
+      }
+      if (player.dashIframeTime > 0)
+        player.dashIframeTime = Math.max(0, player.dashIframeTime - dt);
+      if (player.cooldown > 0)
+        player.cooldown = Math.max(0, player.cooldown - dt);
+      if (state.hitIframe > 0)
+        state.hitIframe = Math.max(0, state.hitIframe - dt);
+      player.x += player.vx * dt;
+      player.y += player.vy * dt;
+      {
+        const half = PLAYER_SIZE / 2;
+        const perimW = currentRoom.width ?? ROOM_W_PX;
+        const perimH = currentRoom.height ?? ROOM_H_PX;
+        const PERIMETER_T = 30;
+        const minX = PERIMETER_T + half;
+        const maxX = perimW - PERIMETER_T - half;
+        const minY = PERIMETER_T + half;
+        const maxY = perimH - PERIMETER_T - half;
+        if (player.x < minX) {
+          player.x = minX;
+          player.vx = 0;
+        }
+        if (player.y < minY) {
+          player.y = minY;
+          player.vy = 0;
+        }
+        if (player.x > maxX) {
+          player.x = maxX;
+          player.vx = 0;
+        }
+        if (player.y > maxY) {
+          player.y = maxY;
+          player.vy = 0;
+        }
+      }
       // Player eye still animates so the orb breathes during the
       // cinematic.
       updateEye(player, dt, {
