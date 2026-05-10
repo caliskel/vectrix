@@ -215,6 +215,14 @@ export type DashGhost = {
   stretchX: number;
   stretchY: number;
   size: number;
+  // captured eye state at emission — drawDashGhosts replays it so the
+  // ghost reads as a full skin echo (ring + iris + pupil + highlight),
+  // not just an outer-ring outline.
+  pupilOffsetX: number;
+  pupilOffsetY: number;
+  pupilR: number;
+  eyeOpenY: number;
+  blinkAmount: number;
   age: number;
   lifetime: number;
 };
@@ -750,6 +758,11 @@ export function updateEye(
         stretchX: sx,
         stretchY: DASH_STRETCH_Y,
         size: options.size,
+        pupilOffsetX: p.pupilOffsetX,
+        pupilOffsetY: p.pupilOffsetY,
+        pupilR: computePupilR(p, options.size),
+        eyeOpenY: 1 - p.closeAmount,
+        blinkAmount: blinkProgress(p),
         age: 0,
         lifetime: DASH_GHOST_LIFETIME_SEC,
       });
@@ -854,21 +867,8 @@ export type EyeRenderOpts = {
   profile?: PlayerProfile;
 };
 
-export function drawPlayerEye(
-  ctx: CanvasRenderingContext2D,
-  p: Player,
-  size: number,
-  opts: EyeRenderOpts,
-): void {
-  const r = size / 2;
-  const irisR = size * 0.42;
+function computePupilR(p: Player, size: number): number {
   const pupilRBase = size * 0.18;
-  const highlightR = size * 0.06;
-
-  // pupil scaling stack:
-  //   - dilateFactor: hit-driven shock dilation (existing, decays with dilateTime)
-  //   - p.pupilDilation: smoothed threat-driven factor (smaller when bullets/enemies are close)
-  //   - flinch shrink: short shrink-and-recover when a near miss flinches the eye
   const dilateProgress = p.dilateTime > 0 ? p.dilateTime / DILATE_DURATION : 0;
   const dilateFactor = 1 + PUPIL_DILATE_PEAK * dilateProgress;
   let pupilR = pupilRBase * dilateFactor * p.pupilDilation;
@@ -882,6 +882,19 @@ export function drawPlayerEye(
     }
     pupilR *= f;
   }
+  return pupilR;
+}
+
+export function drawPlayerEye(
+  ctx: CanvasRenderingContext2D,
+  p: Player,
+  size: number,
+  opts: EyeRenderOpts,
+): void {
+  const r = size / 2;
+  const irisR = size * 0.42;
+  const highlightR = size * 0.06;
+  const pupilR = computePupilR(p, size);
 
   // dash deformation
   const isDashing = p.dashTime > 0;
@@ -927,15 +940,21 @@ export function drawPlayerEye(
     ? (opts.profile as PlayerProfile).outerRing
     : opts.glowColor;
   const irisColor = opts.profile?.iris ?? opts.irisColor ?? PALETTE.bg;
-  // Dash ghosts use the player's profile iris colour so the trailing
-  // copies read as a fading echo of the player's own skin. Callers
-  // without a profile (none currently — kept as a safety fallback)
-  // get the legacy ghostColor opt.
-  const ghostColor = opts.profile?.iris ?? opts.ghostColor;
+  // Dash ghosts render as a full skin echo: ring/iris/pupil/highlight
+  // all in profile colours, so the trailing copies match the live skin
+  // exactly. Callers without a profile (safety fallback only — every
+  // mode currently passes one) get the legacy single ghostColor across
+  // every layer, which matches the pre-refactor outline behaviour.
+  const ghostProfile: PlayerProfile = opts.profile ?? {
+    outerRing: opts.ghostColor,
+    iris: opts.ghostColor,
+    pupil: opts.ghostColor,
+    dashParticles: opts.ghostColor,
+  };
 
   // ===== ghosts (drawn first, behind the live eye, in world space) =====
   if (p.dashGhosts.length > 0) {
-    drawDashGhosts(ctx, p.dashGhosts, ghostColor, eyeOpenY);
+    drawDashGhosts(ctx, p.dashGhosts, ghostProfile, eyeOpenY);
   }
 
   // Per-frame movement deformations applied to the live eye only.
@@ -1159,8 +1178,8 @@ export function drawPlayerEye(
 function drawDashGhosts(
   ctx: CanvasRenderingContext2D,
   ghosts: DashGhost[],
-  color: string,
-  eyeOpenY: number,
+  profile: PlayerProfile,
+  liveEyeOpenY: number,
 ): void {
   for (const g of ghosts) {
     const t = g.age / g.lifetime;
@@ -1168,25 +1187,72 @@ function drawDashGhosts(
     if (alpha <= 0) continue;
     const fade = 1 - t * 0.3; // shrink slightly as it ages
     const ghostAngle = Math.atan2(g.dirY, g.dirX);
+    const r = g.size / 2;
+    const irisR = g.size * 0.42;
+    const highlightR = g.size * 0.06;
+    const irisShift = r * g.stretchX * 0.3;
+    const ringRX = r * g.stretchX * fade;
+    const ringRY = r * g.stretchY * fade;
+    // Combine the captured close-amount with the live one so death
+    // squashes ghosts and the live eye together.
+    const eyeOpenY = Math.max(0.001, g.eyeOpenY * liveEyeOpenY);
+
     ctx.save();
     ctx.globalAlpha = alpha;
-    // ghosts sit at their captured world positions; they ride the
-    // same close (death) squeeze so they fade with the player
     ctx.translate(g.x, g.y);
-    ctx.scale(1, Math.max(0.001, eyeOpenY));
+    ctx.scale(1, eyeOpenY);
+
+    // outer ring
     ctx.beginPath();
-    ctx.ellipse(
-      0,
-      0,
-      (g.size / 2) * g.stretchX * fade,
-      (g.size / 2) * g.stretchY * fade,
-      ghostAngle,
+    ctx.ellipse(0, 0, ringRX, ringRY, ghostAngle, 0, Math.PI * 2);
+    ctx.strokeStyle = profile.outerRing;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    // iris + pupil + highlight, shifted forward like the live dash eye
+    ctx.save();
+    ctx.translate(g.dirX * irisShift, g.dirY * irisShift);
+    ctx.fillStyle = profile.iris;
+    ctx.beginPath();
+    ctx.arc(0, 0, irisR * fade, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = profile.pupil;
+    ctx.beginPath();
+    ctx.arc(g.pupilOffsetX, g.pupilOffsetY, g.pupilR * fade, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = "#ffffff";
+    ctx.beginPath();
+    ctx.arc(
+      g.pupilOffsetX - g.pupilR * 0.35,
+      g.pupilOffsetY - g.pupilR * 0.35,
+      highlightR * fade,
       0,
       Math.PI * 2,
     );
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 2;
-    ctx.stroke();
+    ctx.fill();
+    ctx.restore();
+
+    // eyelids (clipped to outer ring), only if blinking at emission time
+    if (g.blinkAmount > 0) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.ellipse(0, 0, ringRX, ringRY, ghostAngle, 0, Math.PI * 2);
+      ctx.clip();
+      const lidH = g.blinkAmount * r;
+      const lidW = r * Math.max(g.stretchX, 1) * 2 + 4;
+      ctx.fillStyle = profile.outerRing;
+      ctx.fillRect(-lidW / 2, -r * Math.max(g.stretchY, 1) - 2, lidW, lidH + 2);
+      ctx.fillRect(
+        -lidW / 2,
+        r * Math.max(g.stretchY, 1) - lidH,
+        lidW,
+        lidH + 2,
+      );
+      ctx.restore();
+    }
+
     ctx.restore();
   }
 }
