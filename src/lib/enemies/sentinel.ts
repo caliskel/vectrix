@@ -2,7 +2,6 @@ import { audio } from "../audio";
 import { makeBullet } from "../bullets";
 import { drawNeon } from "../neon";
 import { initAwareness } from "./awareness";
-import { Hunter } from "./hunter";
 import { Turret } from "./turret";
 import type {
   AwarenessState,
@@ -307,6 +306,20 @@ const RB_DETACH_SEC = 0.8;
 const RB_VULNERABLE_SEC = 5.0;
 const RB_REASSEMBLE_SEC = 0.8;
 const RB_RECOVERY_SEC = 0.5;
+// Cyan dashed indicator painted under the outer ring during
+// detach / vulnerable / reassemble — communicates "this shell is
+// the dashable phase" using the same visual language as cyan
+// dashed walls in the tutorial / Room 4. Same pattern + animated
+// offset so the line reads as energetic.
+const RB_CYAN_INDICATOR_COLOR = "#7dd3fc";
+const RB_CYAN_INDICATOR_DASH_PATTERN: [number, number] = [8, 8];
+const RB_CYAN_INDICATOR_DASH_RATE_PX_PER_SEC = 30;
+const RB_CYAN_INDICATOR_LW_MAIN = 2;
+const RB_CYAN_INDICATOR_LW_BLOOM = 5;
+const RB_CYAN_INDICATOR_BLOOM_OPACITY_MUL = 0.25;
+const RB_CYAN_INDICATOR_PEAK_OPACITY = 0.6;
+const RB_CYAN_INDICATOR_PULSE_AMPLITUDE = 0.25;
+const RB_CYAN_INDICATOR_PULSE_PERIOD_SEC = 0.9;
 // Cooldown shortened from 8 s now that the active window is longer
 // — between successive Ring Bursts the player gets ~4–5 radial
 // volleys and 1–2 aimed shots.
@@ -576,9 +589,48 @@ const CHARGE_DAMAGE = 2;
 // the line aims at where the player WILL be by the time the dash
 // lands. Player can outrun the prediction with a sideways dash.
 const CHARGE_PLAYER_PREDICT_SEC = 0.6;
-const CHARGE_VANISH_FADE_OUT_SEC = 0.25;
-const CHARGE_TELEGRAPH_FADE_IN_SEC = 0.4;
-const CHARGE_VANISH_PARTICLE_COUNT = 24;
+// Vanish fade now runs the full vanish window — easeInQuart pulls
+// the body all the way to invisible right as vanish → telegraph
+// fires, so the player gets a clean visual hand-off to the
+// appearance explosion at the new position.
+const CHARGE_VANISH_FADE_OUT_SEC = CHARGE_VANISH_SEC;
+// Telegraph fade-in eased out (longer + smoother) so the body
+// "settles in" rather than popping to full opacity after the
+// initial appearance flash.
+const CHARGE_TELEGRAPH_FADE_IN_SEC = 0.6;
+const CHARGE_VANISH_PARTICLE_COUNT = 40;
+// Inverse shockwave at vanish entry — collapses inward as the
+// boss implodes. Mirrors the appearance explosion's outward
+// shockwaves so the two attack endpoints read as a matched pair.
+const CHARGE_VANISH_SHOCKWAVE_R_START = 180;
+const CHARGE_VANISH_SHOCKWAVE_R_END = 20;
+const CHARGE_VANISH_SHOCKWAVE_LW_START = 1;
+const CHARGE_VANISH_SHOCKWAVE_LW_END = 6;
+const CHARGE_VANISH_SHOCKWAVE_COLOR = "#ff5577";
+// Appearance explosion at vanish → telegraph transition (boss
+// materialises at chargeStart). Damage-free — visual punctuation.
+const CHARGE_APPEAR_SHOCKWAVE_1_R0 = 20;
+const CHARGE_APPEAR_SHOCKWAVE_1_R1 = 180;
+const CHARGE_APPEAR_SHOCKWAVE_1_LW0 = 10;
+const CHARGE_APPEAR_SHOCKWAVE_1_LW1 = 1;
+const CHARGE_APPEAR_SHOCKWAVE_1_LIFETIME_SEC = 0.5;
+const CHARGE_APPEAR_SHOCKWAVE_1_COLOR = "#ff2266";
+// Second wave starts 80 ms later (`startR` is bumped to 40 so the
+// rings don't perfectly overlap).
+const CHARGE_APPEAR_SHOCKWAVE_2_R0 = 40;
+const CHARGE_APPEAR_SHOCKWAVE_2_R1 = 240;
+const CHARGE_APPEAR_SHOCKWAVE_2_LW0 = 5;
+const CHARGE_APPEAR_SHOCKWAVE_2_LW1 = 0.5;
+const CHARGE_APPEAR_SHOCKWAVE_2_LIFETIME_SEC = 0.7;
+const CHARGE_APPEAR_SHOCKWAVE_2_COLOR = "#ffffff";
+const CHARGE_APPEAR_PARTICLE_COUNT = 32;
+const CHARGE_APPEAR_PARTICLE_SPEED_MIN = 250;
+const CHARGE_APPEAR_PARTICLE_SPEED_MAX = 400;
+const CHARGE_APPEAR_PARTICLE_LIFETIME_SEC = 0.6;
+const CHARGE_APPEAR_FLASH_SEC = 0.2;
+const CHARGE_APPEAR_FLASH_PEAK_ALPHA = 0.6;
+const CHARGE_APPEAR_SHAKE_PX = 6;
+const CHARGE_APPEAR_SHAKE_SEC = 0.15;
 const CHARGE_VANISH_PARTICLE_RADIUS = 80;
 const CHARGE_VANISH_PARTICLE_SPEED_MIN = 200;
 const CHARGE_VANISH_PARTICLE_SPEED_MAX = 300;
@@ -622,44 +674,12 @@ const CHARGE_RECOVERY_FLASH_LW0 = 5;
 const CHARGE_RECOVERY_FLASH_LW1 = 0.5;
 const CHARGE_RECOVERY_FLASH_LIFETIME_SEC = 0.5;
 
-// === Mob spawn — phase 3 only ===
-// Hunter spawn timer ticks in parallel with attacks (NOT subject to
-// `isAnyAttackActive()` mutual exclusion). First spawn happens
-// 4 s after phase-3 entry; subsequent spawns every 10 s, capped at
-// 2 alive at once.
-const MOB_SPAWN_FIRST_DELAY_SEC = 4.0;
-const MOB_SPAWN_INTERVAL_SEC = 10.0;
-const MOB_MAX_ALIVE = 2;
-const MOB_SPAWN_RING_COLOR = "#cc4488";
-const MOB_SPAWN_PARTICLE_COLOR = "#cc4488";
-// Standard edge spawn (700 ms ring + 12 particles).
-const MOB_SPAWN_DURATION_SEC = 0.7;
-const MOB_SPAWN_RING_R0 = 10;
-const MOB_SPAWN_RING_R1 = 80;
-const MOB_SPAWN_RING_LW0 = 3;
-const MOB_SPAWN_RING_LW1 = 0.5;
-const MOB_SPAWN_PARTICLE_COUNT = 12;
-const MOB_SPAWN_PARTICLE_LIFETIME_SEC = 0.5;
-const MOB_SPAWN_PARTICLE_SPEED_MIN = 150;
-const MOB_SPAWN_PARTICLE_SPEED_MAX = 250;
-const MOB_SPAWN_INSET_PX = 30;
-// Dramatic phase-3-entry spawn — Hunter spat out of the boss centre
-// with initial velocity, larger ring, more particles.
-const MOB_DRAMATIC_DURATION_SEC = 0.9;
-const MOB_DRAMATIC_RING_R1 = 140;
-const MOB_DRAMATIC_RING_LW0 = 8;
-const MOB_DRAMATIC_PARTICLE_COUNT = 24;
-const MOB_DRAMATIC_PARTICLE_SPEED_MIN = 300;
-const MOB_DRAMATIC_PARTICLE_SPEED_MAX = 450;
-const MOB_DRAMATIC_INITIAL_SPEED = 300;
-
 // === Phase 3 corner turrets ===
 // 4 stationary turrets spawned one-per-corner shortly after phase-3
 // entry, sequenced so the player reads "the corners are sealing
 // off" — domino effect rather than four-at-once. Killable, no
 // respawn; allied to the boss so its own bullets / sweep / radial
-// can't damage them. Mob-spawn cap is separate (these don't count
-// against `MOB_MAX_ALIVE`).
+// can't damage them.
 const CORNER_TURRET_INSET_PX = 100;
 // Delays (sec) from phase-3 entry — the dramatic hunter fires at
 // 0 s and each corner follows on a 400 ms cadence starting at
@@ -685,12 +705,9 @@ const CORNER_TURRET_SPAWN_PARTICLE_SPEED_MIN = 180;
 const CORNER_TURRET_SPAWN_PARTICLE_SPEED_MAX = 260;
 
 // === Cascade death cleanup ===
-// On `enterDying`, all alive spawned mobs + turrets are scheduled
-// for forced kill so the Game Complete overlay doesn't open with
-// leftover enemies. Hunters first (50 ms between), then a 100 ms
-// gap, then turrets (50 ms between).
-const CASCADE_KILL_HUNTER_GAP_SEC = 0.05;
-const CASCADE_KILL_GROUP_GAP_SEC = 0.1;
+// On `enterDying`, all alive corner turrets are scheduled for forced
+// kill so the Game Complete overlay doesn't open with leftover
+// enemies. 50 ms between each turret death.
 const CASCADE_KILL_TURRET_GAP_SEC = 0.05;
 
 // Energy burst — fired on the radial-burst telegraph → firing
@@ -859,7 +876,6 @@ function pointSegmentDistance(
 
 // Reusable empty-list sentinels so the happy path (no work this
 // frame) doesn't allocate.
-const EMPTY_HUNTER_LIST: Hunter[] = [];
 const EMPTY_TURRET_LIST: Turret[] = [];
 const EMPTY_ENEMY_LIST: Enemy[] = [];
 
@@ -896,20 +912,6 @@ type ChargePhase =
   | "telegraph"
   | "rushing"
   | "recovery";
-
-// Boss-spawned Hunter request. Created via spawnHunter() with the
-// timer ticking up to `duration`; once it expires the Hunter is
-// instantiated at (x, y) (with optional initial velocity for the
-// dramatic phase-3-entry spawn) and pushed into pendingSpawnedMobs
-// for rooms-game to consume.
-type PendingSpawnRequest = {
-  x: number;
-  y: number;
-  timer: number;
-  duration: number;
-  initialVx: number;
-  initialVy: number;
-};
 
 // Ghost silhouette painted along the dash path during rushing —
 // fading afterimage of the boss body.
@@ -1146,17 +1148,10 @@ export class Sentinel implements Enemy {
   // 2 HP exactly once even if the player overlaps the segment for
   // several frames before i-frames latch.
   private chargeHitLanded = false;
-
-  // === Mob spawn (phase 3) ===
-  private mobSpawnTimer = 0;
-  private spawnedMobs: Hunter[] = [];
-  private pendingSpawnedMobs: Hunter[] = [];
-  private pendingSpawnRequests: PendingSpawnRequest[] = [];
-  /** Set by tickPhaseTransitionCinematic on the climax fire of a
-   *  2 → 3 transition. Drained at the next safe frame (post
-   *  cinematic) so the dramatic spawn fires just as combat resumes
-   *  rather than being absorbed by the frozen window. */
-  private pendingDramaticMobSpawn = false;
+  /** Countdown for the white "appear flash" overlay painted on top
+   *  of the body during the first 200 ms of telegraph. Spawned in
+   *  enterChargeTelegraph; ticked down in tickCharge. */
+  private chargeAppearFlashTimer = 0;
 
   // === Phase 3 corner turrets ===
   /** Latched true once the four corner-turret spawn requests are
@@ -1172,12 +1167,11 @@ export class Sentinel implements Enemy {
     [];
 
   // === Cascade death cleanup ===
-  /** Forced kills queued at `enterDying` — alive hunters and
-   *  corner turrets get scheduled so the cascade plays through
-   *  the start of the death cinematic and leaves nothing alive on
-   *  Game Complete. Ticked from `update()` so the queue keeps
-   *  draining through the dying state (when updateCombat doesn't
-   *  run). */
+  /** Forced kills queued at `enterDying` — alive corner turrets
+   *  get scheduled so the cascade plays through the start of the
+   *  death cinematic and leaves nothing alive on Game Complete.
+   *  Ticked from `update()` so the queue keeps draining through
+   *  the dying state (when updateCombat doesn't run). */
   private cascadeKillQueue: { enemy: Enemy; delay: number }[] = [];
   private pendingCascadeKills: Enemy[] = [];
   // Set true on a successful eye dash-through; tickRingBurst drains
@@ -1522,17 +1516,11 @@ export class Sentinel implements Enemy {
     this.tryStartAimedShot(ctxRoom);
     this.tryStartRadialBurst();
 
-    // === 4. Mob spawn — phase 3 only, NOT mutual-exclusion-gated.
-    // Runs in parallel with attacks: a Hunter can pop in while
-    // sweep is firing, while RB is vulnerable, etc. Phase transition
-    // cinematic still freezes everything (we already early-returned
-    // above when phaseTransition was non-null).
-    this.tickMobSpawn(ctxRoom, dt);
-
-    // === 5. Corner turret spawn — phase-3 entry domino. Same gating
-    // as the mob spawn (cinematic-locked via the early return above);
-    // each entry counts down its own delay and fires spawn FX +
-    // turret instantiation when it hits zero.
+    // === 4. Corner turret spawn — phase-3 entry domino.
+    // Cinematic-locked via the early return above; each entry
+    // counts down its own delay and fires spawn FX + turret
+    // instantiation when it hits zero. Runs in parallel with
+    // attacks (NOT mutual-exclusion-gated).
     this.tickCornerTurretSpawnQueue(ctxRoom, dt);
 
     // Reflect activity back into the public state field — rooms-game
@@ -2350,11 +2338,6 @@ export class Sentinel implements Enemy {
         this.phaseMarkerFlashTimer1to2 = PHASE_TRANSITION_HP_MARKER_FLASH_SEC;
       } else {
         this.phaseMarkerFlashTimer2to3 = PHASE_TRANSITION_HP_MARKER_FLASH_SEC;
-        // Phase-3 entry — queue a dramatic forced Hunter spawn from
-        // the boss centre. Drained on the first non-frozen frame of
-        // tickMobSpawn, so the spawn FX hit just as combat resumes.
-        this.pendingDramaticMobSpawn = true;
-        this.mobSpawnTimer = MOB_SPAWN_FIRST_DELAY_SEC;
         // Queue the four corner turrets — their delays start
         // counting only after the cinematic ends (the queue is
         // ticked from updateCombat, which early-returns while
@@ -2622,15 +2605,31 @@ export class Sentinel implements Enemy {
     }
 
     if (this.chargePhase === "vanish") {
-      // Body fade-out 1 → 0 over CHARGE_VANISH_FADE_OUT_SEC.
+      // Body fade-out 1 → 0 over the full vanish window, eased on
+      // easeInQuart so the body lingers visible most of the way
+      // and then drops off sharply right before the appearance
+      // explosion fires.
       const u = Math.min(1, this.chargeTimer / CHARGE_VANISH_FADE_OUT_SEC);
-      this.bodyOpacity = 1 - u;
-      // Implosion fires once near the start of vanish — particles
-      // start on a circle of radius CHARGE_VANISH_PARTICLE_RADIUS and
-      // travel inward toward the boss centre, hitting it about
-      // when the body fully fades.
+      const easedFade = u * u * u * u; // easeInQuart
+      this.bodyOpacity = 1 - easedFade;
+      // Implosion FX fire once at vanish entry: 40 particles
+      // collapsing inward + a single inverse-shockwave ring
+      // (`r 180 → 20`, `lw 1 → 6`) for the "sucked in" read. The
+      // ring's natural alpha-ramp via age handles the visual fade.
       if (!this.chargeImplosionFired) {
         this.chargeImplosionFired = true;
+        ctxRoom.rings.push({
+          x: this.x,
+          y: this.y,
+          age: 0,
+          lifetime: CHARGE_VANISH_SEC,
+          startR: CHARGE_VANISH_SHOCKWAVE_R_START,
+          endR: CHARGE_VANISH_SHOCKWAVE_R_END,
+          startLineWidth: CHARGE_VANISH_SHOCKWAVE_LW_START,
+          endLineWidth: CHARGE_VANISH_SHOCKWAVE_LW_END,
+          color: CHARGE_VANISH_SHOCKWAVE_COLOR,
+          glowBlur: 14,
+        });
         for (let i = 0; i < CHARGE_VANISH_PARTICLE_COUNT; i++) {
           const a =
             (i / CHARGE_VANISH_PARTICLE_COUNT) * Math.PI * 2 +
@@ -2670,10 +2669,20 @@ export class Sentinel implements Enemy {
     }
 
     if (this.chargePhase === "telegraph") {
-      // Body fade-in 0 → 1 over CHARGE_TELEGRAPH_FADE_IN_SEC, then
-      // hold at 1 for the rest of telegraph.
+      // Body fade-in 0 → 1 over CHARGE_TELEGRAPH_FADE_IN_SEC, eased
+      // on easeOutCubic so the body "settles in" instead of popping
+      // straight to opaque. Holds at 1 for the rest of telegraph.
       const u = Math.min(1, this.chargeTimer / CHARGE_TELEGRAPH_FADE_IN_SEC);
-      this.bodyOpacity = u;
+      const eased = 1 - (1 - u) * (1 - u) * (1 - u); // easeOutCubic
+      this.bodyOpacity = eased;
+      // Tick down the appearance-flash overlay (drawn in renderBody
+      // when > 0).
+      if (this.chargeAppearFlashTimer > 0) {
+        this.chargeAppearFlashTimer = Math.max(
+          0,
+          this.chargeAppearFlashTimer - dt,
+        );
+      }
       if (this.chargeTimer >= CHARGE_TELEGRAPH_SEC) {
         this.chargePhase = "rushing";
         this.chargeTimer = 0;
@@ -2854,164 +2863,68 @@ export class Sentinel implements Enemy {
     this.chargePhase = "telegraph";
     this.chargeTimer = 0;
     this.bodyOpacity = 0;
-    audio.play.alert();
-  }
-
-  // === Mob spawn (phase 3) ===
-  private tickMobSpawn(ctxRoom: EnemyContext, dt: number): void {
-    // Drain any deferred dramatic spawn left over from the phase
-    // transition's climax (cinematic was frozen, so we couldn't
-    // mutate ctxRoom from inside it cleanly).
-    if (this.pendingDramaticMobSpawn) {
-      this.pendingDramaticMobSpawn = false;
-      this.spawnHunter(ctxRoom, true);
-    }
-    if (this.bossPhase === 3) {
-      this.mobSpawnTimer -= dt;
-      if (
-        this.mobSpawnTimer <= 0 &&
-        this.aliveSpawnedMobs() < MOB_MAX_ALIVE
-      ) {
-        this.spawnHunter(ctxRoom, false);
-        this.mobSpawnTimer = MOB_SPAWN_INTERVAL_SEC;
-      }
-    }
-    // Process pending spawn requests — instantiate the Hunter at
-    // the end of the spawn animation so visuals (ring + particles)
-    // play out before the enemy is real.
-    if (this.pendingSpawnRequests.length > 0) {
-      const stillPending: PendingSpawnRequest[] = [];
-      for (const req of this.pendingSpawnRequests) {
-        req.timer += dt;
-        if (req.timer >= req.duration) {
-          const hunter = new Hunter(req.x, req.y, {
-            startsAggressive: true,
-          });
-          hunter.vx = req.initialVx;
-          hunter.vy = req.initialVy;
-          this.spawnedMobs.push(hunter);
-          this.pendingSpawnedMobs.push(hunter);
-        } else {
-          stillPending.push(req);
-        }
-      }
-      this.pendingSpawnRequests = stillPending;
-    }
-  }
-
-  private aliveSpawnedMobs(): number {
-    let n = 0;
-    for (const m of this.spawnedMobs) if (!m.isDead()) n += 1;
-    return n;
-  }
-
-  /** Spawn a Hunter — push the spawn ring + particles immediately
-   *  to ctxRoom and queue a deferred Hunter instantiation that pops
-   *  in once the visuals complete. `dramatic === true` upgrades the
-   *  ring + particle counts and spawns from the boss centre with
-   *  initial velocity (used only on phase-3 entry). */
-  private spawnHunter(ctxRoom: EnemyContext, dramatic: boolean): void {
-    let x: number;
-    let y: number;
-    let initialVx = 0;
-    let initialVy = 0;
-    if (dramatic) {
-      x = this.x;
-      y = this.y;
-      const a = Math.random() * Math.PI * 2;
-      initialVx = Math.cos(a) * MOB_DRAMATIC_INITIAL_SPEED;
-      initialVy = Math.sin(a) * MOB_DRAMATIC_INITIAL_SPEED;
-    } else {
-      const inset = MOB_SPAWN_INSET_PX;
-      const w = this.arenaW;
-      const h = this.arenaH;
-      const side = Math.floor(Math.random() * 4);
-      switch (side) {
-        case 0:
-          x = inset + Math.random() * (w - 2 * inset);
-          y = inset;
-          break;
-        case 1:
-          x = w - inset;
-          y = inset + Math.random() * (h - 2 * inset);
-          break;
-        case 2:
-          x = inset + Math.random() * (w - 2 * inset);
-          y = h - inset;
-          break;
-        default:
-          x = inset;
-          y = inset + Math.random() * (h - 2 * inset);
-          break;
-      }
-    }
-    const duration = dramatic
-      ? MOB_DRAMATIC_DURATION_SEC
-      : MOB_SPAWN_DURATION_SEC;
-    const ringEndR = dramatic ? MOB_DRAMATIC_RING_R1 : MOB_SPAWN_RING_R1;
-    const ringStartLW = dramatic ? MOB_DRAMATIC_RING_LW0 : MOB_SPAWN_RING_LW0;
-    const particleCount = dramatic
-      ? MOB_DRAMATIC_PARTICLE_COUNT
-      : MOB_SPAWN_PARTICLE_COUNT;
-    const speedMin = dramatic
-      ? MOB_DRAMATIC_PARTICLE_SPEED_MIN
-      : MOB_SPAWN_PARTICLE_SPEED_MIN;
-    const speedMax = dramatic
-      ? MOB_DRAMATIC_PARTICLE_SPEED_MAX
-      : MOB_SPAWN_PARTICLE_SPEED_MAX;
+    // Appearance explosion — two outward shockwaves + 32 particles
+    // split white/accent + screen shake + an additive flash overlay
+    // (drawn over the body for the first CHARGE_APPEAR_FLASH_SEC of
+    // telegraph). Damage-free; pure visual punctuation of the
+    // teleport. The flash timer is ticked down in the telegraph
+    // branch of tickCharge.
     ctxRoom.rings.push({
-      x,
-      y,
+      x: startX,
+      y: startY,
       age: 0,
-      lifetime: duration,
-      startR: MOB_SPAWN_RING_R0,
-      endR: ringEndR,
-      color: MOB_SPAWN_RING_COLOR,
-      startLineWidth: ringStartLW,
-      endLineWidth: MOB_SPAWN_RING_LW1,
-      glowBlur: 14,
+      lifetime: CHARGE_APPEAR_SHOCKWAVE_1_LIFETIME_SEC,
+      startR: CHARGE_APPEAR_SHOCKWAVE_1_R0,
+      endR: CHARGE_APPEAR_SHOCKWAVE_1_R1,
+      startLineWidth: CHARGE_APPEAR_SHOCKWAVE_1_LW0,
+      endLineWidth: CHARGE_APPEAR_SHOCKWAVE_1_LW1,
+      color: CHARGE_APPEAR_SHOCKWAVE_1_COLOR,
+      glowBlur: 18,
     });
-    for (let i = 0; i < particleCount; i++) {
-      const a = (i / particleCount) * Math.PI * 2 + Math.random() * 0.2;
-      const ps = speedMin + Math.random() * (speedMax - speedMin);
+    ctxRoom.rings.push({
+      x: startX,
+      y: startY,
+      age: 0,
+      lifetime: CHARGE_APPEAR_SHOCKWAVE_2_LIFETIME_SEC,
+      startR: CHARGE_APPEAR_SHOCKWAVE_2_R0,
+      endR: CHARGE_APPEAR_SHOCKWAVE_2_R1,
+      startLineWidth: CHARGE_APPEAR_SHOCKWAVE_2_LW0,
+      endLineWidth: CHARGE_APPEAR_SHOCKWAVE_2_LW1,
+      color: CHARGE_APPEAR_SHOCKWAVE_2_COLOR,
+      glowBlur: 12,
+    });
+    const halfPart = CHARGE_APPEAR_PARTICLE_COUNT / 2;
+    for (let i = 0; i < CHARGE_APPEAR_PARTICLE_COUNT; i++) {
+      const a =
+        (i / CHARGE_APPEAR_PARTICLE_COUNT) * Math.PI * 2 +
+        Math.random() * 0.15;
+      const ps =
+        CHARGE_APPEAR_PARTICLE_SPEED_MIN +
+        Math.random() *
+          (CHARGE_APPEAR_PARTICLE_SPEED_MAX -
+            CHARGE_APPEAR_PARTICLE_SPEED_MIN);
       ctxRoom.particles.push({
-        x,
-        y,
+        x: startX,
+        y: startY,
         vx: Math.cos(a) * ps,
         vy: Math.sin(a) * ps,
         initialSize: 3,
-        color: MOB_SPAWN_PARTICLE_COLOR,
+        color: i < halfPart ? CHARGE_APPEAR_SHOCKWAVE_1_COLOR : "#ffffff",
         age: 0,
-        lifetime: MOB_SPAWN_PARTICLE_LIFETIME_SEC,
-        glowStrong: 8,
+        lifetime: CHARGE_APPEAR_PARTICLE_LIFETIME_SEC,
+        glowStrong: 10,
         glowSoft: 4,
-        drag: 0.92,
+        drag: 0.94,
       });
     }
+    this.chargeAppearFlashTimer = CHARGE_APPEAR_FLASH_SEC;
+    this.pendingShakePx = CHARGE_APPEAR_SHAKE_PX;
+    this.pendingShakeSec = CHARGE_APPEAR_SHAKE_SEC;
+    // Heavy impact stand-in until a proper bossWarp synth exists —
+    // hitHeavy alone reads as "the world thumped" and the alert
+    // chirp on top adds the high-frequency snap.
+    audio.play.hitHeavy();
     audio.play.alert();
-    this.pendingSpawnRequests.push({
-      x,
-      y,
-      timer: 0,
-      duration,
-      initialVx,
-      initialVy,
-    });
-  }
-
-  /** Drained by rooms-game once per frame. Returns Hunters that
-   *  finished their spawn animation this frame so they can be
-   *  appended to `currentRoom.enemies`. */
-  consumeSpawnedMobs(): Hunter[] {
-    if (this.pendingSpawnedMobs.length === 0) return EMPTY_HUNTER_LIST;
-    const out = this.pendingSpawnedMobs;
-    this.pendingSpawnedMobs = [];
-    // Periodic prune of the alive-tracker so it doesn't grow
-    // unbounded across a long fight.
-    if (this.spawnedMobs.length > 16) {
-      this.spawnedMobs = this.spawnedMobs.filter((m) => !m.isDead());
-    }
-    return out;
   }
 
   /** Drained by rooms-game after the boss tick. Returns any
@@ -3025,10 +2938,9 @@ export class Sentinel implements Enemy {
   }
 
   /** Drained by rooms-game during the boss-death cascade. Returns
-   *  the alive enemies (Hunters + corner Turrets) whose forced-kill
-   *  timer just fired this frame so rooms-game can run the standard
-   *  emitEnemyKill + destroyEnemy pipeline (impact FX + score +
-   *  removal). */
+   *  the alive corner turrets whose forced-kill timer just fired
+   *  this frame so rooms-game can run the standard emitEnemyKill +
+   *  destroyEnemy pipeline (impact FX + score + removal). */
   consumeCascadeKills(): Enemy[] {
     if (this.pendingCascadeKills.length === 0) return EMPTY_ENEMY_LIST;
     const out = this.pendingCascadeKills;
@@ -3171,20 +3083,11 @@ export class Sentinel implements Enemy {
     this.cascadeKillQueue = stillPending;
   }
 
-  /** Populate the cascade kill queue with alive Hunters first
-   *  (50 ms between), then a 100 ms gap, then alive corner
+  /** Populate the cascade kill queue with the alive corner
    *  turrets (50 ms between). Called once from `enterDying`. */
   private populateCascadeKillQueue(): void {
-    const aliveHunters = this.spawnedMobs.filter((m) => !m.isDead());
     const aliveTurrets = this.spawnedTurrets.filter((t) => !t.isDead());
     let cursor = 0;
-    for (const h of aliveHunters) {
-      this.cascadeKillQueue.push({ enemy: h, delay: cursor });
-      cursor += CASCADE_KILL_HUNTER_GAP_SEC;
-    }
-    if (aliveHunters.length > 0 && aliveTurrets.length > 0) {
-      cursor += CASCADE_KILL_GROUP_GAP_SEC;
-    }
     for (const t of aliveTurrets) {
       this.cascadeKillQueue.push({ enemy: t, delay: cursor });
       cursor += CASCADE_KILL_TURRET_GAP_SEC;
@@ -3266,9 +3169,7 @@ export class Sentinel implements Enemy {
     this.sweepLaserIdleTimer = 0;
     this.sweepTrail = [];
     // Charge — same idea: line / particles / ghost trail wouldn't
-    // make sense once the boss is dying. Pending mob spawn requests
-    // also drop (but already-instantiated mobs in spawnedMobs stay
-    // alive so the player has to clean them up before VICTORY).
+    // make sense once the boss is dying.
     this.chargePhase = "idle";
     this.chargeTimer = 0;
     this.chargeIdleTimer = 0;
@@ -3276,13 +3177,11 @@ export class Sentinel implements Enemy {
     this.chargeImplosionFired = false;
     this.chargeRushingShakeFired = false;
     this.chargeHitLanded = false;
-    this.pendingSpawnRequests = [];
-    this.pendingDramaticMobSpawn = false;
     // Corner turret spawn queue stops — anything not yet spawned
     // is dropped (the bay door is closed). Already-spawned turrets
     // are caught by the cascade kill below.
     this.cornerTurretSpawnQueue = [];
-    // Cascade-kill the alive mobs + turrets so Game Complete opens
+    // Cascade-kill the alive corner turrets so Game Complete opens
     // on a clean field. Hunters first (50 ms between), 100 ms gap,
     // then turrets (50 ms between).
     this.populateCascadeKillQueue();
@@ -3431,6 +3330,21 @@ export class Sentinel implements Enemy {
       this.renderChargeGhosts(ctx);
     }
     this.renderBody(ctx, 1);
+    // Appearance flash — additive white disc painted over the body
+    // for the first CHARGE_APPEAR_FLASH_SEC of telegraph. Decays
+    // linearly from `peak * (timer / total)` so it lands cleanly
+    // as the body fade-in (easeOutCubic) is just starting.
+    if (this.chargeAppearFlashTimer > 0) {
+      const u = this.chargeAppearFlashTimer / CHARGE_APPEAR_FLASH_SEC;
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      ctx.fillStyle = "#ffffff";
+      ctx.globalAlpha = CHARGE_APPEAR_FLASH_PEAK_ALPHA * u;
+      ctx.beginPath();
+      ctx.arc(this.x, this.y, SENTINEL_HITBOX_RADIUS, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
     if (
       this.sweepLaserPhase === "firing-1" ||
       this.sweepLaserPhase === "mid-pause" ||
@@ -4057,6 +3971,57 @@ export class Sentinel implements Enemy {
     }
   }
 
+  /** Cyan dashed indicator drawn under the outer ring during the
+   *  three ghost-body phases of Ring Burst. Communicates "this
+   *  shell is the dashable phase" using the same visual language
+   *  as cyan-dashed walls in the tutorial / Room 4. Lives in the
+   *  body-relative ctx (translated to boss origin) so it renders
+   *  at (0, 0) on the current outer-ring radius. */
+  private renderCyanDashableIndicator(ctx: CanvasRenderingContext2D): void {
+    let opacity = 0;
+    if (this.ringBurstPhase === "detach") {
+      const u = Math.min(1, this.rbTimer / RB_DETACH_SEC);
+      opacity = RB_CYAN_INDICATOR_PEAK_OPACITY * u;
+    } else if (this.ringBurstPhase === "vulnerable") {
+      const phase =
+        (this.rbTimer * Math.PI * 2) / RB_CYAN_INDICATOR_PULSE_PERIOD_SEC;
+      const pulse = (Math.sin(phase) + 1) / 2;
+      opacity =
+        RB_CYAN_INDICATOR_PEAK_OPACITY +
+        RB_CYAN_INDICATOR_PULSE_AMPLITUDE * pulse;
+    } else if (this.ringBurstPhase === "reassemble") {
+      const u = Math.min(1, this.rbTimer / RB_REASSEMBLE_SEC);
+      opacity = RB_CYAN_INDICATOR_PEAK_OPACITY * (1 - u);
+    }
+    if (opacity <= 0) return;
+    // Animated dash offset driven by combatElapsedSec so the
+    // pattern keeps marching even across separate Ring Bursts
+    // (it ticks across the whole fight).
+    const dashOffset =
+      -this.combatElapsedSec * RB_CYAN_INDICATOR_DASH_RATE_PX_PER_SEC;
+    const r = this.ringRadiusOuter;
+    ctx.save();
+    ctx.setLineDash(RB_CYAN_INDICATOR_DASH_PATTERN);
+    ctx.lineDashOffset = dashOffset;
+    ctx.strokeStyle = RB_CYAN_INDICATOR_COLOR;
+    // Wider, dimmer bloom pass first.
+    ctx.lineWidth = RB_CYAN_INDICATOR_LW_BLOOM;
+    ctx.globalAlpha = opacity * RB_CYAN_INDICATOR_BLOOM_OPACITY_MUL;
+    ctx.beginPath();
+    ctx.arc(0, 0, r, 0, Math.PI * 2);
+    ctx.stroke();
+    // Crisp main pass.
+    ctx.lineWidth = RB_CYAN_INDICATOR_LW_MAIN;
+    ctx.globalAlpha = opacity;
+    ctx.beginPath();
+    ctx.arc(0, 0, r, 0, Math.PI * 2);
+    ctx.stroke();
+    // Crucial — restore the canvas dash state so subsequent
+    // strokes (outer ring, mid, inner, eye) render solid.
+    ctx.setLineDash([]);
+    ctx.restore();
+  }
+
   private renderDepthRing(
     ctx: CanvasRenderingContext2D,
     radius: number,
@@ -4406,6 +4371,17 @@ export class Sentinel implements Enemy {
     const outerDepth: RingDepth = inRingBurst
       ? { ...outerDepthBase, brightColor: accent, bloomColor: accent }
       : { ...outerDepthBase, brightColor: accent, markerColor: accent };
+    // Cyan dashed indicator — drawn UNDER the outer ring (before
+    // renderDepthRing) so the red shell paints on top and the
+    // cyan peeks out from beneath, reading as "this red object is
+    // dashable." Only painted during the three ghost-body phases.
+    if (
+      this.ringBurstPhase === "detach" ||
+      this.ringBurstPhase === "vulnerable" ||
+      this.ringBurstPhase === "reassemble"
+    ) {
+      this.renderCyanDashableIndicator(ctx);
+    }
     this.renderDepthRing(
       ctx,
       this.ringRadiusOuter,

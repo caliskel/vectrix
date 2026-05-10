@@ -969,15 +969,10 @@ export function start(canvas: HTMLCanvasElement): void {
       // boss-cinematic guard internally — no extra checks needed.
       takeHit(dmg);
     }
-    // Phase 3 mob spawns — Sentinel finishes a Hunter spawn animation,
-    // we adopt the Hunter into the active enemy list so it ticks /
+    // Phase 3 corner turrets — Sentinel queues four of them,
+    // staggered, just after phase-3 entry. As each materialises
+    // we adopt it into the active enemy list so it ticks /
     // renders / takes damage like any other room enemy.
-    const mobs = sentinel.consumeSpawnedMobs();
-    if (mobs.length > 0) {
-      for (const m of mobs) currentRoom.enemies.push(m);
-    }
-    // Phase 3 corner turrets — same adoption path. Sentinel
-    // queues four of them, staggered, just after phase-3 entry.
     const turrets = sentinel.consumeSpawnedTurrets();
     if (turrets.length > 0) {
       for (const t of turrets) currentRoom.enemies.push(t);

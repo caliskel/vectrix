@@ -709,9 +709,10 @@ transitions for score + Game Complete.
   panic moment (beats sweep on a tied cooldown so the dash
   doesn't get pre-empted by a routine laser); sweep is the
   phase-2+ signature; aimed is point threat; radial is filler.
-  **Mob spawn** runs as a *parallel* timer (phase 3 only), NOT
-  subject to mutual exclusion — Hunter spawns can fire while
-  any attack is active.
+  **Corner turret spawn** runs as a *parallel* timer (phase 3
+  only) — staggered Turret spawns NOT subject to mutual exclusion;
+  the queue ticks in parallel with whatever attack the boss is
+  running.
   - **Radial Burst** — 1.4 s total cycle: 0.4 s telegraph +
     single firing frame (12 bullets fanned at 350 px/s) +
     0.3 s recovery + 0.65 s idle gap. Spawns from the live
@@ -796,21 +797,38 @@ transitions for score + Game Complete.
     along that line at lethal speed. Sub-state machine
     `idle / vanish / telegraph / rushing / recovery`. Cooldown
     `CHARGE_BASE_COOLDOWN_SEC = 9 s × PHASE_CADENCE` from
-    recovery end. Timings: **0.35 s vanish** (body opacity 1 → 0
-    over 250 ms; one-shot 24-particle implosion at the start —
-    particles ride a 80 px radius inward at 200–350 px/s),
-    **0.9 s telegraph** (body fades 0 → 1 over 400 ms at the
-    captured chargeStart, dashed warning line painted from
-    chargeStart to chargeEnd with outer / mid / core glow stack
-    `#ff2266` / `#ff5577` plus pulsing diamond + arrow markers
-    at the endpoints; final 200 ms strobe the line opacity 5×
-    as the rushing-entry countdown), **0.4 s rushing** (linear
-    boss lerp start → end, 4 px / 100 ms shake on entry, body
-    glow ×1.4, ghost trail captured each frame as a fading pink
-    silhouette, sideways wake particles at 16/s), **0.6 s
-    recovery** (pink release ring r 30 → 200 over 500 ms,
-    movement transition snapshots back into the figure-8 the
-    same way RB recovery does).
+    recovery end. Timings: **0.35 s vanish** (body opacity
+    `easeInQuart` 1 → 0 across the full window so the fade
+    lingers and then drops sharply at the hand-off; one-shot
+    40-particle implosion at vanish entry — particles ride a
+    80 px radius inward at 200–350 px/s — paired with a single
+    *inverse shockwave* ring r 180 → 20 / lw 1 → 6 in
+    `#ff5577` that collapses toward the boss so vanish reads
+    as "sucked in" rather than just faded out), **0.9 s
+    telegraph** (body fades 0 → 1 over 600 ms eased on
+    `easeOutCubic` at the captured chargeStart, dashed warning
+    line painted from chargeStart to chargeEnd with outer /
+    mid / core glow stack `#ff2266` / `#ff5577` plus pulsing
+    diamond + arrow markers at the endpoints; final 200 ms
+    strobe the line opacity 5× as the rushing-entry
+    countdown), **0.4 s rushing** (linear boss lerp start →
+    end, 4 px / 100 ms shake on entry, body glow ×1.4, ghost
+    trail captured each frame as a fading pink silhouette,
+    sideways wake particles at 16/s), **0.6 s recovery** (pink
+    release ring r 30 → 200 over 500 ms, movement transition
+    snapshots back into the figure-8 the same way RB recovery
+    does).
+    **Arrival explosion** fires at the vanish → telegraph
+    transition (boss materialises at chargeStart): two outward
+    shockwaves (`#ff2266` r 20 → 180 / lw 10 → 1 over 500 ms +
+    `#ffffff` r 40 → 240 / lw 5 → 0.5 over 700 ms), 32
+    particles split 16 accent / 16 white at 250–400 px/s, a
+    200 ms additive white "appear flash" overlay painted on
+    top of the body (`globalCompositeOperation = "lighter"`,
+    peak `0.6` alpha decaying linearly), and a 6 px / 150 ms
+    screen shake. Damage-free — pure visual punctuation of the
+    teleport; standing on the appearance point doesn't cost
+    HP until the body itself materialises.
     Player target = `player.position + player.velocity * 0.6 s`
     locked at vanish → telegraph; no homing afterwards. Damage:
     point-segment distance from player to the full charge line
@@ -821,35 +839,11 @@ transitions for score + Game Complete.
     every charge phase — `bodyDamageActive()` short-circuits
     when `chargePhase !== "idle"` so the dash isn't a
     drive-by damage opportunity. Audio reuses `alert` (vanish)
-    + `hitHeavy` (rushing) as placeholders until the BWOAH /
+    + layered `hitHeavy` + `alert` (arrival explosion) +
+    `hitHeavy` (rushing) as placeholders until the BWOAH /
     bossWarp synths land.
-  - **Mob spawn** — phase 3 only, runs in parallel with the
-    attack scheduler. Cap `MOB_MAX_ALIVE = 2`. First spawn
-    `MOB_SPAWN_FIRST_DELAY_SEC = 4 s` after phase-3 entry,
-    then every `MOB_SPAWN_INTERVAL_SEC = 10 s`. Spawned
-    enemy is a `Hunter` with `startsAggressive: true` so it's
-    on-the-chase from frame one. Edge spawn picks a random
-    side / offset (`MOB_SPAWN_INSET_PX = 30` from the wall);
-    spawn ring r 10 → 80 over 700 ms (`#cc4488`), 12 radial
-    particles 150–250 px/s. Hunter is **deferred** until the
-    spawn animation finishes — Sentinel queues
-    `pendingSpawnRequest`s that materialize into a real
-    `Hunter` instance and get pushed into
-    `pendingSpawnedMobs`; rooms-game polls
-    `sentinel.consumeSpawnedMobs()` each frame in
-    `consumeSentinelEffects` and appends the new Hunter to
-    `currentRoom.enemies`. **Phase-3 entry** triggers a
-    forced *dramatic* spawn from the boss centre on the
-    climax of the 2 → 3 transition cinematic: ring r 10 → 140
-    over 900 ms with lw 8 → 0.5, 24 particles at 300–450 px/s,
-    Hunter ejected with random-direction `300 px/s` initial
-    velocity. Then the regular cadence kicks in 4 s later, so
-    Phase 3 opens with two Hunters in the first 5 seconds.
-    Mob spawn timer is gated by `bossPhase === 3` only — it
-    runs while the boss is mid-attack. Cleanup is handled by
-    the death cascade (see below).
-  - **+ 4 corner turrets** — phase 3 only. At the same climax
-    that fires the dramatic Hunter spawn, Sentinel queues four
+  - **4 corner turrets** — phase 3 only. At the same climax
+    that fires the phase-3 cadence boost, Sentinel queues four
     `Turret`s — one per arena corner, inset 100 px from the
     walls — staggered on a domino cadence: 0.2 / 0.6 / 1.0 /
     1.4 s after the cinematic releases. Each carries a 700 ms
@@ -868,9 +862,8 @@ transitions for score + Game Complete.
     Sentinel's own bullets / sweep beam don't damage the
     turrets (bullet-vs-enemy collision isn't wired against
     boss-side bullets, and the sweep beam only damage-checks
-    the player, so this is automatic). Mob-spawn cap
-    (`MOB_MAX_ALIVE = 2`) is independent — corner turrets have
-    their own `spawnedTurrets` list with lifetime cap = 4.
+    the player, so this is automatic). Lifetime cap = 4 — the
+    `spawnedTurrets` list is one-shot and never refills.
     Turret constructor accepts new opts:
     `{ startsAggressive, fireIntervalSec, bulletSpeed,
     spawnInvulnerableSec }`. `spawnInvulnerableTime` field
@@ -878,9 +871,8 @@ transitions for score + Game Complete.
     while ramping the visual scale.
   - **Boss-death cascade.** When Sentinel HP hits 0,
     `enterDying` populates a forced-kill queue with the alive
-    Hunters (50 ms between), a 100 ms gap, then the alive
     corner Turrets (50 ms between). Each scheduled entry fires
-    `takeDamage(hp)` to force the kill and pushes the enemy
+    `takeDamage(hp)` to force the kill and pushes the Turret
     into `pendingCascadeKills`; rooms-game drains the buffer
     in `consumeSentinelEffects` and runs the standard
     `emitEnemyKill` + `destroyEnemy` pipeline (impact rings,
@@ -888,7 +880,7 @@ transitions for score + Game Complete.
     overlaps the start of the boss's 6 s death cinematic, so
     by the time Sentinel finishes scale-down the arena is
     clean and Game Complete opens with no leftover enemies to
-    block it. Already-dead enemies (the player killed them
+    block it. Already-dead Turrets (the player cleared them
     earlier) are skipped.
   - **Ring Burst** — phase 1's defining mechanic. The three
     shells detach + expand, the body goes ghosted, and the eye
@@ -950,6 +942,18 @@ transitions for score + Game Complete.
       bright-stroke alpha sub-pulse (period 1.1 s, range
       0.85 ↔ 1.0) so the only damaging shell visually shouts
       "danger here."
+    - **Cyan dashed indicator** (`#7dd3fc`, 2 px main + 5 px
+      bloom at 0.25× opacity, 8/8 dash pattern, animated offset
+      at 30 px/s) drawn UNDER the outer ring on the same
+      radius — the red shell paints on top and the cyan peeks
+      out from beneath, reading as "this red object is the
+      dashable phase." Opacity ramps `0 → 0.6` over detach
+      (linear), holds at `0.6` with a `0.6 ↔ 0.85` pulse on a
+      0.9 s period during vulnerable, and fades `0.6 → 0`
+      across reassemble. Same visual language as the cyan
+      dashed walls in the tutorial / Room 4. Not applied to
+      mid / inner (they're dimmed to background) or the eye
+      (its own gold + reticle iconography carries the read).
     - **Mid + inner** desaturate to `#8a2030` / `#5a1020` at
       0.40 / 0.30 alpha (markers correspondingly dim) so they
       read as background decoration. The cross-fade is driven
@@ -972,7 +976,7 @@ transitions for score + Game Complete.
   detach / vulnerable / reassemble. The HP bar sits below the
   HUD block (HUD_BOTTOM_Y + 24 px pad) so the ROOM/HP/SCORE row
   never overlaps the boss bar. The bar carries two thin vertical
-  ticks at HP 20 and HP 10 — phase boundaries — that flash from
+  ticks at HP 40 and HP 20 — phase boundaries — that flash from
   alpha 0.4 → 1.0 → 0.4 over 300 ms when the matching transition
   fires. Sentinel exposes `phaseMarkerFlashTimer1to2` and
   `phaseMarkerFlashTimer2to3` for rooms-game to read.
@@ -1364,8 +1368,8 @@ settings overlay on Esc / Tab.
 
 - **Sentinel boss** — Phases 1 + 2 + 3 ship. Phase 1 has three
   attacks (radial / aimed / Ring Burst); phase 2 adds Sweep
-  Laser; phase 3 adds **Charge** + the parallel **Hunter mob
-  spawn** system. Cadence multiplier ramp + the 2 s
+  Laser; phase 3 adds **Charge** + the parallel **4 corner
+  turret** spawn. Cadence multiplier ramp + the 2 s
   phase-transition cinematic are wired across both boundaries.
   **Mechanic engagement is mandatory**: HP_MAX 60 with the body
   invulnerable outside RB-`vulnerable`, so the eye in Ring Burst
