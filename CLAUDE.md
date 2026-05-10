@@ -646,12 +646,12 @@ transitions for score + Game Complete.
   hitbox + 60 px so the lemniscate can't kiss the walls, and a
   hard `[hitbox, arena − hitbox]` clamp backs it up. Movement
   only ticks in these two combat states (intro and dying both
-  hold the boss still). The boss runs **two parallel attack
-  sub-machines**, each `idle / telegraph / firing / recovery`,
-  with a non-overlap rule — whichever one is non-idle freezes
-  the other one's cooldown timer, and when both are idle the
-  one whose readiness has overshot longer wins (so the rare
-  attack can't get permanently starved):
+  hold the boss still). The boss runs **three parallel attack
+  sub-machines**. Radial Burst and Aimed Shot Trio share a
+  non-overlap rule (whichever is non-idle freezes the other's
+  cooldown; ready-longer wins when both are idle). **Ring Burst
+  pre-empts both** — its non-idle phases freeze the radial /
+  aimed timers entirely:
   - **Radial Burst** — 1.4 s total cycle: 0.4 s telegraph +
     single firing frame (12 bullets fanned at 350 px/s) +
     0.3 s recovery + 0.65 s idle gap. Spawns from the live
@@ -667,15 +667,41 @@ transitions for score + Game Complete.
     line glow 12) plus a 14 × 14 px diamond pulsing 0.8 ↔ 1.2
     on the locked target. Each fired bullet pops an 8-particle
     muzzle flash at the boss centre.
-  Damage via dash-through (1 HP per dash) works only in these
-  two states. **Contact damage**: touching the boss body (radius
-  110, the outer shell) deals 1 HP, gated by player i-frames and
-  dash i-frames — Sentinel.update sets a `requestPlayerHit` flag
-  each frame the player overlaps and rooms-game's
+  - **Ring Burst** — phase 1's defining mechanic. The three
+    shells detach + expand, the body goes ghosted, and the eye
+    becomes the only damage path. Sub-state machine
+    `idle / telegraph / detach / vulnerable / reassemble /
+    recovery`. Timings: telegraph 0.5 s (body jitter ±3 px,
+    glow ramp ×1.6), detach 0.3 s (rings ease out from
+    110 / 85 / 60 → 180 / 130 / 95, body opacity 1 → 0.25, white
+    18-particle radial spray + r 60 → 200 shockwave), vulnerable
+    3 s (eye hitbox r 20 active, body intangible, rings carry
+    1 HP contact damage in their thin band), reassemble 0.5 s
+    (radii ease back, body opacity 0.25 → 1, eye hitbox closes,
+    rings still damage), recovery 0.5 s (no damage either
+    direction), 8 s cooldown from recovery end to next
+    telegraph. First RB has a 6 s grace from fight start.
+    **Damage table during RB:**
+    | Phase | Body dash | Eye dash | Body contact | Ring contact |
+    | --- | --- | --- | --- | --- |
+    | idle / telegraph / recovery | 1 HP boss | — | 1 HP player | — |
+    | detach / reassemble | 0 (ghosted) | — | 0 | 1 HP player |
+    | vulnerable | 0 (ghosted) | **3 HP boss** + heavy feedback | 0 | 1 HP player |
+    The eye-hit reward layers a 8 px / 200 ms screen shake, an
+    inner white + outer gold double ring, 24 alternating
+    white / `#ffaa22` particles, and a hitstop —
+    `sentinel.timeScale = 0.15` for 80 ms — so the world freezes
+    a beat around each successful eye dash. Audio reuses
+    `hitHeavy` + `alert` for layered shimmer.
+  **Contact damage** outside RB: touching the boss body (radius
+  110, the outer shell) deals 1 HP, gated by player i-frames
+  and dash i-frames — Sentinel.update sets a `requestPlayerHit`
+  flag each frame the player overlaps and rooms-game's
   `consumeSentinelEffects` drains it into the standard `takeHit`
-  pipeline. The HP bar sits below the HUD block (HUD_BOTTOM_Y +
-  24 px pad) so the ROOM/HP/SCORE row never overlaps the boss
-  bar.
+  pipeline. The same flag is reused by RB ring contact during
+  detach / vulnerable / reassemble. The HP bar sits below the
+  HUD block (HUD_BOTTOM_Y + 24 px pad) so the ROOM/HP/SCORE row
+  never overlaps the boss bar.
 - **dying** (6050 ms): triggered by `takeDamage` driving HP to
   0. `shouldFreezeWorld()` is true again — the death cinematic
   is the focus. `Sentinel.timeScale` ramps `1.0 → 0.3` over the
@@ -1062,11 +1088,14 @@ settings overlay on Esc / Tab.
 
 ### TODO (rooms direction)
 
-- **Sentinel boss** — Room 5 currently ships one phase with one
-  attack (radial burst); intro and dying cinematics are wired
-  end-to-end via the Sentinel state machine. Next iterations
-  layer phase 2 / phase 3 attacks (sweep laser, charge,
-  minion spawns), richer telegraphs, and tuned pacing.
+- **Sentinel boss** — Phase 1 now has three attacks: radial
+  burst, aimed shot trio, and Ring Burst (the defining
+  mechanic — body ghosts, rings detach, eye opens). Intro and
+  dying cinematics are wired end-to-end. Next iterations layer
+  phase 2 / phase 3 (sweep laser, charge, minion spawns),
+  inter-attack pacing tweaks, and proper layered audio for the
+  Ring Burst telegraph + eye-hit cue (currently reusing
+  `alert` / `hitHeavy`).
 - **Key icon visual polish** — the `drawKey` glyph is a diamond
   + stem; readable but a bit primitive. A more iconic key shape
   (or a proper sprite) would improve the HUD slot too.

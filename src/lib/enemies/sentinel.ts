@@ -1,3 +1,4 @@
+import { audio } from "../audio";
 import { makeBullet } from "../bullets";
 import { drawNeon } from "../neon";
 import { initAwareness } from "./awareness";
@@ -212,6 +213,72 @@ const BODY_SCALE_MAX = 1.02;
 const BODY_GLOW_ALPHA_MIN = 0.2;
 const BODY_GLOW_ALPHA_MAX = 0.35;
 
+// Attack 3 — Ring Burst. Phase 1's defining mechanic. Three shells
+// detach + expand, the body goes ghosted, and the eye becomes the
+// only damage path (with 3× damage). Cooldown gates it to roughly
+// once every 8 seconds plus a 6 s grace at fight start so the
+// player learns radial / aimed first.
+const RB_FIRST_GRACE_SEC = 6.0;
+const RB_TELEGRAPH_SEC = 0.5;
+const RB_DETACH_SEC = 0.3;
+const RB_VULNERABLE_SEC = 3.0;
+const RB_REASSEMBLE_SEC = 0.5;
+const RB_RECOVERY_SEC = 0.5;
+const RB_COOLDOWN_SEC = 8.0;
+
+// Default + expanded ring radii. Detach lerps the live radii from
+// the default values to the expanded ones; reassemble lerps back.
+const RB_RING_DEFAULT_OUTER = 110;
+const RB_RING_DEFAULT_MID = 85;
+const RB_RING_DEFAULT_INNER = 60;
+const RB_RING_EXPANDED_OUTER = 180;
+const RB_RING_EXPANDED_MID = 130;
+const RB_RING_EXPANDED_INNER = 95;
+
+const RB_BODY_OPACITY_GHOSTED = 0.25;
+const RB_TELEGRAPH_JITTER_PX = 3;
+const RB_TELEGRAPH_GLOW_BOOST = 1.6;
+
+// Eye behaviour during vulnerable.
+const RB_EYE_HITBOX_RADIUS = 20;
+const RB_EYE_HIT_DAMAGE = 3;
+const RB_EYE_VULNERABLE_SCALE_AMPLITUDE = 0.09; // ≈ 0.91 ↔ 1.09
+const RB_EYE_VULNERABLE_SCALE_PERIOD_SEC = 0.7;
+const RB_EYE_HITSTOP_SEC = 0.08;
+const RB_EYE_HITSTOP_TIMESCALE = 0.15;
+
+// Detach burst — central white particle radial spray + a single
+// expanding ring. Telegraph audio is reused alert at -8 semitones;
+// the eye-hit cue layers hitHeavy + alert at +5 for shimmer.
+const RB_DETACH_PARTICLE_COUNT = 18;
+const RB_DETACH_PARTICLE_SPEED_MIN = 300;
+const RB_DETACH_PARTICLE_SPEED_MAX = 450;
+const RB_DETACH_PARTICLE_LIFETIME_SEC = 0.4;
+const RB_DETACH_RING_LIFETIME_SEC = 0.3;
+const RB_DETACH_RING_START_R = 60;
+const RB_DETACH_RING_END_R = 200;
+
+// Ring contact hit zone padding — line strokes are thin, so we
+// pad the test against the player's half-size for forgiveness.
+const RB_RING_STROKE_HIT_HALFWIDTH = 4;
+
+// Eye-hit reward feedback — heavier than the standard medium
+// impact; this is the focal moment of phase 1.
+const RB_EYE_HIT_INNER_RING_R0 = 20;
+const RB_EYE_HIT_INNER_RING_R1 = 80;
+const RB_EYE_HIT_INNER_RING_LIFETIME_SEC = 0.25;
+const RB_EYE_HIT_OUTER_RING_R0 = 30;
+const RB_EYE_HIT_OUTER_RING_R1 = 140;
+const RB_EYE_HIT_OUTER_RING_LIFETIME_SEC = 0.35;
+const RB_EYE_HIT_OUTER_RING_COLOR = "#ffaa22";
+const RB_EYE_HIT_PARTICLE_COUNT_WHITE = 12;
+const RB_EYE_HIT_PARTICLE_COUNT_GOLD = 12;
+const RB_EYE_HIT_PARTICLE_SPEED_MIN = 350;
+const RB_EYE_HIT_PARTICLE_SPEED_MAX = 500;
+const RB_EYE_HIT_PARTICLE_LIFETIME_SEC = 0.5;
+const RB_EYE_HIT_SHAKE_PX = 8;
+const RB_EYE_HIT_SHAKE_SEC = 0.2;
+
 // Energy burst — fired on the radial-burst telegraph → firing
 // transition. Two shockwave rings, a brief boss flash, and a
 // streamer puff out the boss centre.
@@ -272,6 +339,14 @@ export type SentinelState =
   | "defeated";
 
 type AttackPhase = "idle" | "telegraph" | "firing" | "recovery";
+
+type RingBurstPhase =
+  | "idle"
+  | "telegraph"
+  | "detach"
+  | "vulnerable"
+  | "reassemble"
+  | "recovery";
 
 type DyingFragment = {
   x: number;
@@ -388,6 +463,36 @@ export class Sentinel implements Enemy {
   private aimedAngle = 0;
   private aimedShotsFired = 0;
   private aimedDashOffset = 0; // crawl offset for the dashed telegraph line
+
+  // Attack 3 — Ring Burst sub-machine. Has the highest priority of
+  // the three: when ringBurstPhase !== "idle", radial / aimed
+  // timers freeze and don't tick. combatElapsedSec ticks across
+  // every "idle" / "attacking" frame so the first RB has a 6 s
+  // grace from fight start.
+  private ringBurstPhase: RingBurstPhase = "idle";
+  private rbTimer = 0;
+  private rbCooldownTimer = 0;
+  private combatElapsedSec = 0;
+  // Live ring radii — match RB_RING_DEFAULT_* outside the burst,
+  // lerp out during detach, hold expanded across vulnerable, lerp
+  // back during reassemble.
+  private ringRadiusOuter = RB_RING_DEFAULT_OUTER;
+  private ringRadiusMid = RB_RING_DEFAULT_MID;
+  private ringRadiusInner = RB_RING_DEFAULT_INNER;
+  // Body opacity — full 1 outside the burst; ramps to 0.25 across
+  // detach + holds through reassemble. Eye stack is drawn outside
+  // this gate so the eye stays fully visible.
+  private bodyOpacity = 1;
+  // Eye visual amplification while vulnerable — gold rim alpha
+  // multiplier and a faster pulse on top of the breath cycle.
+  private eyeVulnerablePulsePhase = 0;
+  // Hitstop on a successful eye hit — sets sentinel.timeScale low
+  // for RB_EYE_HITSTOP_SEC so the impact reads as a single beat.
+  private eyeHitstopTimer = 0;
+  // Set true on a successful eye dash-through; tickRingBurst drains
+  // it next frame so triggerEyeHitFeedback can fire with ctxRoom in
+  // hand (tryDashDamage doesn't get ctxRoom in its signature).
+  private pendingEyeHit = false;
 
   // damage / death
   private dashIdAlreadyDamaged = -1;
@@ -582,14 +687,32 @@ export class Sentinel implements Enemy {
     this.vx = (targetX - this.x) * lerp * 60;
     this.vy = (targetY - this.y) * lerp * 60;
 
+    // Track combat-state elapsed time so the first Ring Burst has
+    // a grace period from the moment the player enters fight.
+    this.combatElapsedSec += dt;
+    // Ring Burst takes priority over the other two attacks. Tick
+    // its phase machine first; while it's non-idle, radial / aimed
+    // sub-machines and their idle timers freeze.
+    this.tickRingBurst(ctxRoom, dt);
+    if (this.eyeHitstopTimer > 0) {
+      this.eyeHitstopTimer = Math.max(0, this.eyeHitstopTimer - dt);
+      this.timeScale =
+        this.eyeHitstopTimer > 0 ? RB_EYE_HITSTOP_TIMESCALE : 1;
+    } else if (this.timeScale !== 1) {
+      // Restore default in combat states (dying owns its own ramp).
+      this.timeScale = 1;
+    }
+    const ringBurstActive = this.ringBurstPhase !== "idle";
+
     // === Attack scheduling — dual sub-state machines ===
     // Only one attack runs at a time. Whichever attack is in a
     // non-idle phase blocks the other one's cooldown from ticking,
     // so the boss reads as "doing one thing." When both are idle
     // and at least one is ready, the one that's been ready longer
-    // wins (overshoot comparison).
-    const radialBlocked = this.aimedPhase !== "idle";
-    const aimedBlocked = this.radialPhase !== "idle";
+    // wins (overshoot comparison). Ring Burst pre-empts both — its
+    // active phases freeze every other timer.
+    const radialBlocked = this.aimedPhase !== "idle" || ringBurstActive;
+    const aimedBlocked = this.radialPhase !== "idle" || ringBurstActive;
 
     // ---- Radial sub-machine ----
     if (!radialBlocked) {
@@ -675,20 +798,62 @@ export class Sentinel implements Enemy {
         ? "attacking"
         : "idle";
 
-    // Contact damage. Only flagged in combat states (intro / dying /
-    // defeated already short-circuit the surrounding update branches).
-    // Player dash-iframes are checked here so the player can dash
-    // through the body cleanly; the post-hit i-frame gate lives at
-    // rooms-game's takeHit so we don't double the rule.
+    // Contact damage. Two paths:
+    //   - body contact only fires when the boss is "solid" — RB
+    //     idle / telegraph / recovery (not detach / vulnerable /
+    //     reassemble where the body is ghosted).
+    //   - ring contact only fires while the rings are detached —
+    //     RB detach / vulnerable / reassemble. The hit window is a
+    //     thin band around each ring's current radius padded by
+    //     the player's half-size.
     const player = ctxRoom.player;
     if (player.dashIframeTime <= 0) {
       const dx = player.x - this.x;
       const dy = player.y - this.y;
-      const r = SENTINEL_CONTACT_RADIUS + ctxRoom.playerHalfSize;
-      if (dx * dx + dy * dy < r * r) {
-        this.requestPlayerHit = true;
+      const distSq = dx * dx + dy * dy;
+      const half = ctxRoom.playerHalfSize;
+      if (this.bodyDamageActive()) {
+        const r = SENTINEL_CONTACT_RADIUS + half;
+        if (distSq < r * r) {
+          this.requestPlayerHit = true;
+        }
+      }
+      if (this.ringDamageActive()) {
+        const dist = Math.sqrt(distSq);
+        const band = RB_RING_STROKE_HIT_HALFWIDTH + half;
+        const radii = [
+          this.ringRadiusOuter,
+          this.ringRadiusMid,
+          this.ringRadiusInner,
+        ];
+        for (const rr of radii) {
+          if (Math.abs(dist - rr) < band) {
+            this.requestPlayerHit = true;
+            break;
+          }
+        }
       }
     }
+  }
+
+  /** Body takes / deals contact damage during RB-idle, telegraph,
+   *  recovery (and trivially when no RB is active). */
+  private bodyDamageActive(): boolean {
+    return (
+      this.ringBurstPhase === "idle" ||
+      this.ringBurstPhase === "telegraph" ||
+      this.ringBurstPhase === "recovery"
+    );
+  }
+
+  /** Rings touch / damage the player while they're detached —
+   *  detach, vulnerable, reassemble. */
+  private ringDamageActive(): boolean {
+    return (
+      this.ringBurstPhase === "detach" ||
+      this.ringBurstPhase === "vulnerable" ||
+      this.ringBurstPhase === "reassemble"
+    );
   }
 
   private beginAimedShot(ctxRoom: EnemyContext): void {
@@ -825,6 +990,215 @@ export class Sentinel implements Enemy {
     }
   }
 
+  // === Ring Burst ===
+  private tickRingBurst(ctxRoom: EnemyContext, dt: number): void {
+    // Eye-hit feedback is deferred from tryDashDamage to here so we
+    // have ctxRoom (rings + particles + audio).
+    if (this.pendingEyeHit) {
+      this.pendingEyeHit = false;
+      this.triggerEyeHitFeedback(ctxRoom);
+    }
+    if (this.ringBurstPhase === "idle") {
+      // Tick cooldown only while idle so the rest of the timer
+      // semantics — "8 s after recovery" — match the spec.
+      if (this.rbCooldownTimer > 0) {
+        this.rbCooldownTimer = Math.max(0, this.rbCooldownTimer - dt);
+      }
+      const cooldownReady = this.rbCooldownTimer <= 0;
+      const graceReady = this.combatElapsedSec >= RB_FIRST_GRACE_SEC;
+      const otherIdle =
+        this.radialPhase === "idle" && this.aimedPhase === "idle";
+      if (cooldownReady && graceReady && otherIdle) {
+        this.beginRingBurstTelegraph();
+      }
+      return;
+    }
+
+    this.rbTimer += dt;
+    switch (this.ringBurstPhase) {
+      case "telegraph":
+        if (this.rbTimer >= RB_TELEGRAPH_SEC) {
+          this.enterRingBurstDetach(ctxRoom);
+        }
+        break;
+      case "detach": {
+        const t = Math.min(1, this.rbTimer / RB_DETACH_SEC);
+        const eased = 1 - (1 - t) * (1 - t); // easeOutQuad
+        this.ringRadiusOuter =
+          RB_RING_DEFAULT_OUTER +
+          (RB_RING_EXPANDED_OUTER - RB_RING_DEFAULT_OUTER) * eased;
+        this.ringRadiusMid =
+          RB_RING_DEFAULT_MID +
+          (RB_RING_EXPANDED_MID - RB_RING_DEFAULT_MID) * eased;
+        this.ringRadiusInner =
+          RB_RING_DEFAULT_INNER +
+          (RB_RING_EXPANDED_INNER - RB_RING_DEFAULT_INNER) * eased;
+        this.bodyOpacity = 1 - (1 - RB_BODY_OPACITY_GHOSTED) * eased;
+        if (this.rbTimer >= RB_DETACH_SEC) {
+          this.ringRadiusOuter = RB_RING_EXPANDED_OUTER;
+          this.ringRadiusMid = RB_RING_EXPANDED_MID;
+          this.ringRadiusInner = RB_RING_EXPANDED_INNER;
+          this.bodyOpacity = RB_BODY_OPACITY_GHOSTED;
+          this.ringBurstPhase = "vulnerable";
+          this.rbTimer = 0;
+        }
+        break;
+      }
+      case "vulnerable":
+        // Eye gold-rim pulse phase advances on real dt so the
+        // pulse cadence is steady regardless of timeScale.
+        this.eyeVulnerablePulsePhase +=
+          (Math.PI * 2 * dt) / RB_EYE_VULNERABLE_SCALE_PERIOD_SEC;
+        if (this.rbTimer >= RB_VULNERABLE_SEC) {
+          this.ringBurstPhase = "reassemble";
+          this.rbTimer = 0;
+        }
+        break;
+      case "reassemble": {
+        const t = Math.min(1, this.rbTimer / RB_REASSEMBLE_SEC);
+        const eased = t * t; // easeInQuad
+        this.ringRadiusOuter =
+          RB_RING_EXPANDED_OUTER +
+          (RB_RING_DEFAULT_OUTER - RB_RING_EXPANDED_OUTER) * eased;
+        this.ringRadiusMid =
+          RB_RING_EXPANDED_MID +
+          (RB_RING_DEFAULT_MID - RB_RING_EXPANDED_MID) * eased;
+        this.ringRadiusInner =
+          RB_RING_EXPANDED_INNER +
+          (RB_RING_DEFAULT_INNER - RB_RING_EXPANDED_INNER) * eased;
+        this.bodyOpacity =
+          RB_BODY_OPACITY_GHOSTED +
+          (1 - RB_BODY_OPACITY_GHOSTED) * eased;
+        if (this.rbTimer >= RB_REASSEMBLE_SEC) {
+          this.ringRadiusOuter = RB_RING_DEFAULT_OUTER;
+          this.ringRadiusMid = RB_RING_DEFAULT_MID;
+          this.ringRadiusInner = RB_RING_DEFAULT_INNER;
+          this.bodyOpacity = 1;
+          this.ringBurstPhase = "recovery";
+          this.rbTimer = 0;
+        }
+        break;
+      }
+      case "recovery":
+        if (this.rbTimer >= RB_RECOVERY_SEC) {
+          this.ringBurstPhase = "idle";
+          this.rbTimer = 0;
+          this.rbCooldownTimer = RB_COOLDOWN_SEC;
+        }
+        break;
+    }
+  }
+
+  private beginRingBurstTelegraph(): void {
+    this.ringBurstPhase = "telegraph";
+    this.rbTimer = 0;
+    // Telegraph audio cue — reuse alert ping shifted to feel
+    // bigger; full layered sound is a follow-up.
+    audio.play.alert();
+  }
+
+  private enterRingBurstDetach(ctxRoom: EnemyContext): void {
+    this.ringBurstPhase = "detach";
+    this.rbTimer = 0;
+    // Ring-shaped white shockwave + radial particle spray at the
+    // moment the rings leave the body.
+    ctxRoom.rings.push({
+      x: this.x,
+      y: this.y,
+      age: 0,
+      lifetime: RB_DETACH_RING_LIFETIME_SEC,
+      startR: RB_DETACH_RING_START_R,
+      endR: RB_DETACH_RING_END_R,
+      color: "#ffffff",
+      startLineWidth: 4,
+      endLineWidth: 1,
+      glowBlur: 14,
+    });
+    for (let i = 0; i < RB_DETACH_PARTICLE_COUNT; i++) {
+      const a = (i / RB_DETACH_PARTICLE_COUNT) * Math.PI * 2;
+      const speed =
+        RB_DETACH_PARTICLE_SPEED_MIN +
+        Math.random() *
+          (RB_DETACH_PARTICLE_SPEED_MAX - RB_DETACH_PARTICLE_SPEED_MIN);
+      ctxRoom.particles.push({
+        x: this.x,
+        y: this.y,
+        vx: Math.cos(a) * speed,
+        vy: Math.sin(a) * speed,
+        initialSize: 4,
+        color: "#ffffff",
+        age: 0,
+        lifetime: RB_DETACH_PARTICLE_LIFETIME_SEC,
+        glowStrong: 12,
+        glowSoft: 5,
+        drag: 0.94,
+      });
+    }
+    audio.play.bulletBreak();
+  }
+
+  /** Eye reward feedback. Spawns the heavy double ring + 24
+   *  particles, requests an 8 px shake, kicks the hitstop. The
+   *  3 HP damage to the boss is applied by the caller via
+   *  takeDamage(RB_EYE_HIT_DAMAGE) right after this fires. */
+  private triggerEyeHitFeedback(ctxRoom: EnemyContext): void {
+    ctxRoom.rings.push({
+      x: this.x,
+      y: this.y,
+      age: 0,
+      lifetime: RB_EYE_HIT_INNER_RING_LIFETIME_SEC,
+      startR: RB_EYE_HIT_INNER_RING_R0,
+      endR: RB_EYE_HIT_INNER_RING_R1,
+      color: "#ffffff",
+      startLineWidth: 5,
+      endLineWidth: 1,
+      glowBlur: 20,
+    });
+    ctxRoom.rings.push({
+      x: this.x,
+      y: this.y,
+      age: 0,
+      lifetime: RB_EYE_HIT_OUTER_RING_LIFETIME_SEC,
+      startR: RB_EYE_HIT_OUTER_RING_R0,
+      endR: RB_EYE_HIT_OUTER_RING_R1,
+      color: RB_EYE_HIT_OUTER_RING_COLOR,
+      startLineWidth: 4,
+      endLineWidth: 0.5,
+      glowBlur: 18,
+    });
+    const total =
+      RB_EYE_HIT_PARTICLE_COUNT_WHITE + RB_EYE_HIT_PARTICLE_COUNT_GOLD;
+    for (let i = 0; i < total; i++) {
+      const a = (i / total) * Math.PI * 2;
+      const speed =
+        RB_EYE_HIT_PARTICLE_SPEED_MIN +
+        Math.random() *
+          (RB_EYE_HIT_PARTICLE_SPEED_MAX -
+            RB_EYE_HIT_PARTICLE_SPEED_MIN);
+      ctxRoom.particles.push({
+        x: this.x,
+        y: this.y,
+        vx: Math.cos(a) * speed,
+        vy: Math.sin(a) * speed,
+        initialSize: 4,
+        color: i < RB_EYE_HIT_PARTICLE_COUNT_WHITE
+          ? "#ffffff"
+          : RB_EYE_HIT_OUTER_RING_COLOR,
+        age: 0,
+        lifetime: RB_EYE_HIT_PARTICLE_LIFETIME_SEC,
+        glowStrong: 14,
+        glowSoft: 5,
+        drag: 0.94,
+      });
+    }
+    this.pendingShakePx = RB_EYE_HIT_SHAKE_PX;
+    this.pendingShakeSec = RB_EYE_HIT_SHAKE_SEC;
+    this.eyeHitstopTimer = RB_EYE_HITSTOP_SEC;
+    this.timeScale = RB_EYE_HITSTOP_TIMESCALE;
+    audio.play.hitHeavy();
+    audio.play.alert();
+  }
+
   private fireAimedBullet(ctxRoom: EnemyContext): void {
     const speed = AIMED_BULLET_SPEED;
     const cos = Math.cos(this.aimedAngle);
@@ -876,6 +1250,19 @@ export class Sentinel implements Enemy {
     this.bossFlashTimer = 0;
     this.pendingShockwave2DelayTimer = -1;
     this.streamers.length = 0;
+    // Reset Ring Burst — rings snap back to default radii so the
+    // dying cinematic renders the canonical silhouette and the
+    // hitstop / pending eye-hit don't leak into death.
+    this.ringBurstPhase = "idle";
+    this.rbTimer = 0;
+    this.rbCooldownTimer = 0;
+    this.ringRadiusOuter = RB_RING_DEFAULT_OUTER;
+    this.ringRadiusMid = RB_RING_DEFAULT_MID;
+    this.ringRadiusInner = RB_RING_DEFAULT_INNER;
+    this.bodyOpacity = 1;
+    this.eyeHitstopTimer = 0;
+    this.pendingEyeHit = false;
+    this.timeScale = 1;
   }
 
   private updateDying(_ctxRoom: EnemyContext, dt: number): void {
@@ -1201,14 +1588,27 @@ export class Sentinel implements Enemy {
   private renderEyeLayers(ctx: CanvasRenderingContext2D): void {
     // Eye breath — uniform scale + ext-glow alpha sync. Independent
     // of the body's pulse so two cycles overlap rather than echo.
-    const breathScale =
-      EYE_SCALE_MIN +
-      ((Math.sin(this.eyeBreathPhase) + 1) / 2) *
-        (EYE_SCALE_MAX - EYE_SCALE_MIN);
-    const extGlowAlpha =
-      EYE_EXT_GLOW_ALPHA_MIN +
-      ((Math.sin(this.eyeBreathPhase) + 1) / 2) *
-        (EYE_EXT_GLOW_ALPHA_MAX - EYE_EXT_GLOW_ALPHA_MIN);
+    const vulnerable = this.ringBurstPhase === "vulnerable";
+    let breathScale: number;
+    let extGlowAlpha: number;
+    if (vulnerable) {
+      // Vulnerable amplification — bigger pulse on a faster phase
+      // and a fully-on amber rim to read as "shoot here."
+      breathScale =
+        1 +
+        Math.sin(this.eyeVulnerablePulsePhase) *
+          RB_EYE_VULNERABLE_SCALE_AMPLITUDE;
+      extGlowAlpha = 1;
+    } else {
+      breathScale =
+        EYE_SCALE_MIN +
+        ((Math.sin(this.eyeBreathPhase) + 1) / 2) *
+          (EYE_SCALE_MAX - EYE_SCALE_MIN);
+      extGlowAlpha =
+        EYE_EXT_GLOW_ALPHA_MIN +
+        ((Math.sin(this.eyeBreathPhase) + 1) / 2) *
+          (EYE_EXT_GLOW_ALPHA_MAX - EYE_EXT_GLOW_ALPHA_MIN);
+    }
 
     ctx.save();
     ctx.scale(breathScale, breathScale);
@@ -1267,10 +1667,18 @@ export class Sentinel implements Enemy {
 
     // Telegraph jitter — small random offset while charging the
     // radial burst. Aimed-shot telegraph doesn't shake the body
-    // (the line + diamond carry the read).
+    // (the line + diamond carry the read). Ring Burst telegraph
+    // also shakes — same channel, ramped from 0 → RB_TELEGRAPH_JITTER_PX.
     if (this.radialPhase === "telegraph") {
       const t = Math.min(1, this.radialTimer / RADIAL_TELEGRAPH_SEC);
       const intensity = 2 * t;
+      ctx.translate(
+        (Math.random() - 0.5) * intensity * 2,
+        (Math.random() - 0.5) * intensity * 2,
+      );
+    } else if (this.ringBurstPhase === "telegraph") {
+      const t = Math.min(1, this.rbTimer / RB_TELEGRAPH_SEC);
+      const intensity = RB_TELEGRAPH_JITTER_PX * t;
       ctx.translate(
         (Math.random() - 0.5) * intensity * 2,
         (Math.random() - 0.5) * intensity * 2,
@@ -1280,38 +1688,48 @@ export class Sentinel implements Enemy {
     const pulseScale = 1 + Math.sin(this.pulsePhase) * PULSE_AMPLITUDE;
 
     // Body glow alpha — same phase as bodyBreathPhase so the silhouette
-    // pulses light + scale together.
+    // pulses light + scale together. Ring Burst telegraph multiplies
+    // the alpha so the silhouette flares up before the rings detach.
+    const rbGlowMul =
+      this.ringBurstPhase === "telegraph"
+        ? 1 +
+          (RB_TELEGRAPH_GLOW_BOOST - 1) *
+            Math.min(1, this.rbTimer / RB_TELEGRAPH_SEC)
+        : 1;
     const bodyGlowAlpha =
-      BODY_GLOW_ALPHA_MIN +
-      ((Math.sin(this.bodyBreathPhase) + 1) / 2) *
-        (BODY_GLOW_ALPHA_MAX - BODY_GLOW_ALPHA_MIN);
+      (BODY_GLOW_ALPHA_MIN +
+        ((Math.sin(this.bodyBreathPhase) + 1) / 2) *
+          (BODY_GLOW_ALPHA_MAX - BODY_GLOW_ALPHA_MIN)) *
+      rbGlowMul;
 
     // Outer ring with a glow halo — alpha tracks bodyGlowAlpha for
-    // the breath sync.
+    // the breath sync. Whole hex stack is wrapped in bodyOpacity so
+    // it ghosts during Ring Burst detach / vulnerable / reassemble.
     ctx.save();
     ctx.rotate(this.rotation);
+    ctx.globalAlpha = this.bodyOpacity;
     drawNeon(
       ctx,
       () => {
-        ctx.globalAlpha = bodyGlowAlpha;
+        ctx.globalAlpha = bodyGlowAlpha * this.bodyOpacity;
         strokeHexagon(ctx, OUTER_VERTS, pulseScale);
         ctx.strokeStyle = SENTINEL_COLOR;
         ctx.lineWidth = 3;
         ctx.stroke();
-        ctx.globalAlpha = 1;
+        ctx.globalAlpha = this.bodyOpacity;
       },
       SENTINEL_COLOR,
       this.radialPhase === "telegraph" ? 40 : 22,
       10,
     );
 
-    ctx.globalAlpha = 0.7;
+    ctx.globalAlpha = 0.7 * this.bodyOpacity;
     strokeHexagon(ctx, MIDDLE_VERTS, pulseScale);
     ctx.strokeStyle = SENTINEL_COLOR;
     ctx.lineWidth = 2;
     ctx.stroke();
 
-    ctx.globalAlpha = 0.5;
+    ctx.globalAlpha = 0.5 * this.bodyOpacity;
     strokeHexagon(ctx, INNER_VERTS, pulseScale);
     ctx.strokeStyle = SENTINEL_COLOR;
     ctx.lineWidth = 1.5;
@@ -1320,15 +1738,32 @@ export class Sentinel implements Enemy {
     ctx.restore();
 
     // === Three independently-rotating depth rings ===
-    this.renderDepthRing(ctx, 110, this.ringStates[0], OUTER_RING_DEPTH);
-    this.renderDepthRing(ctx, 85, this.ringStates[1], MID_RING_DEPTH);
-    this.renderDepthRing(ctx, 60, this.ringStates[2], INNER_RING_DEPTH);
+    this.renderDepthRing(
+      ctx,
+      this.ringRadiusOuter,
+      this.ringStates[0],
+      OUTER_RING_DEPTH,
+    );
+    this.renderDepthRing(
+      ctx,
+      this.ringRadiusMid,
+      this.ringStates[1],
+      MID_RING_DEPTH,
+    );
+    this.renderDepthRing(
+      ctx,
+      this.ringRadiusInner,
+      this.ringStates[2],
+      INNER_RING_DEPTH,
+    );
 
     // Fragments orbiting the outer vertices — counter-rotation.
+    // Same body-opacity gate as the shells so they vanish together
+    // during Ring Burst.
     ctx.save();
     ctx.rotate(this.fragmentRotation);
     ctx.fillStyle = SENTINEL_COLOR;
-    ctx.globalAlpha = 0.85;
+    ctx.globalAlpha = 0.85 * this.bodyOpacity;
     for (const v of OUTER_VERTS) {
       ctx.beginPath();
       ctx.moveTo(v.x * 1.18, v.y * 1.18);
@@ -1495,8 +1930,12 @@ export class Sentinel implements Enemy {
   }
 
   overlapsPlayer(px: number, py: number, half: number): boolean {
-    // Contact damage is suppressed during cinematic phases.
+    // Contact damage is suppressed during cinematic phases AND
+    // during the ghosted Ring Burst phases (detach / vulnerable /
+    // reassemble). Dash damage to body uses the same gate via
+    // bodyDamageActive() so dash and contact line up.
     if (this.state === "intro" || this.state === "dying") return false;
+    if (!this.bodyDamageActive()) return false;
     const dx = px - this.x;
     const dy = py - this.y;
     const r = SENTINEL_HITBOX_RADIUS + half;
@@ -1511,7 +1950,26 @@ export class Sentinel implements Enemy {
   ): boolean {
     if (this.state !== "idle" && this.state !== "attacking") return false;
     if (dashId === this.dashIdAlreadyDamaged) return false;
-    if (!this.overlapsPlayer(px, py, half)) return false;
+    // Ring Burst vulnerable: only the eye is a valid target. Body
+    // is intangible, ring damage is contact-only (handled in
+    // updateCombat). Eye hit deals RB_EYE_HIT_DAMAGE and queues the
+    // heavy feedback for the next update tick.
+    if (this.ringBurstPhase === "vulnerable") {
+      const dx = px - this.x;
+      const dy = py - this.y;
+      const r = RB_EYE_HITBOX_RADIUS + half;
+      if (dx * dx + dy * dy >= r * r) return false;
+      this.dashIdAlreadyDamaged = dashId;
+      this.takeDamage(RB_EYE_HIT_DAMAGE);
+      this.pendingEyeHit = true;
+      return true;
+    }
+    // Body path — only when the body is solid.
+    if (!this.bodyDamageActive()) return false;
+    const dx = px - this.x;
+    const dy = py - this.y;
+    const r = SENTINEL_HITBOX_RADIUS + half;
+    if (dx * dx + dy * dy >= r * r) return false;
     this.dashIdAlreadyDamaged = dashId;
     this.takeDamage(1);
     return true;
