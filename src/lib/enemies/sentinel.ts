@@ -57,13 +57,33 @@ const POSITION_LERP_PER_FRAME = 0.04; // applied at 60 fps via realDt * 60
 const DEFAULT_ARENA_W = 1600;
 const DEFAULT_ARENA_H = 1200;
 
-// Attack — radial burst
-const ATTACK_PERIOD_SEC = 2.5;
-const TELEGRAPH_SEC = 0.4;
-const BURST_FIRE_SEC = 0.05;
-const RECOVERY_SEC = 0.3;
-const BURST_BULLET_COUNT = 12;
-const BURST_BULLET_SPEED = 350;
+// Attack 1 — radial burst (kept readable, idle gap shrunk so the
+// total cycle = 0.65 + 0.4 + 0.05 + 0.3 = 1.4 s).
+const RADIAL_IDLE_GAP_SEC = 0.65;
+const RADIAL_TELEGRAPH_SEC = 0.4;
+const RADIAL_FIRING_SEC = 0.05;
+const RADIAL_RECOVERY_SEC = 0.3;
+const RADIAL_BURST_COUNT = 12;
+const RADIAL_BURST_SPEED = 350;
+
+// Attack 2 — Aimed Shot Trio. Lock target on telegraph entry, fire
+// 3 fast bullets along the locked angle 150 ms apart, recover. Total
+// cycle: 0.6 + 0.45 + 0.3 + 3.0 = 4.35 s.
+const AIMED_TELEGRAPH_SEC = 0.6;
+const AIMED_FIRING_SEC = 0.45;
+const AIMED_RECOVERY_SEC = 0.3;
+const AIMED_COOLDOWN_SEC = 3.0;
+const AIMED_BULLET_COUNT = 3;
+const AIMED_BULLET_INTERVAL_SEC = 0.15;
+const AIMED_BULLET_SPEED = 450;
+// Aim-line dashed pattern + crawl rate (px/s) — draws as a "live"
+// threat instead of a static red line.
+const AIMED_DASH_PATTERN: [number, number] = [10, 8];
+const AIMED_DASH_RATE = 60;
+const AIMED_LINE_GLOW = 12;
+const AIMED_DIAMOND_SIZE = 14;
+const AIMED_MUZZLE_PARTICLE_COUNT = 8;
+const AIMED_MUZZLE_PARTICLE_LIFETIME_SEC = 0.2;
 
 // Dying timeline (ms, all relative to dying-state entry).
 const DYING_SLOWMO_RAMP_MS = 200;
@@ -115,7 +135,7 @@ export type SentinelState =
   | "dying"
   | "defeated";
 
-type AttackPhase = "between" | "telegraph" | "burst" | "recovery";
+type AttackPhase = "idle" | "telegraph" | "firing" | "recovery";
 
 type DyingFragment = {
   x: number;
@@ -172,10 +192,26 @@ export class Sentinel implements Enemy {
   private readonly arenaW: number;
   private readonly arenaH: number;
 
-  // attack
-  private attackPhase: AttackPhase = "between";
-  private attackTimer = 0;
-  private cycleTimer = 0;
+  // Attack 1 — radial burst sub-state machine. radialIdleTimer
+  // counts up only while no attack is active and only during
+  // radialPhase === "idle"; reaching RADIAL_IDLE_GAP_SEC means the
+  // attack is "ready". radialTimer is time in the current phase.
+  private radialPhase: AttackPhase = "idle";
+  private radialTimer = 0;
+  private radialIdleTimer = 0;
+
+  // Attack 2 — Aimed Shot Trio sub-state machine. Same shape as the
+  // radial machine; lockX/Y/angle are captured at telegraph entry
+  // and the line + bullets stay fixed (player must side-step off
+  // the line).
+  private aimedPhase: AttackPhase = "idle";
+  private aimedTimer = 0;
+  private aimedIdleTimer = 0;
+  private aimedLockX = 0;
+  private aimedLockY = 0;
+  private aimedAngle = 0;
+  private aimedShotsFired = 0;
+  private aimedDashOffset = 0; // crawl offset for the dashed telegraph line
 
   // damage / death
   private dashIdAlreadyDamaged = -1;
@@ -364,49 +400,117 @@ export class Sentinel implements Enemy {
     this.vx = (targetX - this.x) * lerp * 60;
     this.vy = (targetY - this.y) * lerp * 60;
 
-    // Attack cycle. cycleTimer counts up across phases.
-    this.cycleTimer += dt;
-    this.attackTimer += dt;
-    switch (this.attackPhase) {
-      case "between": {
-        if (this.cycleTimer >= ATTACK_PERIOD_SEC) {
-          this.attackPhase = "telegraph";
-          this.attackTimer = 0;
-          this.state = "attacking";
+    // === Attack scheduling — dual sub-state machines ===
+    // Only one attack runs at a time. Whichever attack is in a
+    // non-idle phase blocks the other one's cooldown from ticking,
+    // so the boss reads as "doing one thing." When both are idle
+    // and at least one is ready, the one that's been ready longer
+    // wins (overshoot comparison).
+    const radialBlocked = this.aimedPhase !== "idle";
+    const aimedBlocked = this.radialPhase !== "idle";
+
+    // ---- Radial sub-machine ----
+    if (!radialBlocked) {
+      if (this.radialPhase === "idle") {
+        this.radialIdleTimer += dt;
+      } else {
+        this.radialTimer += dt;
+        if (this.radialPhase === "telegraph" && this.radialTimer >= RADIAL_TELEGRAPH_SEC) {
+          this.radialPhase = "firing";
+          this.radialTimer = 0;
+          this.fireRadialBurst(ctxRoom);
+        } else if (this.radialPhase === "firing" && this.radialTimer >= RADIAL_FIRING_SEC) {
+          this.radialPhase = "recovery";
+          this.radialTimer = 0;
+        } else if (this.radialPhase === "recovery" && this.radialTimer >= RADIAL_RECOVERY_SEC) {
+          this.radialPhase = "idle";
+          this.radialTimer = 0;
+          this.radialIdleTimer = 0;
         }
-        break;
-      }
-      case "telegraph": {
-        if (this.attackTimer >= TELEGRAPH_SEC) {
-          this.attackPhase = "burst";
-          this.attackTimer = 0;
-          this.fireBurst(ctxRoom);
-        }
-        break;
-      }
-      case "burst": {
-        if (this.attackTimer >= BURST_FIRE_SEC) {
-          this.attackPhase = "recovery";
-          this.attackTimer = 0;
-        }
-        break;
-      }
-      case "recovery": {
-        if (this.attackTimer >= RECOVERY_SEC) {
-          this.attackPhase = "between";
-          this.attackTimer = 0;
-          this.cycleTimer = 0;
-          this.state = "idle";
-        }
-        break;
       }
     }
+
+    // ---- Aimed sub-machine ----
+    if (!aimedBlocked) {
+      if (this.aimedPhase === "idle") {
+        this.aimedIdleTimer += dt;
+      } else {
+        this.aimedTimer += dt;
+        if (this.aimedPhase === "telegraph") {
+          // crawl the dashed-line offset so the line reads "live"
+          const span = AIMED_DASH_PATTERN[0] + AIMED_DASH_PATTERN[1];
+          this.aimedDashOffset =
+            (this.aimedDashOffset + AIMED_DASH_RATE * dt) % span;
+          if (this.aimedTimer >= AIMED_TELEGRAPH_SEC) {
+            this.aimedPhase = "firing";
+            this.aimedTimer = 0;
+            this.aimedShotsFired = 0;
+          }
+        } else if (this.aimedPhase === "firing") {
+          // Spawn each bullet as its scheduled offset is crossed.
+          while (
+            this.aimedShotsFired < AIMED_BULLET_COUNT &&
+            this.aimedTimer >=
+              this.aimedShotsFired * AIMED_BULLET_INTERVAL_SEC
+          ) {
+            this.fireAimedBullet(ctxRoom);
+            this.aimedShotsFired += 1;
+          }
+          if (this.aimedTimer >= AIMED_FIRING_SEC) {
+            this.aimedPhase = "recovery";
+            this.aimedTimer = 0;
+          }
+        } else if (this.aimedPhase === "recovery") {
+          if (this.aimedTimer >= AIMED_RECOVERY_SEC) {
+            this.aimedPhase = "idle";
+            this.aimedTimer = 0;
+            this.aimedIdleTimer = 0;
+          }
+        }
+      }
+    }
+
+    // ---- Decide whether to start an attack now ----
+    if (this.radialPhase === "idle" && this.aimedPhase === "idle") {
+      const radialReady = this.radialIdleTimer >= RADIAL_IDLE_GAP_SEC;
+      const aimedReady = this.aimedIdleTimer >= AIMED_COOLDOWN_SEC;
+      if (radialReady || aimedReady) {
+        const radialOver = this.radialIdleTimer - RADIAL_IDLE_GAP_SEC;
+        const aimedOver = this.aimedIdleTimer - AIMED_COOLDOWN_SEC;
+        if (radialReady && (!aimedReady || radialOver >= aimedOver)) {
+          this.radialPhase = "telegraph";
+          this.radialTimer = 0;
+        } else if (aimedReady) {
+          this.beginAimedShot(ctxRoom);
+        }
+      }
+    }
+
+    // Reflect activity back into the public state field — rooms-game
+    // reads this for HP-bar visibility / kill-credit transitions.
+    this.state =
+      this.radialPhase !== "idle" || this.aimedPhase !== "idle"
+        ? "attacking"
+        : "idle";
   }
 
-  private fireBurst(ctxRoom: EnemyContext): void {
-    const speed = BURST_BULLET_SPEED;
-    for (let i = 0; i < BURST_BULLET_COUNT; i++) {
-      const a = (i / BURST_BULLET_COUNT) * Math.PI * 2;
+  private beginAimedShot(ctxRoom: EnemyContext): void {
+    const { player } = ctxRoom;
+    this.aimedPhase = "telegraph";
+    this.aimedTimer = 0;
+    this.aimedDashOffset = 0;
+    this.aimedLockX = player.x;
+    this.aimedLockY = player.y;
+    this.aimedAngle = Math.atan2(
+      this.aimedLockY - this.y,
+      this.aimedLockX - this.x,
+    );
+  }
+
+  private fireRadialBurst(ctxRoom: EnemyContext): void {
+    const speed = RADIAL_BURST_SPEED;
+    for (let i = 0; i < RADIAL_BURST_COUNT; i++) {
+      const a = (i / RADIAL_BURST_COUNT) * Math.PI * 2;
       ctxRoom.bullets.push(
         makeBullet(
           this.x,
@@ -419,6 +523,35 @@ export class Sentinel implements Enemy {
     }
   }
 
+  private fireAimedBullet(ctxRoom: EnemyContext): void {
+    const speed = AIMED_BULLET_SPEED;
+    const cos = Math.cos(this.aimedAngle);
+    const sin = Math.sin(this.aimedAngle);
+    ctxRoom.bullets.push(
+      makeBullet(this.x, this.y, cos * speed, sin * speed, false),
+    );
+    // Muzzle flash — small particle puff at the boss centre, random
+    // directions so it reads as a "shot fired" cue without competing
+    // with the bullet trajectory.
+    for (let i = 0; i < AIMED_MUZZLE_PARTICLE_COUNT; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const ps = 100 + Math.random() * 80;
+      ctxRoom.particles.push({
+        x: this.x,
+        y: this.y,
+        vx: Math.cos(a) * ps,
+        vy: Math.sin(a) * ps,
+        initialSize: 3,
+        color: SENTINEL_COLOR,
+        age: 0,
+        lifetime: AIMED_MUZZLE_PARTICLE_LIFETIME_SEC,
+        glowStrong: 8,
+        glowSoft: 3,
+        drag: 0.92,
+      });
+    }
+  }
+
   // -------- dying --------
 
   private enterDying(): void {
@@ -426,11 +559,16 @@ export class Sentinel implements Enemy {
     this.stateTimer = 0;
     this.deathX = this.x;
     this.deathY = this.y;
-    // Freeze any in-flight burst — telegraph or recovery beats stop
-    // cold so the death cinematic owns the audio/visual focus.
-    this.attackPhase = "between";
-    this.attackTimer = 0;
-    this.cycleTimer = 0;
+    // Freeze any in-flight attack — telegraph / firing / recovery
+    // beats stop cold so the death cinematic owns the audio/visual
+    // focus.
+    this.radialPhase = "idle";
+    this.radialTimer = 0;
+    this.radialIdleTimer = 0;
+    this.aimedPhase = "idle";
+    this.aimedTimer = 0;
+    this.aimedIdleTimer = 0;
+    this.aimedShotsFired = 0;
   }
 
   private updateDying(_ctxRoom: EnemyContext, dt: number): void {
@@ -544,8 +682,59 @@ export class Sentinel implements Enemy {
       this.renderDying(ctx);
       return;
     }
-    // idle / attacking — full body
+    // idle / attacking — aim-line first (so the body draws on top
+    // of it), then the body.
+    if (this.aimedPhase === "telegraph") {
+      this.renderAimedTelegraph(ctx);
+    }
     this.renderBody(ctx, 1);
+  }
+
+  private renderAimedTelegraph(ctx: CanvasRenderingContext2D): void {
+    // Locked dashed line from boss centre out to the arena edge in
+    // the direction captured at telegraph entry. Crawls forward at
+    // AIMED_DASH_RATE to read as a live threat.
+    const dist = rayDistToArenaEdge(
+      this.x,
+      this.y,
+      this.aimedAngle,
+      this.arenaW,
+      this.arenaH,
+    );
+    const endX = this.x + Math.cos(this.aimedAngle) * dist;
+    const endY = this.y + Math.sin(this.aimedAngle) * dist;
+    ctx.save();
+    ctx.strokeStyle = SENTINEL_COLOR;
+    ctx.lineWidth = 2;
+    ctx.setLineDash(AIMED_DASH_PATTERN);
+    ctx.lineDashOffset = -this.aimedDashOffset;
+    ctx.shadowColor = SENTINEL_COLOR;
+    ctx.shadowBlur = AIMED_LINE_GLOW;
+    ctx.beginPath();
+    ctx.moveTo(this.x, this.y);
+    ctx.lineTo(endX, endY);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.restore();
+
+    // Pulsing diamond on the locked target — sin wave at the
+    // telegraph-window frequency so it does roughly two pulses
+    // before the bullets fly.
+    const pulse =
+      1 +
+      0.2 *
+        Math.sin(
+          (this.aimedTimer / AIMED_TELEGRAPH_SEC) * Math.PI * 4,
+        );
+    const half = (AIMED_DIAMOND_SIZE / 2) * pulse;
+    ctx.save();
+    ctx.translate(this.aimedLockX, this.aimedLockY);
+    ctx.rotate(Math.PI / 4);
+    ctx.fillStyle = SENTINEL_COLOR;
+    ctx.shadowColor = SENTINEL_COLOR;
+    ctx.shadowBlur = AIMED_LINE_GLOW;
+    ctx.fillRect(-half, -half, half * 2, half * 2);
+    ctx.restore();
   }
 
   private renderIntro(ctx: CanvasRenderingContext2D): void {
@@ -634,9 +823,11 @@ export class Sentinel implements Enemy {
     ctx.translate(this.x, this.y);
     if (scale !== 1) ctx.scale(scale, scale);
 
-    // Telegraph jitter — small random offset while charging.
-    if (this.attackPhase === "telegraph") {
-      const t = Math.min(1, this.attackTimer / TELEGRAPH_SEC);
+    // Telegraph jitter — small random offset while charging the
+    // radial burst. Aimed-shot telegraph doesn't shake the body
+    // (the line + diamond carry the read).
+    if (this.radialPhase === "telegraph") {
+      const t = Math.min(1, this.radialTimer / RADIAL_TELEGRAPH_SEC);
       const intensity = 2 * t;
       ctx.translate(
         (Math.random() - 0.5) * intensity * 2,
@@ -660,7 +851,7 @@ export class Sentinel implements Enemy {
         ctx.stroke();
       },
       SENTINEL_COLOR,
-      this.attackPhase === "telegraph" ? 40 : 22,
+      this.radialPhase === "telegraph" ? 40 : 22,
       10,
     );
 
@@ -712,8 +903,8 @@ export class Sentinel implements Enemy {
     ctx.fillStyle = "#ffffff";
     ctx.globalAlpha = 1;
     const pupilR =
-      this.attackPhase === "telegraph"
-        ? 6 + 6 * Math.min(1, this.attackTimer / TELEGRAPH_SEC)
+      this.radialPhase === "telegraph"
+        ? 6 + 6 * Math.min(1, this.radialTimer / RADIAL_TELEGRAPH_SEC)
         : 6;
     circle(ctx, 0, 0, pupilR);
 
@@ -923,6 +1114,29 @@ function circle(
   ctx.beginPath();
   ctx.arc(x, y, r, 0, Math.PI * 2);
   ctx.fill();
+}
+
+/** Distance along (cos a, sin a) from (x, y) to the arena's outer
+ *  bounds. Used to terminate the aim-line cleanly at the wall
+ *  instead of letting it draw past the visible space. */
+function rayDistToArenaEdge(
+  x: number,
+  y: number,
+  angle: number,
+  w: number,
+  h: number,
+): number {
+  const dx = Math.cos(angle);
+  const dy = Math.sin(angle);
+  let tx = Infinity;
+  let ty = Infinity;
+  if (Math.abs(dx) > 1e-6) {
+    tx = dx > 0 ? (w - x) / dx : -x / dx;
+  }
+  if (Math.abs(dy) > 1e-6) {
+    ty = dy > 0 ? (h - y) / dy : -y / dy;
+  }
+  return Math.max(0, Math.min(tx, ty));
 }
 
 export const SENTINEL_HP_MAX_EXPORT = SENTINEL_HP_MAX;

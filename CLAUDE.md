@@ -645,12 +645,31 @@ transitions for score + Game Complete.
   hitbox + 60 px so the lemniscate can't kiss the walls, and a
   hard `[hitbox, arena − hitbox]` clamp backs it up. Movement
   only ticks in these two combat states (intro and dying both
-  hold the boss still). Radial-burst cycle on a 2.5 s cadence
-  (0.4 s telegraph + 12 bullets at 350 px/s + 0.3 s recovery)
-  spawns from the live boss position. Damage via dash-through
-  (1 HP per dash) works only in these two states. The HP bar
-  sits below the HUD block (HUD_BOTTOM_Y + 24 px pad) so the
-  ROOM/HP/SCORE row never overlaps the boss bar.
+  hold the boss still). The boss runs **two parallel attack
+  sub-machines**, each `idle / telegraph / firing / recovery`,
+  with a non-overlap rule — whichever one is non-idle freezes
+  the other one's cooldown timer, and when both are idle the
+  one whose readiness has overshot longer wins (so the rare
+  attack can't get permanently starved):
+  - **Radial Burst** — 1.4 s total cycle: 0.4 s telegraph +
+    single firing frame (12 bullets fanned at 350 px/s) +
+    0.3 s recovery + 0.65 s idle gap. Spawns from the live
+    boss position.
+  - **Aimed Shot Trio** — 4.35 s total cycle: 0.6 s telegraph
+    that locks `(lockX, lockY) = player.x/y at entry` and
+    captures `aimAngle` (the line and bullets stay frozen on
+    that angle — player must side-step off the line) + 0.45 s
+    firing window with 3 bullets fired 150 ms apart along the
+    locked angle at 450 px/s + 0.3 s recovery + 3.0 s cooldown.
+    The telegraph draws a dashed cyan-style line from the boss
+    to the arena edge (10/8 dash pattern crawling at 60 px/s,
+    line glow 12) plus a 14 × 14 px diamond pulsing 0.8 ↔ 1.2
+    on the locked target. Each fired bullet pops an 8-particle
+    muzzle flash at the boss centre.
+  Damage via dash-through (1 HP per dash) works only in these
+  two states. The HP bar sits below the HUD block
+  (HUD_BOTTOM_Y + 24 px pad) so the ROOM/HP/SCORE row never
+  overlaps the boss bar.
 - **dying** (6050 ms): triggered by `takeDamage` driving HP to
   0. `shouldFreezeWorld()` is true again — the death cinematic
   is the focus. `Sentinel.timeScale` ramps `1.0 → 0.3` over the
