@@ -261,9 +261,14 @@ export const WATCHER_IDLE_PUPIL_INTERVAL_MAX_MS = 2000;
 // (Watcher sees furthest as a sniper; Hunter shortest, since it gets
 // in close fast). Player entering the radius transitions idle → alerting,
 // alerting holds for ALERT_DURATION_MS, then flips to aggro.
-export const ENEMY_TURRET_DETECTION = 280;
-export const ENEMY_WATCHER_DETECTION = 350;
-export const ENEMY_HUNTER_DETECTION = 220;
+// Detection is fixed per archetype — same value everywhere in the
+// game, no per-instance overrides. Players learn the "wake distance"
+// once and it carries across rooms. Tuned against the longest-range
+// rooms (corridor) so corner turrets still wake before the player is
+// on top of them.
+export const ENEMY_TURRET_DETECTION = 400;
+export const ENEMY_WATCHER_DETECTION = 500;
+export const ENEMY_HUNTER_DETECTION = 350;
 export const ALERT_DURATION_MS = 500;
 // Alerting visual — jitter through the whole window + a single
 // ring-burst on transition. Old squash/glow/exclamation were removed

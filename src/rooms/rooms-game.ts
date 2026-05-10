@@ -1185,9 +1185,15 @@ export function start(canvas: HTMLCanvasElement): void {
       b.y += b.vy * dt;
       pushTrailSample(b);
     }
+    // Bullet bounds use the CURRENT room's world dimensions, not the
+    // canonical 1200x800 viewport. In a wide camera room (Room 4 is
+    // 3600 wide) bullets fired from x=1900+ would otherwise be
+    // filtered the moment they leave the screen letterbox bounds.
+    const worldW = currentRoom.width ?? ROOM_W_PX;
+    const worldH = currentRoom.height ?? ROOM_H_PX;
     bullets = bullets.filter((b) => {
-      if (b.x < -40 || b.x > ROOM_W_PX + 40) return false;
-      if (b.y < -40 || b.y > ROOM_H_PX + 40) return false;
+      if (b.x < -40 || b.x > worldW + 40) return false;
+      if (b.y < -40 || b.y > worldH + 40) return false;
       if (bulletInsideWall(b.x, b.y, currentRoom.walls)) return false;
       return true;
     });

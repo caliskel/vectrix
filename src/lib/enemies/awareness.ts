@@ -191,12 +191,3 @@ export function initAwareness(enemy: Enemy, detectionRadius: number): void {
   enemy.alertTimer = 0;
 }
 
-/**
- * Apply a per-instance detectionRadius override after construction.
- * Used by encounter authoring (Room 4 staggers turret radii so the
- * corridor wakes them up one by one) without changing the archetype
- * default for other rooms.
- */
-export function setDetectionRadius(enemy: Enemy, radius: number): void {
-  enemy.detectionRadius = radius;
-}

@@ -467,15 +467,16 @@ states. `applyAwarenessJitter` is called from each enemy's
 `draw` so the body shake stays sealed inside the enemy's own
 transform stack.
 
-Detection radii live in `config.ts`: Turret 280, Watcher 350
-(sniper sight line), Hunter 220 (he gets in close fast).
-Per-instance overrides via `setDetectionRadius(enemy, n)` —
-Room 4's corridor staggers radii (Turret 1 = 400, Turret 2 = 500,
-Turret 3 = 500, Watcher = 600) so the hallway wakes enemies
-left-to-right as the player crosses it. Resets implicitly on
-`restartRun` because rooms are rebuilt with fresh enemy
-instances; on room transitions the next room's enemies arrive
-in `idle` for the same reason.
+Detection radii live in `config.ts` and are **fixed per archetype**
+across the whole game — `ENEMY_TURRET_DETECTION = 400`,
+`ENEMY_WATCHER_DETECTION = 500`, `ENEMY_HUNTER_DETECTION = 350`.
+No per-instance override mechanism on purpose: the player learns
+the wake distance once and it carries across every room. Values
+are tuned against the longest-range room (the Room 4 corridor)
+so corner enemies still wake before the player is on top of
+them. Resets implicitly on `restartRun` because rooms are
+rebuilt with fresh enemy instances; on room transitions the
+next room's enemies arrive in `idle` for the same reason.
 
 The HUD top-center renders **DETECTED** (red) if any enemy is
 aggro, **ALERT** (orange) if any is alerting, otherwise nothing.
