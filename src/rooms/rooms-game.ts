@@ -21,6 +21,10 @@ import {
   updateKey,
 } from "../lib/keys";
 import {
+  DASH_COOLDOWN_MS,
+  DASH_DISTANCE,
+  DASH_DURATION_MS,
+  DASH_IFRAMES_MS,
   PARTICLE_BASE_SPEED_MAX,
   PARTICLE_BASE_SPEED_MIN,
   PARTICLE_DASH_SPAWN_INTERVAL_MS,
@@ -32,6 +36,9 @@ import {
   PARTICLE_SIZE_MIN_FACTOR,
   PARTICLE_SPAWN_INTERVAL_MS,
   PARTICLE_TRAIL_MIN_SPEED,
+  PLAYER_MAX_SPEED,
+  PLAYER_SIZE,
+  PLAYER_WALK_FACTOR,
   loadSettings,
   type Settings,
 } from "../lib/config";
@@ -707,9 +714,9 @@ export function start(canvas: HTMLCanvasElement): void {
     dy /= len;
     player.dashDirX = dx;
     player.dashDirY = dy;
-    player.dashTime = settings.dash.durationMs / 1000;
-    player.dashIframeTime = settings.dash.iframesMs / 1000;
-    const v = dashSpeed(settings.dash.distance, settings.dash.durationMs);
+    player.dashTime = DASH_DURATION_MS / 1000;
+    player.dashIframeTime = DASH_IFRAMES_MS / 1000;
+    const v = dashSpeed(DASH_DISTANCE, DASH_DURATION_MS);
     player.vx = dx * v;
     player.vy = dy * v;
     state.dashId++;
@@ -720,7 +727,7 @@ export function start(canvas: HTMLCanvasElement): void {
     if (player.dashTime <= 0) return;
     player.dashTime = 0;
     player.dashIframeTime = 0;
-    player.cooldown = settings.dash.cooldownMs / 1000;
+    player.cooldown = DASH_COOLDOWN_MS / 1000;
     player.vx *= 0.35;
     player.vy *= 0.35;
   }
@@ -766,7 +773,7 @@ export function start(canvas: HTMLCanvasElement): void {
         y: player.y,
         vx,
         vy,
-        initialSize: settings.player.size * sizeFactor,
+        initialSize: PLAYER_SIZE * sizeFactor,
         color,
         age: 0,
         lifetime,
@@ -1026,8 +1033,8 @@ export function start(canvas: HTMLCanvasElement): void {
       // keep the eye animation alive (closing, blink decay) while overlay is up
       updateEye(player, dt, {
         threat: null,
-        size: settings.player.size,
-        dashDurationSec: settings.dash.durationMs / 1000,
+        size: PLAYER_SIZE,
+        dashDurationSec: DASH_DURATION_MS / 1000,
       });
       render();
       requestAnimationFrame(frame);
@@ -1055,8 +1062,8 @@ export function start(canvas: HTMLCanvasElement): void {
           size: settings.bullets.size,
           color: settings.bullets.color,
         },
-        playerHalfSize: settings.player.size / 2,
-        playerMaxSpeed: settings.player.maxSpeed,
+        playerHalfSize: PLAYER_SIZE / 2,
+        playerMaxSpeed: PLAYER_MAX_SPEED,
         walls: currentRoom.walls,
       });
       consumeSentinelEffects(sentinel);
@@ -1079,8 +1086,8 @@ export function start(canvas: HTMLCanvasElement): void {
       // cinematic.
       updateEye(player, dt, {
         threat: null,
-        size: settings.player.size,
-        dashDurationSec: settings.dash.durationMs / 1000,
+        size: PLAYER_SIZE,
+        dashDurationSec: DASH_DURATION_MS / 1000,
       });
       if (state.screenShakeRemaining > 0) {
         state.screenShakeRemaining = Math.max(
@@ -1114,12 +1121,12 @@ export function start(canvas: HTMLCanvasElement): void {
 
     if (player.dashTime > 0) {
       player.dashTime -= dt;
-      const v = dashSpeed(settings.dash.distance, settings.dash.durationMs);
+      const v = dashSpeed(DASH_DISTANCE, DASH_DURATION_MS);
       player.vx = player.dashDirX * v;
       player.vy = player.dashDirY * v;
       if (player.dashTime <= 0) {
         player.dashTime = 0;
-        player.cooldown = settings.dash.cooldownMs / 1000;
+        player.cooldown = DASH_COOLDOWN_MS / 1000;
         player.vx *= 0.35;
         player.vy *= 0.35;
       }
@@ -1129,15 +1136,15 @@ export function start(canvas: HTMLCanvasElement): void {
         player.facingX = input.x;
         player.facingY = input.y;
       }
-      const accel = settings.player.maxSpeed * ACCEL_FACTOR;
+      const accel = PLAYER_MAX_SPEED * ACCEL_FACTOR;
       player.vx += input.x * accel * dt;
       player.vy += input.y * accel * dt;
       const damp = Math.exp(-FRICTION * dt);
       player.vx *= damp;
       player.vy *= damp;
       const cap = keys.has(settings.bindings.walk)
-        ? settings.player.maxSpeed * settings.player.walkFactor
-        : settings.player.maxSpeed;
+        ? PLAYER_MAX_SPEED * PLAYER_WALK_FACTOR
+        : PLAYER_MAX_SPEED;
       const sp = Math.hypot(player.vx, player.vy);
       if (sp > cap) {
         const k = cap / sp;
@@ -1171,7 +1178,7 @@ export function start(canvas: HTMLCanvasElement): void {
     player.x += player.vx * dt;
     player.y += player.vy * dt;
 
-    const half = settings.player.size / 2;
+    const half = PLAYER_SIZE / 2;
     const wasDashing = player.dashTime > 0;
 
     // Explicit arena-perimeter clamp + smash — mirrors the sandbox
@@ -1358,8 +1365,8 @@ export function start(canvas: HTMLCanvasElement): void {
         size: settings.bullets.size,
         color: settings.bullets.color,
       },
-      playerHalfSize: settings.player.size / 2,
-      playerMaxSpeed: settings.player.maxSpeed,
+      playerHalfSize: PLAYER_SIZE / 2,
+      playerMaxSpeed: PLAYER_MAX_SPEED,
       walls: currentRoom.walls,
     };
     // Lazy spawns (Room 4 corridor) — fire any pending enemy whose
@@ -1408,7 +1415,7 @@ export function start(canvas: HTMLCanvasElement): void {
 
     // player vs lasers (only the firing window)
     if (state.runState === "playing") {
-      const halfPlus = settings.player.size / 2 + LASER_HIT_PADDING;
+      const halfPlus = PLAYER_SIZE / 2 + LASER_HIT_PADDING;
       const halfPlus2 = halfPlus * halfPlus;
       for (const l of lasers) {
         if (l.age < l.chargingDuration) continue;
@@ -1432,7 +1439,7 @@ export function start(canvas: HTMLCanvasElement): void {
               floatingTexts,
               `+${LASER_DODGE_SCORE}`,
               player.x,
-              player.y - settings.player.size,
+              player.y - PLAYER_SIZE,
               {
                 size: 16,
                 color: "#facc15",
@@ -1532,7 +1539,7 @@ export function start(canvas: HTMLCanvasElement): void {
 
     // bullet vs player (no scoring, just damage)
     if (state.hitIframe <= 0 && player.dashIframeTime <= 0) {
-      const ph = settings.player.size / 2;
+      const ph = PLAYER_SIZE / 2;
       const bh = settings.bullets.size / 2;
       for (const b of bullets) {
         if (
@@ -1550,7 +1557,7 @@ export function start(canvas: HTMLCanvasElement): void {
     // per dash via dashedThroughId so a single bullet can't fire the
     // tic twice as it crosses the player.
     if (player.dashIframeTime > 0) {
-      const ph = settings.player.size / 2;
+      const ph = PLAYER_SIZE / 2;
       const bh = settings.bullets.size / 2;
       for (const b of bullets) {
         if (b.dashedThroughId === state.dashId) continue;
@@ -1596,7 +1603,7 @@ export function start(canvas: HTMLCanvasElement): void {
           floatingTexts,
           "KEY ACQUIRED",
           player.x,
-          player.y - settings.player.size,
+          player.y - PLAYER_SIZE,
           {
             size: 18,
             color: "#ffd60a",
@@ -1633,8 +1640,8 @@ export function start(canvas: HTMLCanvasElement): void {
       enemies: currentRoom.enemies,
       mode: "rooms",
       hitIframe: state.hitIframe,
-      size: settings.player.size,
-      dashDurationSec: settings.dash.durationMs / 1000,
+      size: PLAYER_SIZE,
+      dashDurationSec: DASH_DURATION_MS / 1000,
     });
 
     // door overlap → transition
@@ -1774,7 +1781,7 @@ export function start(canvas: HTMLCanvasElement): void {
     }
 
     // player
-    const pSize = settings.player.size;
+    const pSize = PLAYER_SIZE;
 
     let drawPlayer = true;
     if (state.hitIframe > 0) {
@@ -1790,8 +1797,8 @@ export function start(canvas: HTMLCanvasElement): void {
         ringColor: profile.outerRing,
         pupilColor: profile.pupil,
         ghostColor: profile.outerRing,
-        dashDurationSec: settings.dash.durationMs / 1000,
-        dashCooldownSec: settings.dash.cooldownMs / 1000,
+        dashDurationSec: DASH_DURATION_MS / 1000,
+        dashCooldownSec: DASH_COOLDOWN_MS / 1000,
         profile,
       });
     }

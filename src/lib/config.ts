@@ -18,19 +18,6 @@ export type BulletsSettings = {
   color: string;
 };
 
-export type PlayerSettings = {
-  size: number;
-  maxSpeed: number;
-  walkFactor: number; // 0.2–0.8
-};
-
-export type DashSettings = {
-  distance: number;
-  durationMs: number;
-  iframesMs: number;
-  cooldownMs: number;
-};
-
 export type RunSettings = {
   durationSec: number; // 0 = infinite, otherwise hard time limit in seconds
 };
@@ -77,8 +64,6 @@ export type PickupsSettings = {
 export type Settings = {
   bindings: Bindings;
   bullets: BulletsSettings;
-  player: PlayerSettings;
-  dash: DashSettings;
   run: RunSettings;
   pickups: PickupsSettings;
   audio: AudioSettings;
@@ -87,7 +72,22 @@ export type Settings = {
 import { PALETTE } from "./palette";
 export { PALETTE };
 
-export const STORAGE_KEY = "dash-proto:settings:v3";
+export const STORAGE_KEY = "dash-proto:settings:v4";
+const STORAGE_KEY_LEGACY_V3 = "dash-proto:settings:v3";
+
+// Player + dash physics are intentionally NOT in Settings so all
+// modes (sandbox / rooms / tutorial) share the same hero. Sandbox
+// used to expose these via PlayerSettings / DashSettings, which let
+// rooms inherit player.size / dash.cooldownMs etc — that's the bug.
+// Numbers below match the v3 PRESETS.Default at the moment of the
+// move; touch them here to adjust hero feel everywhere at once.
+export const PLAYER_SIZE = 32;
+export const PLAYER_MAX_SPEED = 440;
+export const PLAYER_WALK_FACTOR = 0.4;
+export const DASH_DISTANCE = 120;
+export const DASH_DURATION_MS = 120;
+export const DASH_IFRAMES_MS = 150;
+export const DASH_COOLDOWN_MS = 800;
 
 // Player particle trail tuning. Plain constants (not in Settings) — these
 // are feel parameters that don't need a menu surface yet.
@@ -369,17 +369,6 @@ export const DEFAULT_SETTINGS: Settings = {
     maxBullets: 30,
     color: PALETTE.bullet,
   },
-  player: {
-    size: 32,
-    maxSpeed: 440,
-    walkFactor: 0.4,
-  },
-  dash: {
-    distance: 120,
-    durationMs: 120,
-    iframesMs: 150,
-    cooldownMs: 800,
-  },
   run: {
     durationSec: 0,
   },
@@ -404,8 +393,6 @@ export const DEFAULT_SETTINGS: Settings = {
 
 export type Preset = {
   bullets?: Partial<BulletsSettings>;
-  player?: Partial<PlayerSettings>;
-  dash?: Partial<DashSettings>;
   bindings?: Partial<Bindings>;
   run?: Partial<RunSettings>;
   pickups?: Partial<PickupsSettings>;
@@ -421,7 +408,6 @@ export const PRESETS: Record<"Easy" | "Normal" | "Hard", Preset> = {
   },
   Hard: {
     bullets: { spawnIntervalMs: 500, speed: 380, bounceChance: 100, maxBullets: 80, size: 7 },
-    player: { size: 16 },
   },
 };
 
@@ -450,6 +436,11 @@ function clone<T>(value: T): T {
 function migrate(parsed: unknown): unknown {
   if (!parsed || typeof parsed !== "object") return parsed;
   const p = parsed as Record<string, any>;
+  // v3 → v4: player + dash physics moved to file-level constants in
+  // config.ts so sandbox tweaks can't leak into the campaign. Strip
+  // the keys so the saved blob never carries stale physics.
+  delete p.player;
+  delete p.dash;
   // dashRush → breaker (effect was replaced with Bullet Breaker; keep
   // weights mapping but drop the old effect block so new defaults apply)
   if (p.pickups && typeof p.pickups === "object") {
@@ -469,7 +460,23 @@ export function loadSettings(): Settings {
   const base = clone(DEFAULT_SETTINGS);
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) deepAssign(base, migrate(JSON.parse(raw)));
+    if (raw) {
+      deepAssign(base, migrate(JSON.parse(raw)));
+      return base;
+    }
+    // First boot under v4 — migrate any v3 blob over so the player
+    // doesn't lose audio / run / pickups settings, then drop the old
+    // key so future loads skip this branch entirely.
+    const legacy = localStorage.getItem(STORAGE_KEY_LEGACY_V3);
+    if (legacy) {
+      deepAssign(base, migrate(JSON.parse(legacy)));
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(base));
+        localStorage.removeItem(STORAGE_KEY_LEGACY_V3);
+      } catch {
+        // quota / privacy-mode — fall back to in-memory only
+      }
+    }
   } catch {
     // fall back to defaults
   }

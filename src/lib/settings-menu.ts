@@ -147,8 +147,10 @@ export function createMenu(
     panel.appendChild(makeBindings());
     panel.appendChild(makeRun());
     panel.appendChild(makeBullets());
-    panel.appendChild(makePlayer());
-    panel.appendChild(makeDash());
+    // Player + dash physics live as constants in lib/config.ts so
+    // they stay identical across sandbox / rooms / tutorial. The
+    // old makePlayer() / makeDash() sections were removed alongside
+    // the schema move (settings:v3 → v4).
     panel.appendChild(makePickups());
     panel.appendChild(makeAudio());
     panel.appendChild(makePresets());
@@ -342,77 +344,6 @@ export function createMenu(
         "Color",
         makeColor(b.color, (v) => {
           b.color = v;
-        }),
-      ),
-    );
-    return s;
-  }
-
-  function makePlayer() {
-    const p = settings.player;
-    const s = makeSection("Player");
-    s.appendChild(
-      makeRow(
-        "Size",
-        makeSlider(16, 64, 2, p.size, (v) => `${v} px`, (v) => {
-          p.size = v;
-        }),
-      ),
-    );
-    s.appendChild(
-      makeRow(
-        "Max speed",
-        makeSlider(120, 1500, 20, p.maxSpeed, (v) => `${v} px/s`, (v) => {
-          p.maxSpeed = v;
-        }),
-      ),
-    );
-    // Player visual customization moved to the Player overlay on the
-    // landing page. Settings keeps only sandbox-tunable mechanics
-    // (size / speed / walk factor) — no per-mode color forks.
-    s.appendChild(
-      makeRow(
-        "Walk speed factor",
-        makeSlider(0.2, 0.8, 0.05, p.walkFactor, (v) => `${v.toFixed(2)}×`, (v) => {
-          p.walkFactor = v;
-        }),
-      ),
-    );
-    return s;
-  }
-
-  function makeDash() {
-    const d = settings.dash;
-    const s = makeSection("Dash");
-    s.appendChild(
-      makeRow(
-        "Distance",
-        makeSlider(60, 250, 5, d.distance, (v) => `${v} px`, (v) => {
-          d.distance = v;
-        }),
-      ),
-    );
-    s.appendChild(
-      makeRow(
-        "Duration",
-        makeSlider(60, 300, 5, d.durationMs, (v) => `${v} ms`, (v) => {
-          d.durationMs = v;
-        }),
-      ),
-    );
-    s.appendChild(
-      makeRow(
-        "I-frames",
-        makeSlider(0, 400, 5, d.iframesMs, (v) => `${v} ms`, (v) => {
-          d.iframesMs = v;
-        }),
-      ),
-    );
-    s.appendChild(
-      makeRow(
-        "Cooldown",
-        makeSlider(100, 1500, 25, d.cooldownMs, (v) => `${v} ms`, (v) => {
-          d.cooldownMs = v;
         }),
       ),
     );

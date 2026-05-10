@@ -224,13 +224,6 @@ Source: `src/lib/config.ts` and `src/lib/score.ts`.
 | Bullet size | 9 px | `bullets.size` |
 | Max bullets on screen | 30 | `bullets.maxBullets` |
 | Bounce chance | 100 % | `bullets.bounceChance` |
-| Player size | 32 px | `player.size` |
-| Player max speed | 440 px/s | `player.maxSpeed` |
-| Walk-speed factor (Shift) | 0.4 | `player.walkFactor` |
-| Dash distance | 120 px | `dash.distance` |
-| Dash duration | 120 ms | `dash.durationMs` |
-| Dash i-frames | 150 ms | `dash.iframesMs` |
-| Dash cooldown | 400 ms | `dash.cooldownMs` |
 | Run length | 0 (endless) | `run.durationSec` |
 | Pickup drop chance | 18 % | `pickups.dropChance` |
 | Pickup lifetime | 5 s | `pickups.lifetime` |
@@ -247,8 +240,16 @@ Source: `src/lib/config.ts` and `src/lib/score.ts`.
 | Multiplier grow / max / decay delay / rate | +0.2 / ×10 / 2 s / 0.5/s | `score.ts MULT_*` |
 | Multiplier tiers | ×3, ×5, ×7, ×10 | `score.ts MULT_TIER_PORTS` |
 
-Storage key: `dash-proto:settings:v3`. Per-config best-score keys:
-`dash-prototype:score:Default|Easy|Normal|Hard`.
+Player physics and dash are global constants in `config.ts`
+(`PLAYER_SIZE`, `PLAYER_MAX_SPEED`, `PLAYER_WALK_FACTOR`,
+`DASH_DISTANCE`, `DASH_DURATION_MS`, `DASH_IFRAMES_MS`,
+`DASH_COOLDOWN_MS`); not exposed in any Settings menu so they stay
+identical across sandbox / rooms / tutorial.
+
+Storage key: `dash-proto:settings:v4` (was `:v3` before player +
+dash physics moved out — `loadSettings` migrates the old blob over
+on first boot, drops the moved keys, and removes `:v3`). Per-config
+best-score keys: `dash-prototype:score:Default|Easy|Normal|Hard`.
 
 ## Main menu structure
 
@@ -1162,9 +1163,14 @@ in `config.ts` under `IMPACT_*`.
 - **Pickups drop only from dash-through bullets**, not from broken
   bullets (`awardBulletBreak`). Adding a drop roll there would create a
   self-sustaining fountain — verified during the Bullet Breaker design.
-- **Settings is the single source of truth.** Don't hard-code tunables
-  in sandbox-game when there's a Settings field; read at point of use so
-  the menu controls everything live.
+- **Settings is the single source of truth** for the tunables it
+  exposes. Don't hard-code tunables in sandbox-game when there's a
+  Settings field; read at point of use so the menu controls
+  everything live. **Player and dash physics are intentionally NOT
+  in Settings** — they're file-level constants in `lib/config.ts`
+  (`PLAYER_*`, `DASH_*`) so all modes share the same hero. A
+  sandbox-only tweak to dash cooldown can no longer leak into the
+  campaign.
 - **Live tweaking via the menu is sacred.** Sliders / color pickers /
   keybinds must propagate without restart. If you add a new setting,
   also add the slider — or note explicitly why it's deferred.
@@ -1176,9 +1182,11 @@ in `config.ts` under `IMPACT_*`.
 - **No DOM for game-world UI.** HUD, floating scores, end overlay, hit
   vignette — all canvas. Settings menu and the landing page are the
   agreed exceptions.
-- **`localStorage` keys are stable.** `dash-proto:settings:v3` and
-  `dash-prototype:score:*` should not change without a migration in
-  `lib/config.ts` `migrate()`.
+- **`localStorage` keys are stable.** `dash-proto:settings:v4`
+  and `dash-prototype:score:*` should not change without a
+  migration in `lib/config.ts` `migrate()`. The v3 → v4 bump is
+  the live example: physics keys were stripped + new key written
+  on first load.
 - **Don't break sandbox while building rooms.** Rooms gets its own
   `GameState`; lib helpers stay pure. Anything that becomes
   cross-mode lives in `lib/`.

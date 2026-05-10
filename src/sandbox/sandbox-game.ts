@@ -1,4 +1,8 @@
 import {
+  DASH_COOLDOWN_MS,
+  DASH_DISTANCE,
+  DASH_DURATION_MS,
+  DASH_IFRAMES_MS,
   DEFAULT_SETTINGS,
   PALETTE,
   PARTICLE_BASE_SPEED_MAX,
@@ -12,6 +16,9 @@ import {
   PARTICLE_SIZE_MIN_FACTOR,
   PARTICLE_SPAWN_INTERVAL_MS,
   PARTICLE_TRAIL_MIN_SPEED,
+  PLAYER_MAX_SPEED,
+  PLAYER_SIZE,
+  PLAYER_WALK_FACTOR,
   PRESETS,
   deepAssign,
   loadSettings,
@@ -487,8 +494,8 @@ function inputDir(): { x: number; y: number } {
 }
 
 function dashSpeedNow(): number {
-  const dur = settings.dash.durationMs / 1000;
-  return dur > 0 ? settings.dash.distance / dur : 0;
+  const dur = DASH_DURATION_MS / 1000;
+  return dur > 0 ? DASH_DISTANCE / dur : 0;
 }
 
 function tryStartDash() {
@@ -516,8 +523,8 @@ function tryStartDash() {
 
   player.dashDirX = dx;
   player.dashDirY = dy;
-  player.dashTime = settings.dash.durationMs / 1000;
-  player.dashIframeTime = settings.dash.iframesMs / 1000;
+  player.dashTime = DASH_DURATION_MS / 1000;
+  player.dashIframeTime = DASH_IFRAMES_MS / 1000;
   const v = dashSpeedNow();
   player.vx = dx * v;
   player.vy = dy * v;
@@ -578,7 +585,7 @@ function spawnBullet() {
 }
 
 function aabbHit(b: Bullet): boolean {
-  let ph = settings.player.size / 2;
+  let ph = PLAYER_SIZE / 2;
   if (state.effects.shield) ph *= settings.pickups.shield.hitboxMul;
   const bh = settings.bullets.size / 2;
   return (
@@ -624,8 +631,8 @@ function addRing(
     y,
     age: 0,
     lifetime: opts.lifetime ?? 0.1,
-    startR: opts.startR ?? settings.player.size / 2 + 4,
-    endR: opts.endR ?? settings.player.size / 2 + 30,
+    startR: opts.startR ?? PLAYER_SIZE / 2 + 4,
+    endR: opts.endR ?? PLAYER_SIZE / 2 + 30,
     color: opts.color ?? "#facc15",
   });
 }
@@ -779,7 +786,7 @@ function spawnTrailParticles(speed: number, isDash: boolean) {
       y: player.y,
       vx,
       vy,
-      initialSize: settings.player.size * sizeFactor,
+      initialSize: PLAYER_SIZE * sizeFactor,
       color,
       age: 0,
       lifetime,
@@ -905,8 +912,8 @@ function awardNearMiss(b: Bullet) {
     lifetime: 0.45,
   });
   addRing(player.x, player.y, {
-    startR: settings.player.size / 2 + 6,
-    endR: settings.player.size / 2 + 28,
+    startR: PLAYER_SIZE / 2 + 6,
+    endR: PLAYER_SIZE / 2 + 28,
     color: "#facc15",
     lifetime: 0.1,
   });
@@ -918,7 +925,7 @@ function hitPlayer() {
   audio.play.hit();
   state.hp -= 1;
   state.score -= HIT_PENALTY;
-  addFloatingText(`-${HIT_PENALTY}`, player.x, player.y - settings.player.size, {
+  addFloatingText(`-${HIT_PENALTY}`, player.x, player.y - PLAYER_SIZE, {
     size: 24,
     color: "#ff5555",
     lifetime: 0.8,
@@ -990,8 +997,8 @@ function frame(now: number) {
     // keep the eye animation alive (closing, blink decay) while overlay is up
     updateEye(player, dt, {
       threat: null,
-      size: settings.player.size,
-      dashDurationSec: settings.dash.durationMs / 1000,
+      size: PLAYER_SIZE,
+      dashDurationSec: DASH_DURATION_MS / 1000,
     });
     render();
     requestAnimationFrame(frame);
@@ -1037,7 +1044,7 @@ function frame(now: number) {
     player.vy = player.dashDirY * v;
     if (player.dashTime <= 0) {
       player.dashTime = 0;
-      player.cooldown = settings.dash.cooldownMs / 1000;
+      player.cooldown = DASH_COOLDOWN_MS / 1000;
       player.vx *= 0.35;
       player.vy *= 0.35;
     }
@@ -1047,15 +1054,15 @@ function frame(now: number) {
       player.facingX = input.x;
       player.facingY = input.y;
     }
-    const accel = settings.player.maxSpeed * ACCEL_FACTOR;
+    const accel = PLAYER_MAX_SPEED * ACCEL_FACTOR;
     player.vx += input.x * accel * dt;
     player.vy += input.y * accel * dt;
     const damp = Math.exp(-FRICTION * dt);
     player.vx *= damp;
     player.vy *= damp;
-    const maxSpeed = settings.player.maxSpeed;
+    const maxSpeed = PLAYER_MAX_SPEED;
     const cap = keys.has(settings.bindings.walk)
-      ? maxSpeed * settings.player.walkFactor
+      ? maxSpeed * PLAYER_WALK_FACTOR
       : maxSpeed;
     const sp = Math.hypot(player.vx, player.vy);
     if (sp > cap) {
@@ -1079,8 +1086,8 @@ function frame(now: number) {
     state.effects.shield.remaining -= dt;
     if (state.effects.shield.remaining <= 0) {
       addRing(player.x, player.y, {
-        startR: settings.player.size * 0.7,
-        endR: settings.player.size * 1.6,
+        startR: PLAYER_SIZE * 0.7,
+        endR: PLAYER_SIZE * 1.6,
         color: "#60a5fa",
         lifetime: 0.4,
       });
@@ -1116,7 +1123,7 @@ function frame(now: number) {
   player.x += player.vx * dt;
   player.y += player.vy * dt;
 
-  const half = settings.player.size / 2;
+  const half = PLAYER_SIZE / 2;
   const minX = WALL_THICKNESS + half;
   const maxX = viewW - WALL_THICKNESS - half;
   const minY = WALL_THICKNESS + half;
@@ -1252,7 +1259,7 @@ function frame(now: number) {
   // collisions: dash-through (i-frame) > hit-ignore > shield-block > damage;
   // near-miss otherwise
   const playerSpeed = Math.hypot(player.vx, player.vy);
-  const nearRadius = settings.player.size + 20;
+  const nearRadius = PLAYER_SIZE + 20;
   const inDash = player.dashIframeTime > 0;
   const consumedBullets: Bullet[] = [];
 
@@ -1281,16 +1288,16 @@ function frame(now: number) {
           lifetime: 0.5,
         });
         addRing(player.x, player.y, {
-          startR: settings.player.size * 0.5,
-          endR: settings.player.size * 1.0,
+          startR: PLAYER_SIZE * 0.5,
+          endR: PLAYER_SIZE * 1.0,
           color: "#ffffff",
           lifetime: 0.18,
         });
         consumedBullets.push(b);
         if (state.effects.shield.charges <= 0) {
           addRing(player.x, player.y, {
-            startR: settings.player.size * 0.7,
-            endR: settings.player.size * 1.8,
+            startR: PLAYER_SIZE * 0.7,
+            endR: PLAYER_SIZE * 1.8,
             color: "#60a5fa",
             lifetime: 0.45,
           });
@@ -1321,15 +1328,15 @@ function frame(now: number) {
   // eye state: pupil tracks the closest bullet, dash ghosts spawn here too
   updateEye(player, dt, {
     threat: findNearestThreat(player.x, player.y, bullets),
-    size: settings.player.size,
-    dashDurationSec: settings.dash.durationMs / 1000,
+    size: PLAYER_SIZE,
+    dashDurationSec: DASH_DURATION_MS / 1000,
     bullets,
     mode: "sandbox",
     hitIframe: state.hitIframeTime,
   });
 
   // pickups: age, expire, collect
-  const playerHalf = settings.player.size / 2;
+  const playerHalf = PLAYER_SIZE / 2;
   const pickRadius = PICKUP_HALF * settings.pickups.pickupRadiusMul + playerHalf;
   const pickRadius2 = pickRadius * pickRadius;
   const survivingPickups: Pickup[] = [];
@@ -1460,7 +1467,7 @@ function render() {
   }
 
   // player — eye-orb with pupil tracking the nearest bullet
-  const pSize = settings.player.size;
+  const pSize = PLAYER_SIZE;
 
   let drawPlayer = true;
   if (state.hitIframeTime > 0) {
@@ -1477,8 +1484,8 @@ function render() {
       ringColor: profile.outerRing,
       pupilColor: profile.pupil,
       ghostColor: profile.outerRing,
-      dashDurationSec: settings.dash.durationMs / 1000,
-      dashCooldownSec: settings.dash.cooldownMs / 1000,
+      dashDurationSec: DASH_DURATION_MS / 1000,
+      dashCooldownSec: DASH_COOLDOWN_MS / 1000,
       profile,
       ...(state.effects.breaker
         ? { glowColor: PALETTE.pickupBreaker }
