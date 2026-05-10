@@ -696,11 +696,17 @@ transitions for score + Game Complete.
     hold → slow exhale" instead of the bumpy easeOut/easeIn snap
     of the first draft.
     **Damage table during RB:**
-    | Phase | Body dash | Eye dash | Body contact | Ring contact |
+    | Phase | Body dash | Eye dash | Body contact | Outer ring contact |
     | --- | --- | --- | --- | --- |
     | idle / telegraph / recovery | 1 HP boss | — | 1 HP player | — |
     | detach / reassemble | 0 (ghosted) | — | 0 | 1 HP player |
     | vulnerable | 0 (ghosted) | **3 HP boss** + heavy feedback | 0 | 1 HP player |
+    Inside the outer ring (`r < 180` during vulnerable / reassemble)
+    the player is safe — mid and inner rings are visual only.
+    Reassemble still scrubs the outer ring back through anyone
+    lingering in the 110..180 band, so a clean exit means either
+    sit deep inside (then climb out before recovery solidifies the
+    body) or dash out before the outer reaches you.
     The eye-hit reward layers a 8 px / 200 ms screen shake, an
     inner white + outer gold double ring, 24 alternating
     white / `#ffaa22` particles, and a hitstop —

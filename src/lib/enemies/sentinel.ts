@@ -912,18 +912,15 @@ export class Sentinel implements Enemy {
         }
       }
       if (this.ringDamageActive()) {
+        // Only the outer ring carries contact damage. Mid + inner
+        // are visual-only during the burst — once the player is
+        // inside the outer band they're free to roam toward the
+        // eye. Reassemble still pushes the outer ring back through
+        // a player who lingers in the 110..180 band.
         const dist = Math.sqrt(distSq);
         const band = RB_RING_STROKE_HIT_HALFWIDTH + half;
-        const radii = [
-          this.ringRadiusOuter,
-          this.ringRadiusMid,
-          this.ringRadiusInner,
-        ];
-        for (const rr of radii) {
-          if (Math.abs(dist - rr) < band) {
-            this.requestPlayerHit = true;
-            break;
-          }
+        if (Math.abs(dist - this.ringRadiusOuter) < band) {
+          this.requestPlayerHit = true;
         }
       }
     }
