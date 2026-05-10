@@ -1129,15 +1129,26 @@ intro from scratch.
   r 18 sell the "alive iris." A 1400 ms breath cycle scales the
   whole stack 0.94 ↔ 1.06 and ramps the ext-glow alpha 0.10 ↔ 0.25
   in lockstep.
-- **Depth rings** — each of the three hex shells now renders as a
-  shadow stroke (darker, thicker) under a bright stroke (saturated,
-  thinner). `RingDepth` configs in sentinel.ts pin the colours per
-  shell. Each ring carries an independent rotation state
-  (`angle / angularVel / targetAngularVel / nextChangeAtMs`) that
-  lerps angularVel toward a fresh ±max-vel target every 2–5 s
-  (max-vel: outer 0.8, mid 1.2, inner 1.6 rad/s; lerp coefficient
-  0.02 per frame). Three 30° vertex-aligned arc markers per ring
-  rotate with the ring so the motion actually reads.
+- **Hex shells** — the body silhouette is three nested **pointy-top
+  hexagons**, not concentric circles. The hex path is built from
+  six vertices on `radius * (cos a, sin a)` with vertex 0 at
+  `-π/2` (top) and the rest spread on `π/3` increments; same
+  helper (`traceHexPath`) is used for the optional outer-glow
+  pass and the bright main stroke so the stroked shape stays
+  consistent. Each shell renders as up to two stacked strokes
+  (glow + main) — `RingDepth` configs in sentinel.ts pin the
+  colours per shell. Each shell carries an independent rotation
+  state (`angle / angularVel / targetAngularVel /
+  nextChangeAtMs`) that lerps angularVel toward a fresh ±max-vel
+  target every 2–5 s (max-vel: outer 0.8, mid 1.2, inner 1.6
+  rad/s; lerp coefficient 0.02 per frame). Because the silhouette
+  is now hex, that rotation is visible: the corners sweep instead
+  of a flat circle pretending to spin. Rotation markers are small
+  filled diamond rivets pinned to vertices (count = 2 by default
+  → top + bottom; the helper distributes other counts evenly via
+  `floor(i * 6 / count)`). Diamond side ≈ markerLineWidth × 1.8.
+  The eye stack is intentionally still circular — the eye should
+  read as an eye, not as a hex pupil.
 - **Body breath** — 2200 ms sin scales the whole shell stack 0.98 ↔
   1.02 and ramps the outer-ring glow alpha 0.20 ↔ 0.35 on its own
   phase (independent of the eye), so the silhouette pulses out of

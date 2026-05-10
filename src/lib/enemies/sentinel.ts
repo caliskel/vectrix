@@ -167,13 +167,34 @@ const EYE_BREATH_PERIOD_SEC = 1.4;
 const EYE_SCALE_MIN = 0.94;
 const EYE_SCALE_MAX = 1.06;
 
-// Rings — each shell now renders as shadow + bright stroke for depth,
-// plus three vertex-aligned 30° markers that rotate independently per
-// ring so the rotation is actually readable.
-// Each shell renders as max two stacked strokes (glow + main) plus
-// a configurable number of arc markers. Triple-stack + 3 markers
-// per ring used to drive ~30 % of the boss's per-frame stroke
-// count — visual budget cut without losing the silhouette.
+// Body silhouette is a stack of three nested pointy-top hexagons,
+// not concentric circles. The hex shape is rotated by each shell's
+// own angular state so the rotation is visible as the corners
+// sweep, and rivet-style diamond markers are pinned to vertices to
+// read as mechanical joints. Each shell renders as max two stacked
+// strokes (glow + main) plus the marker pass — same visual budget
+// as the previous circular ring, just hex-shaped.
+const HEX_VERTEX_COUNT = 6;
+// Pointy-top: vertex 0 at the top of the local frame (-PI/2). The
+// rest spread clockwise on PI/3 increments.
+const HEX_TOP_OFFSET_RAD = -Math.PI / 2;
+
+function traceHexPath(
+  ctx: CanvasRenderingContext2D,
+  radius: number,
+): void {
+  ctx.beginPath();
+  for (let i = 0; i < HEX_VERTEX_COUNT; i++) {
+    const a =
+      HEX_TOP_OFFSET_RAD + (i * Math.PI * 2) / HEX_VERTEX_COUNT;
+    const x = radius * Math.cos(a);
+    const y = radius * Math.sin(a);
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.closePath();
+}
+
 type RingDepth = {
   /** Optional outer glow pass (drawn first). When `null`, the ring
    *  paints just the bright stroke + markers. Mid + inner rings
@@ -198,11 +219,10 @@ type RingDepth = {
    *  uses 0 since its dash pattern already conveys rotation). */
   markerCount: number;
   markerColor: string;
+  /** Drives the rivet diamond size: side ≈ markerLineWidth × 1.8.
+   *  Kept the legacy name so existing config sites don't churn. */
   markerLineWidth: number;
   markerAlpha?: number;
-  /** Marker arc width in radians; defaults to 30°. Outer ring
-   *  during RB widens to 40°. */
-  markerArcRad?: number;
   maxAngularVel: number; // rad/s — the random target sample range
 };
 // Outer ring config is computed dynamically per frame (see
@@ -266,7 +286,6 @@ const INNER_RING_DEPTH: RingDepth = {
 const RING_ANGULAR_VEL_LERP = 0.02;
 const RING_RETARGET_MIN_MS = 2000;
 const RING_RETARGET_MAX_MS = 5000;
-const RING_MARKER_ARC_RAD = (Math.PI * 30) / 180; // 30°
 
 // Body — slow breath rescales the whole shell stack and ramps the
 // outer-ring glow alpha. Kept on a different period from the eye so
@@ -3998,7 +4017,6 @@ export class Sentinel implements Enemy {
       markerCount: 2,
       markerColor: "#ffffff",
       markerLineWidth: 5,
-      markerArcRad: (Math.PI * 30) / 180,
       maxAngularVel: OUTER_RING_MAX_ANGULAR_VEL,
     };
   }
@@ -4018,21 +4036,22 @@ export class Sentinel implements Enemy {
   ): void {
     ctx.save();
     ctx.rotate(rotState.angle);
-    // Optional outer glow — single wide low-alpha pass. Mid + inner
-    // rings skip this entirely (`glowColor === null`).
+    // Optional outer glow — single wide low-alpha pass on the
+    // hex outline. Mid + inner shells skip this entirely
+    // (`glowColor === null`).
     if (depth.glowColor !== null) {
-      ctx.beginPath();
-      ctx.arc(0, 0, radius, 0, Math.PI * 2);
+      traceHexPath(ctx, radius);
       ctx.strokeStyle = depth.glowColor;
       ctx.lineWidth = depth.glowLineWidth;
       ctx.globalAlpha = depth.glowAlpha * alphaMul;
       ctx.stroke();
     }
-    // Main stroke (optionally dashed for the inner ring + outer
+    // Main stroke (optionally dashed for the inner shell + outer
     // cyan-mode). `brightDashOffset` is animated by the caller to
-    // give the dashes a marching effect.
-    ctx.beginPath();
-    ctx.arc(0, 0, radius, 0, Math.PI * 2);
+    // give the dashes a marching effect along the perimeter; on a
+    // hex the dash pattern resets at each corner segment which
+    // reads as fine for the small inner shell.
+    traceHexPath(ctx, radius);
     ctx.strokeStyle = depth.brightColor;
     ctx.lineWidth = depth.brightLineWidth;
     ctx.globalAlpha = (brightAlphaOverride ?? depth.brightAlpha) * alphaMul;
@@ -4047,17 +4066,30 @@ export class Sentinel implements Enemy {
       ctx.setLineDash([]);
       ctx.lineDashOffset = 0;
     }
-    // Rotation markers — drop count is config-driven; 0 disables.
+    // Rotation markers — small filled diamond rivets pinned to
+    // hex vertices. Marker count is config-driven (0 disables);
+    // markers distribute across the 6 vertices so e.g. count=2
+    // sits at top + bottom, count=3 at every other vertex.
     if (depth.markerCount > 0) {
-      ctx.strokeStyle = depth.markerColor;
-      ctx.lineWidth = depth.markerLineWidth;
+      ctx.fillStyle = depth.markerColor;
       ctx.globalAlpha = (depth.markerAlpha ?? 1) * alphaMul;
-      const markerArc = depth.markerArcRad ?? RING_MARKER_ARC_RAD;
+      const r = depth.markerLineWidth * 1.8;
       for (let i = 0; i < depth.markerCount; i++) {
-        const start = (i / depth.markerCount) * Math.PI * 2;
+        const vIdx = Math.floor(
+          (i * HEX_VERTEX_COUNT) / depth.markerCount,
+        );
+        const a =
+          HEX_TOP_OFFSET_RAD +
+          (vIdx * Math.PI * 2) / HEX_VERTEX_COUNT;
+        const vx = radius * Math.cos(a);
+        const vy = radius * Math.sin(a);
         ctx.beginPath();
-        ctx.arc(0, 0, radius, start, start + markerArc);
-        ctx.stroke();
+        ctx.moveTo(vx, vy - r);
+        ctx.lineTo(vx + r, vy);
+        ctx.lineTo(vx, vy + r);
+        ctx.lineTo(vx - r, vy);
+        ctx.closePath();
+        ctx.fill();
       }
     }
     ctx.globalAlpha = 1;
