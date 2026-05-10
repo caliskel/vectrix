@@ -115,6 +115,10 @@ export class Hunter implements Enemy {
   awarenessState: AwarenessState = "idle";
   detectionRadius = ENEMY_HUNTER_DETECTION;
   alertTimer = 0;
+  // Hunter intentionally has canDeaggro unset — once it sees the
+  // player it stays aggro for the rest of the run. The field below
+  // is kept at 0 for interface compliance only.
+  deAggroCooldownTimer = 0;
   // Idle behavior — slow parametric trajectory around a home anchor.
   // Path type / size / rotation are randomized per Hunter so a roomful
   // of them swims in distinct curves. Latched on first construction;

@@ -11,11 +11,18 @@ import {
   ALERT_RING_DURATION_MS,
   ALERT_RING_END_RADIUS_OFFSET,
   ALERT_RING_START_LINEWIDTH,
+  ENEMY_DEAGGRO_COOLDOWN_MS,
+  ENEMY_DEAGGRO_RADIUS_MULTIPLIER,
 } from "../config";
 import { addRing, type Particle, type Ring } from "../particles";
 import type { Enemy } from "./types";
 
 const ALERT_DURATION_SEC = ALERT_DURATION_MS / 1000;
+const DEAGGRO_COOLDOWN_SEC = ENEMY_DEAGGRO_COOLDOWN_MS / 1000;
+// During the aggro→idle cooldown the detection ring fades to this
+// fraction of its base alpha. Gives a quiet "losing interest" tell
+// that doesn't compete with combat reads.
+const DEAGGRO_RING_DIM_FACTOR = 0.7;
 const ALERT_RING_DURATION_SEC = ALERT_RING_DURATION_MS / 1000;
 const ALERT_BURST_PARTICLE_LIFETIME_SEC = ALERT_BURST_PARTICLE_LIFETIME_MS / 1000;
 const RING_DASH: [number, number] = [4, 6];
@@ -65,6 +72,26 @@ export function updateEnemyAwareness(
     enemy.alertTimer += dt;
     if (enemy.alertTimer >= ALERT_DURATION_SEC) {
       enemy.awarenessState = "aggro";
+    }
+  } else if (enemy.awarenessState === "aggro" && enemy.canDeaggro) {
+    // Two-way detection (Turret + Watcher only — Hunter has
+    // canDeaggro unset / false and stays aggro forever once seen).
+    const dx = px - enemy.x;
+    const dy = py - enemy.y;
+    const distSq = dx * dx + dy * dy;
+    const limit =
+      enemy.detectionRadius * ENEMY_DEAGGRO_RADIUS_MULTIPLIER;
+    if (distSq > limit * limit) {
+      enemy.deAggroCooldownTimer += dt;
+      if (enemy.deAggroCooldownTimer >= DEAGGRO_COOLDOWN_SEC) {
+        enemy.awarenessState = "idle";
+        enemy.alertTimer = 0;
+        enemy.deAggroCooldownTimer = 0;
+      }
+    } else {
+      // Player came back inside the radius — drop the cooldown so
+      // the next exit starts fresh from zero.
+      enemy.deAggroCooldownTimer = 0;
     }
   }
 }
@@ -168,8 +195,23 @@ export function drawEnemyDetection(
         ? RING_COLOR_ALERTING
         : RING_COLOR_IDLE;
 
+  // Dim the ring while the de-aggro cooldown is ticking so the
+  // player can read "this enemy is losing interest" at a glance.
+  // Ramps from full (timer = 0) to DEAGGRO_RING_DIM_FACTOR (timer
+  // = COOLDOWN); the next combat re-aggro snaps it back via
+  // initAwareness/state transitions.
+  let alphaMul = 1;
+  if (
+    enemy.canDeaggro &&
+    enemy.awarenessState === "aggro" &&
+    enemy.deAggroCooldownTimer > 0
+  ) {
+    const t = Math.min(1, enemy.deAggroCooldownTimer / DEAGGRO_COOLDOWN_SEC);
+    alphaMul = 1 - (1 - DEAGGRO_RING_DIM_FACTOR) * t;
+  }
+
   ctx.save();
-  ctx.globalAlpha = visibility * RING_ALPHA_MAX;
+  ctx.globalAlpha = visibility * RING_ALPHA_MAX * alphaMul;
   ctx.strokeStyle = color;
   ctx.lineWidth = RING_LINE_WIDTH;
   ctx.setLineDash(RING_DASH);
@@ -189,5 +231,6 @@ export function initAwareness(enemy: Enemy, detectionRadius: number): void {
   enemy.awarenessState = "idle";
   enemy.detectionRadius = detectionRadius;
   enemy.alertTimer = 0;
+  enemy.deAggroCooldownTimer = 0;
 }
 

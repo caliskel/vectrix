@@ -34,6 +34,8 @@ export class Turret implements Enemy {
   awarenessState: AwarenessState = "idle";
   detectionRadius = ENEMY_TURRET_DETECTION;
   alertTimer = 0;
+  canDeaggro = true;
+  deAggroCooldownTimer = 0;
   private aimAngle: number;
   private idleTargetAngle: number;
   private idleRetargetTimer: number;

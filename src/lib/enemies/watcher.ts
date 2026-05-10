@@ -91,6 +91,8 @@ export class Watcher implements Enemy {
   awarenessState: AwarenessState = "idle";
   detectionRadius = ENEMY_WATCHER_DETECTION;
   alertTimer = 0;
+  canDeaggro = true;
+  deAggroCooldownTimer = 0;
   // Idle posture — Watcher drifts in a slow figure-eight around its
   // home position while sleeping, and the pupil wanders idle-look
   // style instead of tracking the player.
@@ -151,6 +153,17 @@ export class Watcher implements Enemy {
     if (
       this.prevAwarenessState === "idle" &&
       this.awarenessState !== "idle"
+    ) {
+      this.idleHomeX = this.x;
+      this.idleHomeY = this.y;
+      this.idleDriftPhase = 0;
+    }
+    // Symmetric re-anchor on aggro → idle (de-aggro): start the next
+    // drift cycle from wherever the Watcher actually ended up rather
+    // than snapping back to a stale alert-time home.
+    if (
+      this.prevAwarenessState === "aggro" &&
+      this.awarenessState === "idle"
     ) {
       this.idleHomeX = this.x;
       this.idleHomeY = this.y;

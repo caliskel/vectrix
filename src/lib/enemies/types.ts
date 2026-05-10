@@ -117,4 +117,15 @@ export interface Enemy {
   /** Seconds elapsed in the alerting phase. Drives the jitter ramp
    *  and the timed transition to aggro. */
   alertTimer: number;
+  /** When true, `updateEnemyAwareness` runs the aggro→idle de-aggro
+   *  branch — the enemy returns to idle if the player stays outside
+   *  `detectionRadius * ENEMY_DEAGGRO_RADIUS_MULTIPLIER` for
+   *  `ENEMY_DEAGGRO_COOLDOWN_MS`. Falsy / undefined keeps the
+   *  Hunter-style "aggro forever" behaviour. */
+  canDeaggro?: boolean;
+  /** Seconds spent outside the de-aggro radius while in aggro. Reset
+   *  to 0 whenever the player re-enters the radius and on every state
+   *  transition through `initAwareness`. Only ticked when
+   *  `canDeaggro` is true. */
+  deAggroCooldownTimer: number;
 }

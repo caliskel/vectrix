@@ -263,10 +263,16 @@ export const WATCHER_IDLE_PUPIL_INTERVAL_MAX_MS = 2000;
 // once and it carries across rooms. Tuned against the longest-range
 // rooms (corridor) so corner turrets still wake before the player is
 // on top of them.
-export const ENEMY_TURRET_DETECTION = 400;
-export const ENEMY_WATCHER_DETECTION = 500;
+export const ENEMY_TURRET_DETECTION = 600;
+export const ENEMY_WATCHER_DETECTION = 700;
 export const ENEMY_HUNTER_DETECTION = 350;
 export const ALERT_DURATION_MS = 500;
+// De-aggro: Turret + Watcher (not Hunter) drop back to idle when the
+// player has been outside `detectionRadius * MULTIPLIER` for at least
+// COOLDOWN_MS. Hunter ignores both — once it sees the player it stays
+// aggro for the rest of the run.
+export const ENEMY_DEAGGRO_RADIUS_MULTIPLIER = 1.3;
+export const ENEMY_DEAGGRO_COOLDOWN_MS = 2000;
 // Alerting visual — jitter through the whole window + a single
 // ring-burst on transition. Old squash/glow/exclamation were removed
 // in favor of these two combined.

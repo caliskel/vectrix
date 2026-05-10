@@ -29,6 +29,7 @@ export class TrainingDummy implements Enemy {
   awarenessState: AwarenessState = "idle";
   detectionRadius = 0; // never alerts — dummy is just a target
   alertTimer = 0;
+  deAggroCooldownTimer = 0;
   dropsKey = false;
   vx = 0;
   vy = 0;

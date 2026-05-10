@@ -590,10 +590,19 @@ crosses its `detectionRadius`. The state machine has three steps:
               eases to `ALERT_JITTER_END_INTENSITY` (0.5 px) by
               the end. Detection ring stays steady through the
               jitter (it lives outside the enemy's transform).
-  aggro     — combat behavior runs as before. Sticky — once aggro,
-              the enemy stays aggro for the rest of the run; a
-              `radius * 1.5` regress was considered and skipped to
-              keep the code small.
+  aggro     — combat behavior runs. For enemies whose
+              `canDeaggro` is true (Turret + Watcher), the player
+              leaving `detectionRadius * ENEMY_DEAGGRO_RADIUS_
+              MULTIPLIER` (1.3) ticks `deAggroCooldownTimer`; once
+              the timer hits `ENEMY_DEAGGRO_COOLDOWN_MS` (2000) the
+              enemy returns to `idle` (alertTimer + cooldown timer
+              both reset, Watcher re-anchors `idleHomeX/Y` to its
+              current position so the next drift starts cleanly
+              instead of snapping to a stale home). Re-entering the
+              radius drops the cooldown back to zero. **Hunter
+              leaves `canDeaggro` unset and stays aggro forever
+              once seen** — that's the whole point of the chase
+              archetype.
 
 `updateEnemyAwareness` ticks the state machine each frame in the
 rooms loop (before `enemy.update`, so combat sees the freshest
@@ -601,22 +610,22 @@ state) and accepts an optional `AwarenessTriggerCtx` (rings +
 particles) so the burst on idle → alerting can drop straight
 into the room's lists. `drawEnemyDetection` paints the dashed
 detection ring with `(detectionRadius * 1.3 - dist) /
-(detectionRadius * 0.5)` clamped visibility, capped at α 0.3.
-Color shifts slate → orange → enemy.color across the three
-states. `applyAwarenessJitter` is called from each enemy's
-`draw` so the body shake stays sealed inside the enemy's own
-transform stack.
+(detectionRadius * 0.5)` clamped visibility, capped at α 0.3,
+and dims the ring by `DEAGGRO_RING_DIM_FACTOR` (0.7×) while a
+de-aggro cooldown is ticking — quiet "losing interest" tell
+without yelling at the player. Color shifts slate → orange →
+enemy.color across the three states. `applyAwarenessJitter` is
+called from each enemy's `draw` so the body shake stays sealed
+inside the enemy's own transform stack.
 
 Detection radii live in `config.ts` and are **fixed per archetype**
-across the whole game — `ENEMY_TURRET_DETECTION = 400`,
-`ENEMY_WATCHER_DETECTION = 500`, `ENEMY_HUNTER_DETECTION = 350`.
+across the whole game — `ENEMY_TURRET_DETECTION = 600`,
+`ENEMY_WATCHER_DETECTION = 700`, `ENEMY_HUNTER_DETECTION = 350`.
 No per-instance override mechanism on purpose: the player learns
-the wake distance once and it carries across every room. Values
-are tuned against the longest-range room (the Room 1 corridor)
-so corner enemies still wake before the player is on top of
-them. Resets implicitly on `restartRun` because rooms are
-rebuilt with fresh enemy instances; on room transitions the
-next room's enemies arrive in `idle` for the same reason.
+the wake distance once and it carries across every room.
+Resets implicitly on `restartRun` because rooms are rebuilt with
+fresh enemy instances; on room transitions the next room's
+enemies arrive in `idle` for the same reason.
 
 The HUD top-center renders **DETECTED** (red) if any enemy is
 aggro, **ALERT** (orange) if any is alerting, otherwise nothing.
