@@ -15,7 +15,7 @@ const AIM_LERP_RATE = 10; // frame-rate-independent (1 - exp(-rate*dt))
 const IDLE_AIM_LERP_RATE = 1.5; // slower drift while sleeping
 const IDLE_AIM_RETARGET_MIN_SEC = 2.5;
 const IDLE_AIM_RETARGET_MAX_SEC = 3.5;
-const TURRET_HP_MAX = 3;
+const TURRET_HP_MAX = 2;
 
 export class Turret implements Enemy {
   readonly type: EnemyType = "turret";

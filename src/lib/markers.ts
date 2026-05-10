@@ -9,7 +9,6 @@ const MARKER_RADIUS = 35;
 const MARKER_PULSE_HZ = 0.67; // ~1.5 s period
 const MARKER_PULSE_AMPLITUDE = 0.1; // ±10 % size
 const MARKER_GLOW_BLUR = 18;
-const MARKER_REACH_RADIUS = 28; // pickup radius (slightly inside the visual)
 // Pale cyan shared with the HUD tutorial-hint text — every tutorial
 // element lives in the same tonal family so the player reads them as
 // "this is the tutorial layer" rather than mistaking markers for a
@@ -45,14 +44,21 @@ export function tickMarker(marker: Marker, dt: number): void {
   marker.pulsePhase += dt * MARKER_PULSE_HZ * Math.PI * 2;
 }
 
+/**
+ * Trigger if the player's body overlaps the visible marker disc — radius
+ * = marker visual + player half-size. Kept distance-based against the
+ * player's centre so brushing the edge of the ring counts.
+ */
 export function markerOverlapsPlayer(
   marker: Marker,
   px: number,
   py: number,
+  playerHalfSize: number,
 ): boolean {
   const dx = px - marker.x;
   const dy = py - marker.y;
-  return dx * dx + dy * dy < MARKER_REACH_RADIUS * MARKER_REACH_RADIUS;
+  const reach = MARKER_RADIUS + playerHalfSize;
+  return dx * dx + dy * dy < reach * reach;
 }
 
 /**
@@ -121,4 +127,3 @@ export function drawMarker(
   ctx.restore();
 }
 
-export const MARKER_REACH_RADIUS_PX = MARKER_REACH_RADIUS;

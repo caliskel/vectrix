@@ -54,7 +54,7 @@ const GLOSS_W = 12;
 const GLOSS_H = 5;
 const GLOSS_ALPHA = 0.2;
 const PUPIL_LERP_RATE = 10;
-const WATCHER_HP_MAX = 2;
+const WATCHER_HP_MAX = 3;
 
 const PHASE_IDLE_SEC = 1.5;
 const PHASE_AIMING_SEC = 1.2;

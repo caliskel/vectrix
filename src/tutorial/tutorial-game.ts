@@ -1683,7 +1683,14 @@ export function start(canvas: HTMLCanvasElement): void {
       const active = currentRoom.markers[markerIndex];
       if (active && !active.reached) {
         tickMarker(active, dt);
-        if (markerOverlapsPlayer(active, player.x, player.y)) {
+        if (
+          markerOverlapsPlayer(
+            active,
+            player.x,
+            player.y,
+            settings.player.size / 2,
+          )
+        ) {
           active.reached = true;
           markerIndex += 1;
           hintAge = 0;
