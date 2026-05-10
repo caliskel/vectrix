@@ -1,12 +1,15 @@
-// Rooms-mode pause overlay. Replaces the settings menu in rooms (settings
-// stay in the sandbox build). The frame freezes while it's open, and the
-// player picks resume / restart / quit-to-menu from three buttons.
+// Pause overlay shared by rooms (Resume / Restart / Quit) and sandbox
+// (Settings / Main Menu + corner ×). The frame freezes while it's open;
+// keyboard binding and pause/resume side-effects are owned by the
+// caller. Styles are injected once and reused across both factories.
 
 const STYLE_ID = "rooms-pause-style";
 const STYLE = `
 .rp-overlay {
   position: fixed; inset: 0;
   background: rgba(10,14,26,0.85);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
   display: none;
   z-index: 100;
   align-items: center;
@@ -16,6 +19,7 @@ const STYLE = `
 }
 .rp-overlay.open { display: flex; }
 .rp-frame {
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -26,6 +30,31 @@ const STYLE = `
   border: 1px solid rgba(168, 85, 247, 0.22);
   box-shadow: 0 30px 60px rgba(0, 0, 0, 0.55);
   min-width: 280px;
+}
+.rp-close {
+  position: absolute;
+  top: 12px;
+  right: 14px;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: #94a3b8;
+  font-size: 22px;
+  font-weight: 600;
+  cursor: pointer;
+  border-radius: 4px;
+  font-family: inherit;
+  line-height: 1;
+  transition: background 0.15s, color 0.15s;
+}
+.rp-close:hover, .rp-close:focus-visible {
+  background: rgba(255, 255, 255, 0.08);
+  color: #d8b4fe;
+  outline: none;
 }
 .rp-title {
   font-size: 56px;
@@ -144,6 +173,80 @@ export function createPauseMenu(opts: {
     () => {
       setOpen(false);
       opts.onRestart();
+    },
+  );
+  root.querySelector<HTMLElement>('[data-action="quit"]')?.addEventListener(
+    "click",
+    () => {
+      opts.onQuit();
+    },
+  );
+
+  document.body.appendChild(root);
+
+  return {
+    isOpen() {
+      return open;
+    },
+    setOpen,
+    toggle() {
+      setOpen(!open);
+    },
+  };
+}
+
+export function createSandboxPauseMenu(opts: {
+  onSettings: () => void;
+  onResume: () => void;
+  onQuit: () => void;
+}): PauseMenuHandle {
+  injectStyle();
+
+  const root = document.createElement("div");
+  root.className = "rp-overlay";
+  root.innerHTML = `
+    <div class="rp-frame">
+      <button type="button" class="rp-close" data-action="close" aria-label="close">×</button>
+      <div class="rp-title">PAUSED</div>
+      <div class="rp-buttons">
+        <button type="button" class="rp-btn" data-action="settings"><span class="glyph">⚙</span>SETTINGS</button>
+        <button type="button" class="rp-btn" data-action="quit"><span class="glyph">←</span>MAIN MENU</button>
+      </div>
+    </div>
+  `;
+
+  let open = false;
+  function setOpen(value: boolean) {
+    open = value;
+    root.classList.toggle("open", value);
+    if (value) {
+      const first =
+        root.querySelector<HTMLElement>('[data-action="settings"]');
+      first?.focus();
+    }
+  }
+
+  // Backdrop click closes (resume). The frame stops the bubbling so
+  // clicks inside the card don't fall through.
+  root.addEventListener("click", (e) => {
+    if (e.target === root) {
+      setOpen(false);
+      opts.onResume();
+    }
+  });
+
+  root.querySelector<HTMLElement>('[data-action="close"]')?.addEventListener(
+    "click",
+    () => {
+      setOpen(false);
+      opts.onResume();
+    },
+  );
+  root.querySelector<HTMLElement>('[data-action="settings"]')?.addEventListener(
+    "click",
+    () => {
+      setOpen(false);
+      opts.onSettings();
     },
   );
   root.querySelector<HTMLElement>('[data-action="quit"]')?.addEventListener(

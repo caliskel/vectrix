@@ -20,6 +20,7 @@ import {
 } from "../lib/config";
 import { audio } from "../lib/audio";
 import { emitBulletHit, type ImpactContext } from "../lib/impacts";
+import { createSandboxPauseMenu } from "../lib/pause-menu";
 import { createMenu } from "../lib/settings-menu";
 import {
   PICKUP_COLORS,
@@ -125,6 +126,20 @@ window.addEventListener("resize", resize);
 
 const keys = new Set<string>();
 const menu = createMenu(settings, save, () => resetRun());
+// Pause overlay layered above the settings menu — the bind key
+// (menu1 / menu2) opens this first; the settings overlay only
+// appears when the player chooses SETTINGS from here.
+const pauseMenu = createSandboxPauseMenu({
+  onSettings: () => {
+    menu.toggle();
+  },
+  onResume: () => {
+    lastTime = performance.now();
+  },
+  onQuit: () => {
+    window.location.href = "/";
+  },
+});
 
 function normalizeCode(code: string): string {
   switch (code) {
@@ -164,12 +179,24 @@ window.addEventListener("keydown", (e) => {
 
   if (code === settings.bindings.menu1 || code === settings.bindings.menu2) {
     e.preventDefault();
-    menu.toggle();
+    if (menu.isOpen()) {
+      // Settings overlay was opened from the pause menu — close it
+      // and let the player back into the game directly. We don't
+      // pop back to the pause menu (would feel like an extra step
+      // for the common ESC-to-resume reflex).
+      menu.toggle();
+      lastTime = performance.now();
+    } else if (pauseMenu.isOpen()) {
+      pauseMenu.setOpen(false);
+      lastTime = performance.now();
+    } else {
+      pauseMenu.setOpen(true);
+    }
     keys.clear();
     return;
   }
 
-  if (menu.isOpen()) {
+  if (menu.isOpen() || pauseMenu.isOpen()) {
     return;
   }
 
@@ -192,7 +219,7 @@ window.addEventListener("blur", () => keys.clear());
 
 canvas.addEventListener("click", (e) => {
   audio.init();
-  if (menu.isOpen()) return;
+  if (menu.isOpen() || pauseMenu.isOpen()) return;
   if (state.runState !== "ended") return;
   const rect = canvas.getBoundingClientRect();
   const x = e.clientX - rect.left;
@@ -920,7 +947,7 @@ function frame(now: number) {
   lastTime = now;
   if (dt > 0.05) dt = 0.05;
 
-  if (menu.isOpen()) {
+  if (menu.isOpen() || pauseMenu.isOpen()) {
     render();
     requestAnimationFrame(frame);
     return;
