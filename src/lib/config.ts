@@ -253,6 +253,39 @@ export const HUNTER_TRAIL_MIN_SCALE = 0.3;
 export const HUNTER_TRAIL_MAX_SCALE = 0.8;
 export const HUNTER_TRAIL_GLOW_BLUR = 8;
 
+// Impact feedback — three intensity tiers for "successful hit" cues.
+// Bullet hit (light) is silent on shake / screen flash so it stays
+// pleasant under heavy fire. Enemy damage (medium) and enemy kill
+// (heavy) layer in screen shake, knockback, and on the kill, a brief
+// global white flash.
+export const IMPACT_BULLET_FLASH_MS = 80;
+export const IMPACT_BULLET_FLASH_RADIUS = 16;
+export const IMPACT_BULLET_PARTICLE_COUNT = 6;
+
+export const IMPACT_ENEMY_DAMAGE_FLASH_MS = 80;
+export const IMPACT_ENEMY_DAMAGE_KNOCKBACK_PX = 7;
+export const IMPACT_ENEMY_DAMAGE_KNOCKBACK_MS = 200;
+export const IMPACT_ENEMY_DAMAGE_RING_DURATION_MS = 200;
+export const IMPACT_ENEMY_DAMAGE_RING_START_R = 30;
+export const IMPACT_ENEMY_DAMAGE_RING_END_R = 70;
+export const IMPACT_ENEMY_DAMAGE_PARTICLE_COUNT = 8;
+export const IMPACT_ENEMY_DAMAGE_SHAKE_AMOUNT = 4;
+export const IMPACT_ENEMY_DAMAGE_SHAKE_DURATION_MS = 100;
+
+export const IMPACT_ENEMY_KILL_FLASH_MS = 100;
+export const IMPACT_ENEMY_KILL_RING_INNER_START_R = 40;
+export const IMPACT_ENEMY_KILL_RING_INNER_END_R = 100;
+export const IMPACT_ENEMY_KILL_RING_INNER_DURATION_MS = 250;
+export const IMPACT_ENEMY_KILL_RING_OUTER_START_R = 30;
+export const IMPACT_ENEMY_KILL_RING_OUTER_END_R = 160;
+export const IMPACT_ENEMY_KILL_RING_OUTER_DURATION_MS = 400;
+export const IMPACT_ENEMY_KILL_PARTICLE_COUNT = 16;
+export const IMPACT_ENEMY_KILL_WHITE_PARTICLE_COUNT = 8;
+export const IMPACT_ENEMY_KILL_FLASH_OPACITY = 0.15;
+export const IMPACT_ENEMY_KILL_SCREEN_FLASH_MS = 60;
+export const IMPACT_ENEMY_KILL_SHAKE_AMOUNT = 7;
+export const IMPACT_ENEMY_KILL_SHAKE_DURATION_MS = 180;
+
 // Bindings store KeyboardEvent.code values (layout-independent). Modifier
 // codes are normalized to drop the Left/Right side suffix (see normalizeCode
 // in main.ts) so either Shift key counts as "Shift", etc.

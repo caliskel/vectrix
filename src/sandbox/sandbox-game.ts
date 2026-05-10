@@ -19,6 +19,7 @@ import {
   type Settings,
 } from "../lib/config";
 import { audio } from "../lib/audio";
+import { emitBulletHit, type ImpactContext } from "../lib/impacts";
 import { createMenu } from "../lib/settings-menu";
 import {
   PICKUP_COLORS,
@@ -379,6 +380,11 @@ let particles: Particle[] = [];
 let endTryAgainBounds: Bounds | null = null;
 let endSettingsBounds: Bounds | null = null;
 
+// Sandbox uses only LIGHT-tier impact (dash-through pellets) so the
+// shake / global-flash hooks are stubs.
+const noopShake: ImpactContext["triggerShake"] = () => {};
+const noopScreenFlash: ImpactContext["triggerScreenFlash"] = () => {};
+
 function resetRun() {
   state.runState = "running";
   state.endReason = null;
@@ -610,12 +616,20 @@ function awardDashThrough(b: Bullet) {
     color: "#ffffff",
     lifetime: 0.6,
   });
-  addRing(b.x, b.y, {
-    startR: settings.bullets.size / 2 + 2,
-    endR: settings.bullets.size / 2 + 14,
-    color: "#ffffff",
-    lifetime: 0.18,
-  });
+  // LIGHT-tier impact feedback — small white flash + 6 bullet-color
+  // particles + bit-crushed "tic". No shake / no global flash for the
+  // bullet tier so heavy fire stays pleasant.
+  emitBulletHit(
+    {
+      particles,
+      rings,
+      triggerShake: noopShake,
+      triggerScreenFlash: noopScreenFlash,
+    },
+    b.x,
+    b.y,
+    settings.bullets.color,
+  );
   // chance to drop a pickup at the bullet's position
   if (Math.random() < settings.pickups.dropChance) {
     const type = rollPickupType(settings.pickups.weights);

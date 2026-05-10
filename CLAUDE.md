@@ -585,6 +585,49 @@ settings overlay on Esc / Tab.
   surfaced; some breaker / shield internals aren't yet).
 - Performance: spatial hash if `maxBullets` regularly exceeds ~150.
 
+## Impact feedback system
+
+Three intensity tiers for "successful hit" cues, plumbed through
+`src/lib/impacts.ts`. Each emit function takes an `ImpactContext`
+holding live references to the room/run's particle and ring lists
+plus two callbacks (`triggerShake`, `triggerScreenFlash`) — the
+caller wires those to whatever shake/flash state it owns.
+
+- **LIGHT (`emitBulletHit`)** — dash-through pellet. White flash
+  ring (16 px lifetime 80 ms) + 6 bullet-color particles + a
+  bit-crushed `audio.play.hitLight()` "tic". No screen shake or
+  global flash. Sandbox calls this from `awardDashThrough` so
+  rapid pellet hits stay pleasant.
+- **MEDIUM (`emitEnemyDamage`)** — dash-through landed but the
+  enemy is still alive. Sets the enemy's `hitFlashTime` (white
+  silhouette overlay) and a render-only knockback offset for
+  200 ms in the direction (enemy − player). Spawns an enemy-color
+  ring (30 → 70 px) + 8 enemy-color particles, triggers a 4 px
+  100 ms shake, and plays `audio.play.hitMedium()` (lowpass +
+  distorted membrane "thwak").
+- **HEAVY (`emitEnemyKill`)** — kill blow. Stamps a final 100 ms
+  hit flash on the dying enemy so its silhouette flashes white
+  one frame, then spawns concentric rings (white inner 40 →
+  100 px / enemy-color outer 30 → 160 px), 16 enemy + 8 white
+  particles, a 7 px 180 ms shake, and a global 60 ms 0.15-alpha
+  white overlay. Audio is a layered membrane + bandpassed noise
+  burst (`audio.play.hitHeavy()`).
+
+Enemies expose four impact-related fields that the system reads /
+mutates (`color`, `hitFlashTime`, knockback peak/time/duration).
+Per-frame the room loop ticks `hitFlashTime` and `knockbackTime`
+even on destroyed enemies so the post-kill flash silhouette can
+fade naturally; the silhouette renders as a pure white
+`globalCompositeOperation: "lighter"` fill of each enemy's body
+shape (helpers in `src/lib/enemies/fx.ts`). Knockback is
+render-only — `applyEnemyKnockback` just emits a
+`ctx.translate(offX, offY)` at the start of each enemy's draw,
+fading to 0 across `knockbackDuration`. Shake and screen flash in
+rooms live on `state.screenShake* / screenFlash*` triplets
+(remaining + initial + amount/opacity); render reads them and
+draws a translate / overlay rect respectively. Tunables are all
+in `config.ts` under `IMPACT_*`.
+
 ### TODO (project)
 
 - Main menu / mode select polish (currently a static landing).

@@ -47,6 +47,19 @@ export interface Enemy {
   x: number;
   y: number;
   hp: number;
+  /** Representative color for impact FX (kill ring, particles). Each
+   *  enemy publishes the most readable hue from its body palette. */
+  readonly color: string;
+  /** Seconds remaining for the white hit-flash overlay; ticked down
+   *  outside the enemy's own update so a freshly-killed enemy can
+   *  still flash for a frame after `destroyed` flips. */
+  hitFlashTime: number;
+  /** Seconds remaining of render-only knockback offset, plus the
+   *  initial duration for the linear fade and the peak (px) per axis. */
+  knockbackTime: number;
+  knockbackDuration: number;
+  knockbackPeakX: number;
+  knockbackPeakY: number;
   isDead(): boolean;
   takeDamage(amount: number): void;
   update(ctx: EnemyContext): void;

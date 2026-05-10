@@ -8,6 +8,7 @@ import {
   HUNTER_TRAIL_MIN_VELOCITY,
 } from "../config";
 import { drawNeon } from "../neon";
+import { applyEnemyKnockback, drawEnemyHitFlash } from "./fx";
 import type { Enemy, EnemyContext, EnemyType } from "./types";
 
 // Hunter — fast inertial chaser. Accelerates toward the player but
@@ -74,9 +75,15 @@ type TrailSample = {
 
 export class Hunter implements Enemy {
   readonly type: EnemyType = "hunter";
+  readonly color = HUNTER_COLOR;
   x: number;
   y: number;
   hp: number;
+  hitFlashTime = 0;
+  knockbackTime = 0;
+  knockbackDuration = 0;
+  knockbackPeakX = 0;
+  knockbackPeakY = 0;
   private destroyed = false;
   private vx = 0;
   private vy = 0;
@@ -164,7 +171,15 @@ export class Hunter implements Enemy {
   }
 
   draw(ctx: CanvasRenderingContext2D): void {
-    if (this.destroyed) return;
+    if (this.destroyed) {
+      drawEnemyHitFlash(ctx, this, () => {
+        ctx.save();
+        ctx.translate(this.x, this.y);
+        polyPath(ctx);
+        ctx.restore();
+      });
+      return;
+    }
     // Trail draws under the body. Suppressed during the contact
     // window so the bounce squash isn't competing with motion ghosts.
     if (this.contactSquashTime <= 0) this.drawTrail(ctx);
@@ -176,6 +191,7 @@ export class Hunter implements Enemy {
       GLOW_BLUR_MIN + (GLOW_BLUR_MAX - GLOW_BLUR_MIN) * speedNorm;
 
     ctx.save();
+    applyEnemyKnockback(ctx, this);
     ctx.translate(this.x, this.y);
     ctx.rotate(angle);
 
@@ -228,6 +244,7 @@ export class Hunter implements Enemy {
       4,
     );
 
+    drawEnemyHitFlash(ctx, this, () => polyPath(ctx));
     ctx.restore();
   }
 

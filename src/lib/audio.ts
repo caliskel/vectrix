@@ -56,6 +56,14 @@ class AudioEngine {
   // Sound 6: hit
   private hitSynth?: MembraneSynth;
 
+  // Impact feedback — three intensities (light/medium/heavy) layered
+  // so dash-through bullets don't drown the player in noise but big
+  // hits land with weight.
+  private hitLightSynth?: Synth;
+  private hitMediumSynth?: MembraneSynth;
+  private hitHeavyMembrane?: MembraneSynth;
+  private hitHeavyNoise?: NoiseSynth;
+
   // Sound 7: mult tier up
   private multSynth?: Synth;
 
@@ -87,6 +95,9 @@ class AudioEngine {
     this.setupPickupSpawn();
     this.setupPickupGrab();
     this.setupHit();
+    this.setupHitLight();
+    this.setupHitMedium();
+    this.setupHitHeavy();
     this.setupMultUp();
     this.setupRunEnd();
   }
@@ -184,6 +195,53 @@ class AudioEngine {
     }).connect(dist);
   }
 
+  // Light: ~880 Hz triangle through a bit-crusher — a tiny "tic"
+  // that reads as a successful pellet hit even when fired rapidly.
+  private setupHitLight(): void {
+    const crusher = new BitCrusher(4).connect(this.sfx!);
+    this.hitLightSynth = new Synth({
+      oscillator: { type: "triangle" },
+      envelope: { attack: 0.001, decay: 0.04, sustain: 0, release: 0.01 },
+    }).connect(crusher);
+  }
+
+  // Medium: low-mid membrane through lowpass + distortion — "thwak"
+  // for shaving HP off an enemy without killing.
+  private setupHitMedium(): void {
+    const filter = new Filter({
+      type: "lowpass",
+      frequency: 600,
+    }).connect(this.sfx!);
+    const dist = new Distortion(0.3).connect(filter);
+    this.hitMediumSynth = new MembraneSynth({
+      pitchDecay: 0.04,
+      octaves: 3,
+      oscillator: { type: "sine" },
+      envelope: { attack: 0.001, decay: 0.15, sustain: 0, release: 0.05 },
+    }).connect(dist);
+  }
+
+  // Heavy: long sub membrane + bandpassed white-noise burst —
+  // "BOOM-shhh" for kills, the loudest impact in the game.
+  private setupHitHeavy(): void {
+    const dist = new Distortion(0.5).connect(this.sfx!);
+    this.hitHeavyMembrane = new MembraneSynth({
+      pitchDecay: 0.08,
+      octaves: 5,
+      oscillator: { type: "sine" },
+      envelope: { attack: 0.001, decay: 0.4, sustain: 0, release: 0.2 },
+    }).connect(dist);
+    const bandpass = new Filter({
+      type: "bandpass",
+      frequency: 800,
+      Q: 2,
+    }).connect(this.sfx!);
+    this.hitHeavyNoise = new NoiseSynth({
+      noise: { type: "white" },
+      envelope: { attack: 0.001, decay: 0.2, sustain: 0, release: 0.05 },
+    }).connect(bandpass);
+  }
+
   private setupMultUp(): void {
     const reverb = new Reverb({ decay: 1.2, wet: 0.4 }).connect(this.sfx!);
     void reverb.generate();
@@ -247,6 +305,9 @@ class AudioEngine {
     pickupSpawn: (): void => this.playPickupSpawn(),
     pickupGrab: (type: PickupType): void => this.playPickupGrab(type),
     hit: (): void => this.playHit(),
+    hitLight: (): void => this.playHitLight(),
+    hitMedium: (): void => this.playHitMedium(),
+    hitHeavy: (): void => this.playHitHeavy(),
     smash: (strength: number): void => this.playSmash(strength),
     multUp: (tier: number): void => this.playMultUp(tier),
     runEnd: (): void => this.playRunEnd(),
@@ -340,6 +401,29 @@ class AudioEngine {
     if (!this.hitSynth) return;
     try {
       this.hitSynth.triggerAttackRelease(80, 0.4, toneNow());
+    } catch {}
+  }
+
+  private playHitLight(): void {
+    if (!this.hitLightSynth) return;
+    try {
+      this.hitLightSynth.triggerAttackRelease(880, 0.04, toneNow(), 0.18);
+    } catch {}
+  }
+
+  private playHitMedium(): void {
+    if (!this.hitMediumSynth) return;
+    try {
+      this.hitMediumSynth.triggerAttackRelease(120, 0.15, toneNow());
+    } catch {}
+  }
+
+  private playHitHeavy(): void {
+    if (!this.hitHeavyMembrane || !this.hitHeavyNoise) return;
+    try {
+      const t = toneNow();
+      this.hitHeavyMembrane.triggerAttackRelease(80, 0.4, t);
+      this.hitHeavyNoise.triggerAttackRelease(0.2, t);
     } catch {}
   }
 

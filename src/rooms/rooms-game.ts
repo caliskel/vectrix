@@ -17,6 +17,11 @@ import {
 } from "../lib/config";
 import { drawDoor, playerOverlapsDoor } from "../lib/door";
 import type { Enemy, Laser } from "../lib/enemies/types";
+import {
+  emitEnemyDamage,
+  emitEnemyKill,
+  type ImpactContext,
+} from "../lib/impacts";
 import { drawNeon } from "../lib/neon";
 import { PALETTE } from "../lib/palette";
 import {
@@ -24,7 +29,6 @@ import {
   type Particle,
   type Ring,
   addFloatingText,
-  addRing,
 } from "../lib/particles";
 import {
   type PlayerProfile,
@@ -281,7 +285,16 @@ type GameState = {
   particleSpawnTimer: number;
   clearedRoomIds: Set<string>;
   clearFlash: number; // counts down 0.2 → 0 after a fresh clear
-  screenShake: number; // counts down for laser-hit shake
+  // Screen shake — variable amount/duration so different impacts can
+  // shake harder. Remaining is the live countdown; Initial is the
+  // full duration captured at trigger so render can fade by t.
+  screenShakeRemaining: number;
+  screenShakeInitial: number;
+  screenShakeAmount: number;
+  // Brief global white flash overlay used by HEAVY-tier impacts.
+  screenFlashRemaining: number;
+  screenFlashInitial: number;
+  screenFlashOpacity: number;
   failedSnapshot: FailedSnapshot | null;
 };
 
@@ -351,7 +364,12 @@ export function start(canvas: HTMLCanvasElement): void {
     particleSpawnTimer: 0,
     clearedRoomIds: new Set(),
     clearFlash: 0,
-    screenShake: 0,
+    screenShakeRemaining: 0,
+    screenShakeInitial: 0,
+    screenShakeAmount: 0,
+    screenFlashRemaining: 0,
+    screenFlashInitial: 0,
+    screenFlashOpacity: 0,
     failedSnapshot: null,
   };
 
@@ -394,7 +412,12 @@ export function start(canvas: HTMLCanvasElement): void {
     state.particleSpawnTimer = 0;
     state.clearedRoomIds = new Set();
     state.clearFlash = 0;
-    state.screenShake = 0;
+    state.screenShakeRemaining = 0;
+    state.screenShakeInitial = 0;
+    state.screenShakeAmount = 0;
+    state.screenFlashRemaining = 0;
+    state.screenFlashInitial = 0;
+    state.screenFlashOpacity = 0;
     state.failedSnapshot = null;
     bullets = [];
     particles = [];
@@ -605,6 +628,32 @@ export function start(canvas: HTMLCanvasElement): void {
     }
   }
 
+  function triggerShake(amount: number, durationSec: number): void {
+    // Take whichever is louder so a small shake can't override a big
+    // one mid-decay; preserve the longer remaining time.
+    if (durationSec > state.screenShakeRemaining) {
+      state.screenShakeRemaining = durationSec;
+      state.screenShakeInitial = durationSec;
+      state.screenShakeAmount = amount;
+    } else if (amount > state.screenShakeAmount) {
+      state.screenShakeAmount = amount;
+    }
+  }
+
+  function triggerScreenFlash(durationSec: number, opacity: number): void {
+    state.screenFlashRemaining = durationSec;
+    state.screenFlashInitial = durationSec;
+    state.screenFlashOpacity = opacity;
+  }
+
+  function makeImpactCtx(): ImpactContext {
+    // Live references to the current particles / rings arrays.
+    // Construct fresh each call so reassignments earlier in the frame
+    // (filter() in the age loop) don't leave us pushing into a stale
+    // array.
+    return { particles, rings, triggerShake, triggerScreenFlash };
+  }
+
   function takeHit() {
     if (state.runState !== "playing") return;
     if (state.hitIframe > 0) return;
@@ -639,127 +688,37 @@ export function start(canvas: HTMLCanvasElement): void {
   }
 
   function destroyEnemy(enemy: Enemy) {
-    audio.play.bulletBreak();
+    // FX (rings, particles, sound, screen shake, screen flash) live in
+    // emitEnemyKill — this function only credits score and floats the
+    // "+N" tag.
+    let scoreAmount: number;
+    let textColor: string;
+    let textSize: number;
     if (enemy.type === "hunter") {
-      state.score += HUNTER_KILL_SCORE;
-      addFloatingText(
-        floatingTexts,
-        `+${HUNTER_KILL_SCORE}`,
-        enemy.x,
-        enemy.y - 18,
-        {
-          size: 22,
-          color: "#fb923c",
-          lifetime: 0.7,
-        },
-      );
-      addRing(rings, enemy.x, enemy.y, {
-        startR: 8,
-        endR: 130,
-        color: "#fb923c",
-        lifetime: 0.45,
-      });
-      for (let i = 0; i < 16; i++) {
-        const a = Math.random() * Math.PI * 2;
-        const sp = 300 + Math.random() * 150;
-        particles.push({
-          x: enemy.x,
-          y: enemy.y,
-          vx: Math.cos(a) * sp,
-          vy: Math.sin(a) * sp,
-          initialSize: 4,
-          color: "#fb923c",
-          age: 0,
-          lifetime: 0.75,
-          glowStrong: 14,
-          glowSoft: 5,
-          drag: 0.96,
-        });
-      }
-      console.log("Hunter destroyed");
+      scoreAmount = HUNTER_KILL_SCORE;
+      textColor = "#fb923c";
+      textSize = 22;
     } else if (enemy.type === "watcher") {
-      state.score += WATCHER_KILL_SCORE;
-      addFloatingText(
-        floatingTexts,
-        `+${WATCHER_KILL_SCORE}`,
-        enemy.x,
-        enemy.y - 18,
-        {
-          size: 24,
-          color: PALETTE.bullet,
-          lifetime: 0.7,
-        },
-      );
-      // double ring — outer red, inner white
-      addRing(rings, enemy.x, enemy.y, {
-        startR: 8,
-        endR: 120,
-        color: PALETTE.bullet,
-        lifetime: 0.4,
-      });
-      addRing(rings, enemy.x, enemy.y, {
-        startR: 6,
-        endR: 100,
-        color: "#ffffff",
-        lifetime: 0.45,
-      });
-      for (let i = 0; i < 12; i++) {
-        const a = Math.random() * Math.PI * 2;
-        const sp = 200 + Math.random() * 150;
-        const isRed = i % 2 === 0;
-        particles.push({
-          x: enemy.x,
-          y: enemy.y,
-          vx: Math.cos(a) * sp,
-          vy: Math.sin(a) * sp,
-          initialSize: 4,
-          color: isRed ? PALETTE.bullet : "#ffffff",
-          age: 0,
-          lifetime: 0.7,
-          glowStrong: 12,
-          glowSoft: 4,
-          drag: 0.96,
-        });
-      }
-      console.log("Watcher destroyed");
+      scoreAmount = WATCHER_KILL_SCORE;
+      textColor = PALETTE.bullet;
+      textSize = 24;
     } else {
-      state.score += TURRET_KILL_SCORE;
-      addFloatingText(
-        floatingTexts,
-        `+${TURRET_KILL_SCORE}`,
-        enemy.x,
-        enemy.y - 18,
-        {
-          size: 22,
-          color: PALETTE.playerDash,
-          lifetime: 0.7,
-        },
-      );
-      addRing(rings, enemy.x, enemy.y, {
-        startR: 8,
-        endR: 120,
-        color: PALETTE.playerDash,
-        lifetime: 0.4,
-      });
-      for (let i = 0; i < 16; i++) {
-        const a = Math.random() * Math.PI * 2;
-        const sp = 250 + Math.random() * 150;
-        particles.push({
-          x: enemy.x,
-          y: enemy.y,
-          vx: Math.cos(a) * sp,
-          vy: Math.sin(a) * sp,
-          initialSize: 4,
-          color: PALETTE.playerDash,
-          age: 0,
-          lifetime: 0.8,
-          glowStrong: 14,
-          glowSoft: 5,
-          drag: 0.96,
-        });
-      }
-      console.log("Turret destroyed");
+      scoreAmount = TURRET_KILL_SCORE;
+      textColor = PALETTE.playerDash;
+      textSize = 22;
     }
+    state.score += scoreAmount;
+    addFloatingText(
+      floatingTexts,
+      `+${scoreAmount}`,
+      enemy.x,
+      enemy.y - 18,
+      {
+        size: textSize,
+        color: textColor,
+        lifetime: 0.7,
+      },
+    );
   }
 
   function aliveEnemies(): Enemy[] {
@@ -883,8 +842,19 @@ export function start(canvas: HTMLCanvasElement): void {
       state.hitIframe = Math.max(0, state.hitIframe - dt);
     if (state.hitVignette > 0)
       state.hitVignette = Math.max(0, state.hitVignette - dt);
-    if (state.screenShake > 0)
-      state.screenShake = Math.max(0, state.screenShake - dt);
+    if (state.screenShakeRemaining > 0)
+      state.screenShakeRemaining = Math.max(0, state.screenShakeRemaining - dt);
+    if (state.screenFlashRemaining > 0)
+      state.screenFlashRemaining = Math.max(0, state.screenFlashRemaining - dt);
+    // Tick enemy FX timers outside the enemies' update() so they keep
+    // running even after destroyed flips (used for the post-kill hit
+    // flash silhouette).
+    for (const e of currentRoom.enemies) {
+      if (e.hitFlashTime > 0)
+        e.hitFlashTime = Math.max(0, e.hitFlashTime - dt);
+      if (e.knockbackTime > 0)
+        e.knockbackTime = Math.max(0, e.knockbackTime - dt);
+    }
 
     player.x += player.vx * dt;
     player.y += player.vy * dt;
@@ -1060,7 +1030,7 @@ export function start(canvas: HTMLCanvasElement): void {
         } else if (state.hitIframe > 0) {
           // already in post-hit i-frame, ignore
         } else {
-          state.screenShake = SCREEN_SHAKE_DURATION_SEC;
+          triggerShake(SCREEN_SHAKE_PX, SCREEN_SHAKE_DURATION_SEC);
           takeHit();
           break;
         }
@@ -1095,12 +1065,20 @@ export function start(canvas: HTMLCanvasElement): void {
       }
     }
 
-    // dash damage to enemies
+    // dash damage to enemies — split MEDIUM (alive after) vs HEAVY
+    // (kill blow) so the impact tier scales with significance.
     if (player.dashIframeTime > 0) {
       for (const e of currentRoom.enemies) {
         const wasDead = e.isDead();
         const hit = e.tryDashDamage(state.dashId, player.x, player.y, half);
-        if (hit && !wasDead && e.isDead()) destroyEnemy(e);
+        if (hit && !wasDead) {
+          if (e.isDead()) {
+            emitEnemyKill(makeImpactCtx(), e);
+            destroyEnemy(e);
+          } else {
+            emitEnemyDamage(makeImpactCtx(), e, player.x, player.y);
+          }
+        }
       }
     }
 
@@ -1159,10 +1137,10 @@ export function start(canvas: HTMLCanvasElement): void {
     // screen shake — applied to the room transform only so HUD stays put
     let shakeX = 0;
     let shakeY = 0;
-    if (state.screenShake > 0) {
-      const t = state.screenShake / SCREEN_SHAKE_DURATION_SEC;
-      shakeX = (Math.random() * 2 - 1) * SCREEN_SHAKE_PX * t;
-      shakeY = (Math.random() * 2 - 1) * SCREEN_SHAKE_PX * t;
+    if (state.screenShakeRemaining > 0 && state.screenShakeInitial > 0) {
+      const t = state.screenShakeRemaining / state.screenShakeInitial;
+      shakeX = (Math.random() * 2 - 1) * state.screenShakeAmount * t;
+      shakeY = (Math.random() * 2 - 1) * state.screenShakeAmount * t;
     }
     ctx.setTransform(
       scale * dpr,
@@ -1328,6 +1306,13 @@ export function start(canvas: HTMLCanvasElement): void {
 
     // back to CSS pixels for full-screen overlays + HUD
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    // global white impact flash — alpha fades over the remaining window
+    if (state.screenFlashRemaining > 0 && state.screenFlashInitial > 0) {
+      const t = state.screenFlashRemaining / state.screenFlashInitial;
+      ctx.fillStyle = `rgba(255, 255, 255, ${state.screenFlashOpacity * t})`;
+      ctx.fillRect(0, 0, viewW, viewH);
+    }
 
     // hit vignette
     if (state.hitVignette > 0) {

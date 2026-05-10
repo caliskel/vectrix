@@ -9,6 +9,7 @@ import {
   WATCHER_SPEED_FACTOR,
 } from "../config";
 import { drawNeon } from "../neon";
+import { applyEnemyKnockback, drawEnemyHitFlash } from "./fx";
 import type { Enemy, EnemyContext, EnemyType, Laser } from "./types";
 
 // Layered eye visual. Outer ring is stroke-only so the dark gap
@@ -54,9 +55,15 @@ const BRAKE_TOTAL_SEC = BRAKE_SQUASH_SEC + BRAKE_RECOVERY_SEC;
 
 export class Watcher implements Enemy {
   readonly type: EnemyType = "watcher";
+  readonly color = "#ff1744";
   x: number;
   y: number;
   hp: number;
+  hitFlashTime = 0;
+  knockbackTime = 0;
+  knockbackDuration = 0;
+  knockbackPeakX = 0;
+  knockbackPeakY = 0;
   private destroyed = false;
   private vx = 0;
   private vy = 0;
@@ -236,7 +243,17 @@ export class Watcher implements Enemy {
   }
 
   draw(ctx: CanvasRenderingContext2D): void {
-    if (this.destroyed) return;
+    if (this.destroyed) {
+      drawEnemyHitFlash(ctx, this, () => {
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, WATCHER_RADIUS, 0, Math.PI * 2);
+        ctx.fill();
+      });
+      return;
+    }
+
+    ctx.save();
+    applyEnemyKnockback(ctx, this);
 
     // Brake squash transform — held at full squash for the squash phase,
     // then linearly recovers toward 1.0 over the recovery phase. Axis
@@ -353,6 +370,13 @@ export class Watcher implements Enemy {
       ctx.arc(startX + i * dotSpacing, dotsY, 3, 0, Math.PI * 2);
       ctx.fill();
     }
+
+    drawEnemyHitFlash(ctx, this, () => {
+      ctx.beginPath();
+      ctx.arc(this.x, this.y, WATCHER_RADIUS, 0, Math.PI * 2);
+      ctx.fill();
+    });
+    ctx.restore();
   }
 
   overlapsPlayer(px: number, py: number, half: number): boolean {

@@ -1,6 +1,7 @@
 import { makeBullet } from "../bullets";
 import { drawNeon } from "../neon";
 import { PALETTE } from "../palette";
+import { applyEnemyKnockback, drawEnemyHitFlash } from "./fx";
 import type { Enemy, EnemyContext, EnemyType } from "./types";
 
 const TURRET_RADIUS = 25;
@@ -13,9 +14,15 @@ const TURRET_HP_MAX = 3;
 
 export class Turret implements Enemy {
   readonly type: EnemyType = "turret";
+  readonly color = PALETTE.playerDash;
   x: number;
   y: number;
   hp: number;
+  hitFlashTime = 0;
+  knockbackTime = 0;
+  knockbackDuration = 0;
+  knockbackPeakX = 0;
+  knockbackPeakY = 0;
   private aimAngle: number;
   private shootTimer: number;
   private dashIdAlreadyDamaged = -1;
@@ -78,8 +85,17 @@ export class Turret implements Enemy {
   }
 
   draw(ctx: CanvasRenderingContext2D): void {
-    if (this.destroyed) return;
+    if (this.destroyed) {
+      drawEnemyHitFlash(ctx, this, () => {
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, TURRET_RADIUS, 0, Math.PI * 2);
+        ctx.fill();
+      });
+      return;
+    }
     const col = PALETTE.playerDash;
+    ctx.save();
+    applyEnemyKnockback(ctx, this);
 
     // body: double-stroke ring
     drawNeon(
@@ -148,6 +164,13 @@ export class Turret implements Enemy {
       ctx.arc(startX + i * dotSpacing, dotsY, 3, 0, Math.PI * 2);
       ctx.fill();
     }
+
+    drawEnemyHitFlash(ctx, this, () => {
+      ctx.beginPath();
+      ctx.arc(this.x, this.y, TURRET_RADIUS, 0, Math.PI * 2);
+      ctx.fill();
+    });
+    ctx.restore();
   }
 
   overlapsPlayer(px: number, py: number, half: number): boolean {
