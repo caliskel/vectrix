@@ -54,8 +54,9 @@ src/
     main.ts           — entry; locates #app and calls start()
     rooms-game.ts     — campaign engine; locks behind the tutorial and
                         currently runs Room 1 (corridor) + Room 2
-                        (arena) + Room 3 placeholder
-    room1.ts / room2.ts / room3.ts
+                        (arena) + Room 3 (narrow trap) + Room 4
+                        placeholder
+    room1.ts / room2.ts / room3.ts / room4.ts
   tutorial/
     main.ts           — entry for /tutorial.html
     tutorial-game.ts  — fork of rooms-game with tutorial-specific HUD,
@@ -471,11 +472,10 @@ instead of advancing.
 
 ## Campaign rooms (`rooms.html`)
 
-The campaign now starts at **Room 1 (corridor)**, displayed in
-the HUD as `ROOM 1 / 2`. Room 2 is the arena. Room 3 is the
-next-up placeholder past the campaign ("coming soon" message);
-the HUD counter holds at `2 / 2` once the player steps into it.
-On launch the engine checks
+The campaign now runs **Room 1 → Room 2 → Room 3** with a
+**Room 4 placeholder** past the end. HUD shows `ROOM N / 3`;
+the counter holds at `3 / 3` once the player steps into the
+placeholder. On launch the engine checks
 `localStorage["dash-proto:tutorial-completed"]` — if absent,
 it renders a "STORY MODE LOCKED" full-page overlay with a CTA
 that links straight to `/tutorial.html`, and never starts the
@@ -533,11 +533,37 @@ manage distance and angles instead of peeking around a column.
   next step; the bullet/laser clipping was tested with columns
   in place and works regardless.
 
-### Room 3 (placeholder)
+### Room 3 — narrow trap
+
+1200×800 with a Hunter that's hostile from the first frame and
+two crossfire turrets. The encounter teaches constant motion:
+the turret pair on (600, 150) / (600, 650) carves the central
+horizontal so standing on the door's y-line catches both
+streams, and the Hunter's inertia punishes idle holds.
+
+- **Turret #1** at (600, 150), **Turret #2** at (600, 650) —
+  vanilla Turrets (HP 2). Their bullets cross at the spawn line
+  (y = 400) so the player has to weave instead of strafing
+  along the centre.
+- **Hunter** at (900, 400) constructed with `{ startsAggressive:
+  true }`. The flag is a Hunter-ctor option that initialises
+  `awarenessState = "aggro"` and `prevAwarenessState = "aggro"`,
+  skipping the idle / alerting telegraph entirely so the chase
+  starts on entry. Hunter carries the key (`dropsKey = true`,
+  HP 1).
+- Door at (1185, 400) is `requiresKey: true`. Per the global
+  rule, it opens on the key alone — so a clean dash through
+  the Hunter (kill, pickup, exit) finishes the room without
+  ever firing on the turrets. Slower play kills turrets first
+  to open the centre, then deals with the Hunter.
+- `useCamera = true`, spawn at (150, 400).
+  `nextRoomId = "room4"`.
+
+### Room 4 (placeholder)
 
 - 1200×800 closed border, no enemies, no door,
-  `message: "Room 3 — coming soon"`. Confirms the Room 2 → Room
-  3 transition while real Room 3 content is in flight.
+  `message: "Room 4 — coming soon"`. Confirms the Room 3 → Room
+  4 transition while real Room 4 content is in flight.
 
 ## Enemy awareness system (`lib/enemies/awareness.ts`)
 
@@ -851,9 +877,9 @@ settings overlay on Esc / Tab.
 
 ### TODO (rooms direction)
 
-- **Room 3** — currently a "coming soon" placeholder past the
-  arena; needs real content (likely the next mechanic
-  introduction or a multi-encounter sequence).
+- **Room 4** — currently a "coming soon" placeholder past the
+  Hunter trap; next-up is probably either a layered
+  multi-mechanic encounter or the campaign's first boss.
 - **Key icon visual polish** — the `drawKey` glyph is a diamond
   + stem; readable but a bit primitive. A more iconic key shape
   (or a proper sprite) would improve the HUD slot too.

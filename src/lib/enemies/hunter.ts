@@ -147,7 +147,11 @@ export class Hunter implements Enemy {
   private lastTrailX = Number.NEGATIVE_INFINITY;
   private lastTrailY = Number.NEGATIVE_INFINITY;
 
-  constructor(x: number, y: number) {
+  constructor(
+    x: number,
+    y: number,
+    opts: { startsAggressive?: boolean } = {},
+  ) {
     this.x = x;
     this.y = y;
     this.hp = HUNTER_HP_MAX;
@@ -161,6 +165,14 @@ export class Hunter implements Enemy {
       Math.random() * (HUNTER_IDLE_PATH_SIZE_MAX - HUNTER_IDLE_PATH_SIZE_MIN);
     this.idleRotation = Math.random() * Math.PI * 2;
     initAwareness(this, ENEMY_HUNTER_DETECTION);
+    if (opts.startsAggressive) {
+      // Skip the idle / alerting telegraph entirely — the Hunter
+      // begins the encounter mid-pounce. prevAwarenessState is
+      // pinned to "aggro" so the idle→non-idle latch in update()
+      // doesn't reset idleHome on the first frame.
+      this.awarenessState = "aggro";
+      this.prevAwarenessState = "aggro";
+    }
   }
 
   isDead(): boolean {

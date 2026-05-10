@@ -80,6 +80,7 @@ import {
 import { buildRoom1 } from "./room1";
 import { buildRoom2 } from "./room2";
 import { buildRoom3 } from "./room3";
+import { buildRoom4 } from "./room4";
 import type { Room } from "../lib/room";
 
 // Canonical letterbox viewport (constant across all rooms; camera-
@@ -102,7 +103,7 @@ const SCREEN_SHAKE_DURATION_SEC = 0.2;
 const SCREEN_SHAKE_PX = 4;
 // Campaign currently has Room 4 (corridor) + Room 5 placeholder. The
 // HUD displays them as 1 / 2 since rooms 1–3 moved to the tutorial.
-const ROOM_TOTAL = 2;
+const ROOM_TOTAL = 3;
 const TUTORIAL_COMPLETED_KEY = "dash-proto:tutorial-completed";
 const ROOM_CLEAR_FLASH = 0.2;
 const ROOMS_BEST_KEY = "dash-proto:rooms-best";
@@ -403,6 +404,7 @@ export function start(canvas: HTMLCanvasElement): void {
   rooms.set("room1", buildRoom1());
   rooms.set("room2", buildRoom2());
   rooms.set("room3", buildRoom3());
+  rooms.set("room4", buildRoom4());
 
   const state: GameState = {
     runState: "playing",
@@ -448,6 +450,7 @@ export function start(canvas: HTMLCanvasElement): void {
     rooms.set("room1", buildRoom1());
     rooms.set("room2", buildRoom2());
     rooms.set("room3", buildRoom3());
+    rooms.set("room4", buildRoom4());
   }
 
   function restartRun() {
@@ -1699,14 +1702,17 @@ export function start(canvas: HTMLCanvasElement): void {
 
     ctx.font = "600 22px ui-monospace, SFMono-Regular, Menlo, monospace";
     ctx.fillStyle = "#ffffff";
-    // Campaign rooms: room1 → "1 / 2", room2 → "2 / 2". The room3
-    // placeholder is past the campaign so the counter holds at 2 / 2.
+    // Campaign rooms: room1 → "1 / 3", room2 → "2 / 3", room3 →
+    // "3 / 3". The room4 placeholder is past the campaign so the
+    // counter holds at 3 / 3.
     const roomNum =
       currentRoom.id === "room1"
         ? 1
         : currentRoom.id === "room2"
           ? 2
-          : ROOM_TOTAL;
+          : currentRoom.id === "room3"
+            ? 3
+            : ROOM_TOTAL;
     ctx.fillText(`${roomNum} / ${ROOM_TOTAL}`, colA, y0 + 14);
 
     const alive = aliveEnemies().length;
