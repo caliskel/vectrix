@@ -23,6 +23,11 @@ const VICTORY_COLOR = "#22ff88";
 const FADE_OVERLAY_COLOR = "rgba(0, 0, 0, ALPHA)"; // ALPHA replaced at use
 const SENTINEL_HP_MAX = 30;
 const SENTINEL_HITBOX_RADIUS = 110;
+// Contact-damage radius lines up with the outermost shell so the
+// "you're inside the boss" cue is visually consistent. Same value
+// as the dash hitbox today; kept as a separate constant in case
+// the two ever need to drift apart.
+const SENTINEL_CONTACT_RADIUS = SENTINEL_HITBOX_RADIUS;
 
 // Intro timeline (ms, all relative to state entry).
 const INTRO_FADE_END_MS = 800;
@@ -180,6 +185,12 @@ export class Sentinel implements Enemy {
    *  duration in seconds. */
   pendingShakePx = 0;
   pendingShakeSec = 0;
+  /** Set true on any frame the player's body overlaps the Sentinel's
+   *  contact radius during combat states. rooms-game polls + clears
+   *  it and dispatches a single `takeHit()`. Gated internally by
+   *  `state in {idle, attacking}` and the player's dash-iframe so the
+   *  flag only fires when the hit should actually count. */
+  requestPlayerHit = false;
 
   // anim
   private rotation = 0;
@@ -492,6 +503,21 @@ export class Sentinel implements Enemy {
       this.radialPhase !== "idle" || this.aimedPhase !== "idle"
         ? "attacking"
         : "idle";
+
+    // Contact damage. Only flagged in combat states (intro / dying /
+    // defeated already short-circuit the surrounding update branches).
+    // Player dash-iframes are checked here so the player can dash
+    // through the body cleanly; the post-hit i-frame gate lives at
+    // rooms-game's takeHit so we don't double the rule.
+    const player = ctxRoom.player;
+    if (player.dashIframeTime <= 0) {
+      const dx = player.x - this.x;
+      const dy = player.y - this.y;
+      const r = SENTINEL_CONTACT_RADIUS + ctxRoom.playerHalfSize;
+      if (dx * dx + dy * dy < r * r) {
+        this.requestPlayerHit = true;
+      }
+    }
   }
 
   private beginAimedShot(ctxRoom: EnemyContext): void {

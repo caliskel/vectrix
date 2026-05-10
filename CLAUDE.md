@@ -667,9 +667,14 @@ transitions for score + Game Complete.
     on the locked target. Each fired bullet pops an 8-particle
     muzzle flash at the boss centre.
   Damage via dash-through (1 HP per dash) works only in these
-  two states. The HP bar sits below the HUD block
-  (HUD_BOTTOM_Y + 24 px pad) so the ROOM/HP/SCORE row never
-  overlaps the boss bar.
+  two states. **Contact damage**: touching the boss body (radius
+  110, the outer shell) deals 1 HP, gated by player i-frames and
+  dash i-frames — Sentinel.update sets a `requestPlayerHit` flag
+  each frame the player overlaps and rooms-game's
+  `consumeSentinelEffects` drains it into the standard `takeHit`
+  pipeline. The HP bar sits below the HUD block (HUD_BOTTOM_Y +
+  24 px pad) so the ROOM/HP/SCORE row never overlaps the boss
+  bar.
 - **dying** (6050 ms): triggered by `takeDamage` driving HP to
   0. `shouldFreezeWorld()` is true again — the death cinematic
   is the focus. `Sentinel.timeScale` ramps `1.0 → 0.3` over the

@@ -908,12 +908,19 @@ export function start(canvas: HTMLCanvasElement): void {
 
   // Drains Sentinel.pendingShake* into rooms-game's shake state so
   // the boss can request screen shake without a direct reference to
-  // triggerShake. Polled each frame after Sentinel.update.
+  // triggerShake, and dispatches the contact-damage takeHit() when
+  // the boss flags it. Polled each frame after Sentinel.update.
   function consumeSentinelEffects(sentinel: Sentinel): void {
     if (sentinel.pendingShakePx > 0 && sentinel.pendingShakeSec > 0) {
       triggerShake(sentinel.pendingShakePx, sentinel.pendingShakeSec);
       sentinel.pendingShakePx = 0;
       sentinel.pendingShakeSec = 0;
+    }
+    if (sentinel.requestPlayerHit) {
+      sentinel.requestPlayerHit = false;
+      // takeHit gates by hitIframe, dashIframe, godMode, and the
+      // boss-cinematic guard internally — no extra checks needed.
+      takeHit();
     }
   }
 
