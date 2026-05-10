@@ -55,11 +55,13 @@ src/
     rooms-game.ts     — campaign engine; locks behind the tutorial and
                         currently runs Room 1 (corridor) + Room 2
                         (narrow trap) + Room 3 (arena) + Room 4
-                        placeholder. Build files are room1.ts /
-                        room2.ts (arena content) / room3.ts (trap
-                        content) / room4.ts; the campaign order
-                        chains room1 → room3 → room2 → room4.
-    room1.ts / room2.ts / room3.ts / room4.ts
+                        (long phase corridor) + Room 5 placeholder.
+                        Build files are room1.ts / room2.ts (arena
+                        content) / room3.ts (trap content) /
+                        room4.ts / room5.ts; the campaign order
+                        chains room1 → room3 → room2 → room4 →
+                        room5.
+    room1.ts / room2.ts / room3.ts / room4.ts / room5.ts
   tutorial/
     main.ts           — entry for /tutorial.html
     tutorial-game.ts  — fork of rooms-game with tutorial-specific HUD,
@@ -475,9 +477,9 @@ instead of advancing.
 
 ## Campaign rooms (`rooms.html`)
 
-The campaign now runs **Room 1 → Room 2 → Room 3** with a
-**Room 4 placeholder** past the end. HUD shows `ROOM N / 3`;
-the counter holds at `3 / 3` once the player steps into the
+The campaign now runs **Room 1 → Room 2 → Room 3 → Room 4** with
+a **Room 5 placeholder** past the end. HUD shows `ROOM N / 4`;
+the counter holds at `4 / 4` once the player steps into the
 placeholder. On launch the engine checks
 `localStorage["dash-proto:tutorial-completed"]` — if absent,
 it renders a "STORY MODE LOCKED" full-page overlay with a CTA
@@ -560,17 +562,56 @@ manage distance and angles instead of peeking around a column.
   on the key alone (the corner turrets can stay alive — the
   Watcher kill is the gate). `useCamera = true` (1400×900 ≥
   1200×800 viewport letterbox). Spawn at (200, 450). `nextRoomId
-  = "room4"` (placeholder).
+  = "room4"` (long phase corridor).
 - If the open layout reads as too punishing later, dropping one
   or two 50×200 columns back near the centre is the cheapest
   next step; the bullet/laser clipping was tested with columns
   in place and works regardless.
 
-### Room 4 (placeholder)
+### Room 4 — long phase corridor
+
+8000×700 corridor split into 6 sections (~1300 px each) by 30 px
+**dashable** dividers. Lazy spawns drop one phase-through Hunter
+into each section as the player crosses in, and the key is
+pre-placed on the floor in section 4 instead of dropping from a
+kill.
+
+- **Section dividers** sit at x = 1300, 2600, 3900, 5200, 6500
+  (full ROOM_H tall, `dashable: true`). The new
+  `Wall.dashable` flag is filtered out of the player's wall list
+  while `dashIframeTime > 0` (rooms-game's `wallsForPlayer`),
+  and `drawWalls` paints dashable walls with a cyan dashed
+  outline so the dash colour reads as "phase through" without
+  copy. Bullets, lasers, and non-phasing enemies still treat
+  dashable walls as solid — the filter is player-only.
+- **Pending hunters** live in `Room.pendingEnemies`, a new
+  field on the Room type. Each entry is `{ triggerX, spawned,
+  spawn() }`; rooms-game ticks the list every frame after the
+  awareness pass and pushes a fresh enemy into
+  `currentRoom.enemies` the moment `player.x ≥ triggerX`.
+  Room 4's six entries fire at triggers 0 / 1340 / 2640 / 3940 /
+  5240 / 6540 with hunters spawning at the section's far end
+  (1100 / 2400 / 3700 / 5000 / 6300 / 7700, all y = 350). Each
+  Hunter is constructed with `{ startsAggressive: true,
+  ignoresWalls: true }` — the new `ignoresWalls` opt skips both
+  `resolveEntityWallCollisions` calls in Hunter.update so a
+  phase-through hunter from section 1 can converge on the
+  player at the far end of the corridor.
+- **Static key** uses the new `Room.initialKey: { x, y }` field.
+  rooms-game's `applyInitialKey()` seeds `currentKey =
+  createKey(...)` on initial mount, restart, and every transition
+  into a room that carries one. Room 4 places the key at
+  (4500, 350) — middle of section 4, on the door's y-line.
+- Door at (7985, 350) is `requiresKey: true` and opens on the
+  key alone (per the global rule); leftover hunters don't block
+  the exit. `useCamera = true`, spawn at (200, 350),
+  `nextRoomId = "room5"`.
+
+### Room 5 (placeholder)
 
 - 1200×800 closed border, no enemies, no door,
-  `message: "Room 4 — coming soon"`. Confirms the Room 3 → Room
-  4 transition while real Room 4 content is in flight.
+  `message: "Room 5 — coming soon"`. Confirms the Room 4 → Room
+  5 transition while real Room 5 content is in flight.
 
 ## Enemy awareness system (`lib/enemies/awareness.ts`)
 
@@ -893,8 +934,8 @@ settings overlay on Esc / Tab.
 
 ### TODO (rooms direction)
 
-- **Room 4** — currently a "coming soon" placeholder past the
-  Hunter trap; next-up is probably either a layered
+- **Room 5** — currently a "coming soon" placeholder past the
+  long phase corridor; next-up is probably either a layered
   multi-mechanic encounter or the campaign's first boss.
 - **Key icon visual polish** — the `drawKey` glyph is a diamond
   + stem; readable but a bit primitive. A more iconic key shape

@@ -81,6 +81,7 @@ import { buildRoom1 } from "./room1";
 import { buildRoom2 } from "./room2";
 import { buildRoom3 } from "./room3";
 import { buildRoom4 } from "./room4";
+import { buildRoom5 } from "./room5";
 import type { Room } from "../lib/room";
 
 // Canonical letterbox viewport (constant across all rooms; camera-
@@ -103,7 +104,7 @@ const SCREEN_SHAKE_DURATION_SEC = 0.2;
 const SCREEN_SHAKE_PX = 4;
 // Campaign currently has Room 4 (corridor) + Room 5 placeholder. The
 // HUD displays them as 1 / 2 since rooms 1–3 moved to the tutorial.
-const ROOM_TOTAL = 3;
+const ROOM_TOTAL = 4;
 const TUTORIAL_COMPLETED_KEY = "dash-proto:tutorial-completed";
 const ROOM_CLEAR_FLASH = 0.2;
 const ROOMS_BEST_KEY = "dash-proto:rooms-best";
@@ -405,6 +406,7 @@ export function start(canvas: HTMLCanvasElement): void {
   rooms.set("room2", buildRoom2());
   rooms.set("room3", buildRoom3());
   rooms.set("room4", buildRoom4());
+  rooms.set("room5", buildRoom5());
 
   const state: GameState = {
     runState: "playing",
@@ -443,7 +445,21 @@ export function start(canvas: HTMLCanvasElement): void {
     player.dashIframeTime = 0;
     player.cooldown = 0;
   }
+
+  function applyInitialKey() {
+    // Pre-placed key on the floor (Room 4). Seeded fresh on every
+    // entry to the room so a restart or back-track recreates the
+    // pickup. Mutually exclusive with `dropsKey` enemy spawns.
+    if (currentRoom.initialKey) {
+      currentKey = createKey(
+        currentRoom.initialKey.x,
+        currentRoom.initialKey.y,
+      );
+    }
+  }
+
   spawnPlayerInCurrentRoom();
+  applyInitialKey();
   snapCameraToRoom();
 
   function rebuildAllRooms() {
@@ -451,6 +467,7 @@ export function start(canvas: HTMLCanvasElement): void {
     rooms.set("room2", buildRoom2());
     rooms.set("room3", buildRoom3());
     rooms.set("room4", buildRoom4());
+    rooms.set("room5", buildRoom5());
   }
 
   function restartRun() {
@@ -482,6 +499,7 @@ export function start(canvas: HTMLCanvasElement): void {
     keyHeld = false;
     tryAgainBounds = null;
     spawnPlayerInCurrentRoom();
+    applyInitialKey();
     resetEyeState(player);
     snapCameraToRoom();
   }
@@ -497,6 +515,7 @@ export function start(canvas: HTMLCanvasElement): void {
     currentKey = null;
     keyHeld = false;
     spawnPlayerInCurrentRoom();
+    applyInitialKey();
     snapCameraToRoom();
   }
 
@@ -1031,9 +1050,16 @@ export function start(canvas: HTMLCanvasElement): void {
     // interior walls (perimeter is already handled above).
     const preVx = player.vx;
     const preVy = player.vy;
+    // Walls flagged `dashable` (Room 4 section dividers) phase the
+    // player through during dash i-frames so the only way past them
+    // is a clean dash.
+    const wallsForPlayer =
+      player.dashIframeTime > 0
+        ? currentRoom.walls.filter((w) => !w.dashable)
+        : currentRoom.walls;
     const collisionResult = resolvePlayerWallCollisions(
       player,
-      currentRoom.walls,
+      wallsForPlayer,
       half,
     );
     if (
@@ -1145,6 +1171,18 @@ export function start(canvas: HTMLCanvasElement): void {
       playerMaxSpeed: settings.player.maxSpeed,
       walls: currentRoom.walls,
     };
+    // Lazy spawns (Room 4 corridor) — fire any pending enemy whose
+    // triggerX has been crossed. Runs before awareness so the new
+    // hunter immediately sees the player on its first tick.
+    if (currentRoom.pendingEnemies) {
+      for (const p of currentRoom.pendingEnemies) {
+        if (!p.spawned && player.x >= p.triggerX) {
+          p.spawned = true;
+          currentRoom.enemies.push(p.spawn());
+        }
+      }
+    }
+
     // Awareness ramps run BEFORE enemy update so combat ticks see the
     // freshly-promoted aggro state immediately. Trigger ctx lets the
     // awareness module spawn the alert ring + particle burst directly
@@ -1704,11 +1742,11 @@ export function start(canvas: HTMLCanvasElement): void {
 
     ctx.font = "600 22px ui-monospace, SFMono-Regular, Menlo, monospace";
     ctx.fillStyle = "#ffffff";
-    // Campaign progression: corridor → trap → arena. File ids stay
-    // as built (room1 / room3 / room2) but their slot in the
-    // campaign maps to: room1 → 1, room3 (trap) → 2, room2 (arena)
-    // → 3. The room4 placeholder is past the campaign so the
-    // counter holds at 3 / 3.
+    // Campaign chain: corridor → trap → arena → long corridor.
+    // File ids: room1 / room3 (trap) / room2 (arena) / room4 (long
+    // corridor) — slots map to player-visible numbers below. The
+    // room5 placeholder is past the campaign so the counter holds
+    // at 4 / 4.
     const roomNum =
       currentRoom.id === "room1"
         ? 1
@@ -1716,7 +1754,9 @@ export function start(canvas: HTMLCanvasElement): void {
           ? 2
           : currentRoom.id === "room2"
             ? 3
-            : ROOM_TOTAL;
+            : currentRoom.id === "room4"
+              ? 4
+              : ROOM_TOTAL;
     ctx.fillText(`${roomNum} / ${ROOM_TOTAL}`, colA, y0 + 14);
 
     const alive = aliveEnemies().length;

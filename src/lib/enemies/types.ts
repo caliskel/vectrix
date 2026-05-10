@@ -123,6 +123,10 @@ export interface Enemy {
    *  `ENEMY_DEAGGRO_COOLDOWN_MS`. Falsy / undefined keeps the
    *  Hunter-style "aggro forever" behaviour. */
   canDeaggro?: boolean;
+  /** When true, the enemy phases through walls — its update() skips
+   *  every `resolveEntityWallCollisions` call. Used by Room 4 hunters
+   *  so the corridor-section walls only constrain the player. */
+  ignoresWalls?: boolean;
   /** Seconds spent outside the de-aggro radius while in aggro. Reset
    *  to 0 whenever the player re-enters the radius and on every state
    *  transition through `initAwareness`. Only ticked when

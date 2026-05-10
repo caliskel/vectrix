@@ -1,7 +1,17 @@
 import { PALETTE } from "./palette";
 import type { Player } from "./player";
 
-export type Wall = { x: number; y: number; w: number; h: number };
+export type Wall = {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  /** When true, the player phases through this wall while in dash
+   *  i-frames. Other entities (enemies, bullets, lasers) still treat
+   *  it as solid. Tagged on Tutorial Room 0's dash gate and the Room
+   *  4 corridor's section dividers. */
+  dashable?: boolean;
+};
 
 /** Anything we resolve walls against. Player and the moving enemies
  *  (Watcher, Hunter) all satisfy this shape, so the resolver is shared. */
@@ -88,10 +98,20 @@ export function drawWalls(
   for (const w of walls) {
     ctx.fillRect(w.x, w.y, w.w, w.h);
   }
-  ctx.strokeStyle = `rgba(168, 85, 247, 0.3)`; // PALETTE.player at alpha 0.3
   ctx.lineWidth = 1;
   for (const w of walls) {
-    ctx.strokeRect(w.x + 0.5, w.y + 0.5, w.w - 1, w.h - 1);
+    if (w.dashable) {
+      // Dashable walls get a cyan dashed outline so the player
+      // associates them with the dash colour and reads "phase
+      // through" without copy.
+      ctx.strokeStyle = PALETTE.playerDash;
+      ctx.setLineDash([6, 6]);
+      ctx.strokeRect(w.x + 0.5, w.y + 0.5, w.w - 1, w.h - 1);
+      ctx.setLineDash([]);
+    } else {
+      ctx.strokeStyle = `rgba(168, 85, 247, 0.3)`; // PALETTE.player at alpha 0.3
+      ctx.strokeRect(w.x + 0.5, w.y + 0.5, w.w - 1, w.h - 1);
+    }
   }
   ctx.restore();
 }

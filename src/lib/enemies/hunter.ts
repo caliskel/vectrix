@@ -119,6 +119,10 @@ export class Hunter implements Enemy {
   // player it stays aggro for the rest of the run. The field below
   // is kept at 0 for interface compliance only.
   deAggroCooldownTimer = 0;
+  // Set per-instance via the ctor `ignoresWalls` opt — Room 4
+  // hunters phase through the section dividers, regular hunters
+  // resolve normally.
+  ignoresWalls = false;
   // Idle behavior — slow parametric trajectory around a home anchor.
   // Path type / size / rotation are randomized per Hunter so a roomful
   // of them swims in distinct curves. Latched on first construction;
@@ -154,7 +158,7 @@ export class Hunter implements Enemy {
   constructor(
     x: number,
     y: number,
-    opts: { startsAggressive?: boolean } = {},
+    opts: { startsAggressive?: boolean; ignoresWalls?: boolean } = {},
   ) {
     this.x = x;
     this.y = y;
@@ -176,6 +180,9 @@ export class Hunter implements Enemy {
       // doesn't reset idleHome on the first frame.
       this.awarenessState = "aggro";
       this.prevAwarenessState = "aggro";
+    }
+    if (opts.ignoresWalls) {
+      this.ignoresWalls = true;
     }
   }
 
@@ -241,8 +248,12 @@ export class Hunter implements Enemy {
     }
     this.x += this.vx * dt;
     this.y += this.vy * dt;
-    // Slide along walls instead of clipping through.
-    resolveEntityWallCollisions(this, ctxRoom.walls, HUNTER_HITBOX_RADIUS);
+    // Slide along walls instead of clipping through. Skipped entirely
+    // when `ignoresWalls` is set so phase-through hunters (Room 4)
+    // can cross section dividers freely.
+    if (!this.ignoresWalls) {
+      resolveEntityWallCollisions(this, ctxRoom.walls, HUNTER_HITBOX_RADIUS);
+    }
     if (this.contactSquashTime > 0) {
       this.contactSquashTime = Math.max(0, this.contactSquashTime - dt);
     }
@@ -430,7 +441,9 @@ export class Hunter implements Enemy {
     const ak = 1 - Math.pow(1 - HUNTER_IDLE_ANGLE_LERP, dt * 60);
     this.currentAngle += diff * ak;
 
-    resolveEntityWallCollisions(this, ctxRoom.walls, HUNTER_HITBOX_RADIUS);
+    if (!this.ignoresWalls) {
+      resolveEntityWallCollisions(this, ctxRoom.walls, HUNTER_HITBOX_RADIUS);
+    }
 
     // Trail emission with idle-tuned interval / softer per-sample
     // params (sparser, dimmer, smaller glow than aggro).
