@@ -1,6 +1,5 @@
 import { audio } from "../audio";
 import { makeBullet } from "../bullets";
-import { drawNeon } from "../neon";
 import { initAwareness } from "./awareness";
 import type {
   AwarenessState,
@@ -142,6 +141,9 @@ const INNER_VERTS = hexVerts(60);
 // circles paint on top of softer outer glow. Radii match the spec
 // in lib/enemies/sentinel.ts comments and are NOT scaled by the
 // boss's own pulse — the eye has its own breath cycle.
+// Eye render — compressed from 8 layers + 8 radial spokes to 4
+// layers after profiling. Decorations (spokes + nested cores) were
+// pure cosmetics that didn't carry gameplay information.
 const EYE_LAYERS: ReadonlyArray<{
   r: number;
   fill?: string;
@@ -149,128 +151,132 @@ const EYE_LAYERS: ReadonlyArray<{
   lineWidth?: number;
   alpha?: number;
 }> = [
-  { r: 32, stroke: "#ffaa22", lineWidth: 8, alpha: 0.15 }, // ext glow (alpha overridden by breath)
-  { r: 24, stroke: "#ffaa22", lineWidth: 2, alpha: 0.9 }, // amber rim
-  { r: 22, fill: "#2a0612" }, // wine fill
-  { r: 18, stroke: "#ff3344", lineWidth: 1.5 }, // red iris
-  { r: 12, stroke: "#ff5577", lineWidth: 1, alpha: 0.6 }, // inner ring
-  { r: 8, stroke: "#ffffff", lineWidth: 5, alpha: 0.2 }, // hot core soft
-  { r: 7, stroke: "#ffffff", lineWidth: 2.5, alpha: 0.5 }, // hot core sharp
-  { r: 5, fill: "#fff8e0" }, // warm white pupil
+  // Amber rim + dark base — rim colour switches to brighter
+  // `#ffbb33` in vulnerable via the override in `renderEyeLayers`.
+  { r: 24, fill: "#1f1004", stroke: "#ffaa22", lineWidth: 2, alpha: 0.95 },
+  // Red iris fill + outline.
+  { r: 18, fill: "#1a0508", stroke: "#ff3344", lineWidth: 1, alpha: 0.95 },
+  // Pupil glow halo — soft white aura under the pupil core.
+  { r: 10, stroke: "#ffffff", lineWidth: 4, alpha: 0.4 },
+  // Pupil core (warm cream by default; flips to neutral white in
+  // vulnerable so the gold rim doesn't fight the pupil colour).
+  { r: 7, fill: "#fff8e0" },
 ];
 const EYE_BREATH_PERIOD_SEC = 1.4;
 const EYE_SCALE_MIN = 0.94;
 const EYE_SCALE_MAX = 1.06;
-const EYE_EXT_GLOW_ALPHA_MIN = 0.1;
-const EYE_EXT_GLOW_ALPHA_MAX = 0.25;
-const EYE_SPOKE_COUNT = 8;
-const EYE_SPOKE_INNER_R = 11;
-const EYE_SPOKE_OUTER_R = 18;
-const EYE_SPOKE_COLOR = "#ff5577";
-const EYE_SPOKE_LINE_WIDTH = 0.8;
-const EYE_SPOKE_ALPHA = 0.7;
 
 // Rings — each shell now renders as shadow + bright stroke for depth,
 // plus three vertex-aligned 30° markers that rotate independently per
 // ring so the rotation is actually readable.
+// Each shell renders as max two stacked strokes (glow + main) plus
+// a configurable number of arc markers. Triple-stack + 3 markers
+// per ring used to drive ~30 % of the boss's per-frame stroke
+// count — visual budget cut without losing the silhouette.
 type RingDepth = {
-  shadowColor: string;
-  shadowLineWidth: number;
-  shadowAlpha: number;
+  /** Optional outer glow pass (drawn first). When `null`, the ring
+   *  paints just the bright stroke + markers. Mid + inner rings
+   *  drop the glow layer entirely. */
+  glowColor: string | null;
+  glowLineWidth: number;
+  glowAlpha: number;
+  /** The crisp main stroke. */
   brightColor: string;
   brightLineWidth: number;
   brightAlpha: number;
+  /** Inner ring uses a dotted main stroke (`[2, 6]`) to read as
+   *  rotating without needing markers. Optional; defaults to
+   *  solid. */
+  brightDashPattern?: [number, number];
+  /** Arc-marker count (0 disables markers entirely; inner ring
+   *  uses 0 since its dash pattern already conveys rotation). */
+  markerCount: number;
   markerColor: string;
   markerLineWidth: number;
-  /** Optional alpha multiplier on the markers (used to dim mid /
-   *  inner ring markers during vulnerable). 1 if omitted. */
   markerAlpha?: number;
-  /** Optional outermost bloom layer drawn first — wider line, low
-   *  alpha. Currently used by the outer ring during Ring Burst to
-   *  read as the only damaging shell. */
-  bloomColor?: string;
-  bloomLineWidth?: number;
-  bloomAlpha?: number;
-  /** Marker arc width in radians. Defaults to RING_MARKER_ARC_RAD
-   *  (30°). Outer ring during RB widens to 40° for emphasis. */
+  /** Marker arc width in radians; defaults to 30°. Outer ring
+   *  during RB widens to 40°. */
   markerArcRad?: number;
   maxAngularVel: number; // rad/s — the random target sample range
 };
 const OUTER_RING_DEPTH: RingDepth = {
-  shadowColor: "#660022",
-  shadowLineWidth: 6,
-  shadowAlpha: 0.4,
+  glowColor: "#ff3344",
+  glowLineWidth: 8,
+  glowAlpha: 0.2,
   brightColor: "#ff3344",
-  brightLineWidth: 3,
+  brightLineWidth: 4,
   brightAlpha: 1.0,
+  markerCount: 2,
   markerColor: "#ff7788",
-  markerLineWidth: 4,
+  markerLineWidth: 5,
   maxAngularVel: 0.8,
 };
-// Outer ring during Ring Burst — triple-stack with an outermost
-// bloom + brighter `#ff4455` core + bigger `#ffffff` markers so the
-// only damaging shell visually shouts "danger here."
+// Outer ring during Ring Burst — bumped glow + brighter `#ff4455`
+// core + larger `#ffffff` markers so the only damaging shell
+// visually shouts "danger here."
 const OUTER_RING_DEPTH_RB: RingDepth = {
-  shadowColor: "#660022",
-  shadowLineWidth: 10,
-  shadowAlpha: 0.3,
+  glowColor: "#ff3344",
+  glowLineWidth: 10,
+  glowAlpha: 0.2,
   brightColor: "#ff4455",
-  brightLineWidth: 5,
+  brightLineWidth: 4,
   brightAlpha: 1.0,
+  markerCount: 2,
   markerColor: "#ffffff",
-  markerLineWidth: 6,
-  markerArcRad: (Math.PI * 40) / 180,
-  bloomColor: "#ff3344",
-  bloomLineWidth: 14,
-  bloomAlpha: 0.12,
+  markerLineWidth: 5,
+  markerArcRad: (Math.PI * 30) / 180,
   maxAngularVel: 0.8,
 };
 // Mid + inner during vulnerable / reassemble — desaturated and
-// faded so they read as visual decoration, not threats. Body of
-// rendering uses these instead of the default depth configs while
-// `dimMidInner` is true.
+// faded so they read as visual decoration, not threats.
 const MID_RING_DEPTH_DIM: RingDepth = {
-  shadowColor: "#1a0810",
-  shadowLineWidth: 4,
-  shadowAlpha: 0.6,
+  glowColor: null,
+  glowLineWidth: 0,
+  glowAlpha: 0,
   brightColor: "#8a2030",
-  brightLineWidth: 2,
+  brightLineWidth: 2.5,
   brightAlpha: 0.4,
+  markerCount: 2,
   markerColor: "#8a2030",
   markerLineWidth: 2.5,
   markerAlpha: 0.5,
   maxAngularVel: 1.2,
 };
 const INNER_RING_DEPTH_DIM: RingDepth = {
-  shadowColor: "#100008",
-  shadowLineWidth: 3,
-  shadowAlpha: 0.5,
+  glowColor: null,
+  glowLineWidth: 0,
+  glowAlpha: 0,
   brightColor: "#5a1020",
   brightLineWidth: 1.5,
   brightAlpha: 0.3,
+  brightDashPattern: [2, 6],
+  markerCount: 0,
   markerColor: "#5a1020",
   markerLineWidth: 1.5,
   markerAlpha: 0.4,
   maxAngularVel: 1.6,
 };
 const MID_RING_DEPTH: RingDepth = {
-  shadowColor: "#4a0319",
-  shadowLineWidth: 5,
-  shadowAlpha: 1.0,
+  glowColor: null,
+  glowLineWidth: 0,
+  glowAlpha: 0,
   brightColor: "#ff5577",
   brightLineWidth: 2.5,
   brightAlpha: 1.0,
+  markerCount: 2,
   markerColor: "#ff99aa",
   markerLineWidth: 3.5,
   maxAngularVel: 1.2,
 };
 const INNER_RING_DEPTH: RingDepth = {
-  shadowColor: "#330011",
-  shadowLineWidth: 4,
-  shadowAlpha: 0.7,
+  glowColor: null,
+  glowLineWidth: 0,
+  glowAlpha: 0,
   brightColor: "#ff3344",
   brightLineWidth: 1.5,
-  brightAlpha: 0.8,
+  brightAlpha: 0.7,
+  brightDashPattern: [2, 6],
+  markerCount: 0,
   markerColor: "#ff7788",
   markerLineWidth: 2.5,
   maxAngularVel: 1.6,
@@ -278,7 +284,6 @@ const INNER_RING_DEPTH: RingDepth = {
 const RING_ANGULAR_VEL_LERP = 0.02;
 const RING_RETARGET_MIN_MS = 2000;
 const RING_RETARGET_MAX_MS = 5000;
-const RING_MARKER_COUNT = 3;
 const RING_MARKER_ARC_RAD = (Math.PI * 30) / 180; // 30°
 
 // Body — slow breath rescales the whole shell stack and ramps the
@@ -313,9 +318,7 @@ const RB_RECOVERY_SEC = 0.5;
 const RB_CYAN_INDICATOR_COLOR = "#7dd3fc";
 const RB_CYAN_INDICATOR_DASH_PATTERN: [number, number] = [8, 8];
 const RB_CYAN_INDICATOR_DASH_RATE_PX_PER_SEC = 30;
-const RB_CYAN_INDICATOR_LW_MAIN = 2;
-const RB_CYAN_INDICATOR_LW_BLOOM = 5;
-const RB_CYAN_INDICATOR_BLOOM_OPACITY_MUL = 0.25;
+const RB_CYAN_INDICATOR_LW_MAIN = 2.5;
 const RB_CYAN_INDICATOR_PEAK_OPACITY = 0.6;
 const RB_CYAN_INDICATOR_PULSE_AMPLITUDE = 0.25;
 const RB_CYAN_INDICATOR_PULSE_PERIOD_SEC = 0.9;
@@ -369,13 +372,10 @@ const RB_EYE_VULNERABLE_SCALE_PERIOD_SEC = 0.7;
 // eye reads as a beacon.
 const RB_EYE_HALO_R = 44;
 const RB_EYE_HALO_LW = 14;
-const RB_EYE_HALO_ALPHA_MIN = 0.2;
-const RB_EYE_HALO_ALPHA_MAX = 0.45;
-// Pupil core soft glow drawn just behind the white core dots so the
-// pupil reads as a fuzzy hot point.
-const RB_EYE_PUPIL_GLOW_R = 14;
-const RB_EYE_PUPIL_GLOW_LW = 8;
-const RB_EYE_PUPIL_GLOW_ALPHA = 0.12;
+// Vulnerable halo pulses 0.18 → 0.40 in lockstep with the breath
+// (per the visual budget — was 0.20 → 0.45 with a wider line).
+const RB_EYE_HALO_ALPHA_MIN = 0.18;
+const RB_EYE_HALO_ALPHA_MAX = 0.4;
 // Attention pulse — single ring spawned on detach → vulnerable so
 // the player's eye snaps to the boss centre at the moment the eye
 // opens.
@@ -406,7 +406,7 @@ const RB_EYE_HITSTOP_TIMESCALE = 0.15;
 // Detach burst — central white particle radial spray + a single
 // expanding ring. Telegraph audio is reused alert at -8 semitones;
 // the eye-hit cue layers hitHeavy + alert at +5 for shimmer.
-const RB_DETACH_PARTICLE_COUNT = 18;
+const RB_DETACH_PARTICLE_COUNT = 12;
 const RB_DETACH_PARTICLE_SPEED_MIN = 300;
 const RB_DETACH_PARTICLE_SPEED_MAX = 450;
 const RB_DETACH_PARTICLE_LIFETIME_SEC = 0.4;
@@ -427,8 +427,8 @@ const RB_EYE_HIT_OUTER_RING_R0 = 30;
 const RB_EYE_HIT_OUTER_RING_R1 = 140;
 const RB_EYE_HIT_OUTER_RING_LIFETIME_SEC = 0.35;
 const RB_EYE_HIT_OUTER_RING_COLOR = "#ffaa22";
-const RB_EYE_HIT_PARTICLE_COUNT_WHITE = 12;
-const RB_EYE_HIT_PARTICLE_COUNT_GOLD = 12;
+const RB_EYE_HIT_PARTICLE_COUNT_WHITE = 8;
+const RB_EYE_HIT_PARTICLE_COUNT_GOLD = 8;
 const RB_EYE_HIT_PARTICLE_SPEED_MIN = 350;
 const RB_EYE_HIT_PARTICLE_SPEED_MAX = 500;
 const RB_EYE_HIT_PARTICLE_LIFETIME_SEC = 0.5;
@@ -486,7 +486,7 @@ const PHASE_TRANSITION_BUILD_SHAKE_MIN_PX = 2;
 const PHASE_TRANSITION_BUILD_SHAKE_MAX_PX = 8;
 const PHASE_TRANSITION_CLIMAX_SHAKE_PX = 12;
 const PHASE_TRANSITION_CLIMAX_SHAKE_SEC = 0.2;
-const PHASE_TRANSITION_CLIMAX_PARTICLE_COUNT = 32;
+const PHASE_TRANSITION_CLIMAX_PARTICLE_COUNT = 20;
 const PHASE_TRANSITION_CLIMAX_PARTICLE_SPEED_MIN = 300;
 const PHASE_TRANSITION_CLIMAX_PARTICLE_SPEED_MAX = 500;
 const PHASE_TRANSITION_CLIMAX_PARTICLE_LIFETIME_SEC = 0.6;
@@ -597,7 +597,7 @@ const CHARGE_VANISH_FADE_OUT_SEC = CHARGE_VANISH_SEC;
 // "settles in" rather than popping to full opacity after the
 // initial appearance flash.
 const CHARGE_TELEGRAPH_FADE_IN_SEC = 0.6;
-const CHARGE_VANISH_PARTICLE_COUNT = 40;
+const CHARGE_VANISH_PARTICLE_COUNT = 24;
 // Inverse shockwave at vanish entry — collapses inward as the
 // boss implodes. Mirrors the appearance explosion's outward
 // shockwaves so the two attack endpoints read as a matched pair.
@@ -622,7 +622,7 @@ const CHARGE_APPEAR_SHOCKWAVE_2_LW0 = 5;
 const CHARGE_APPEAR_SHOCKWAVE_2_LW1 = 0.5;
 const CHARGE_APPEAR_SHOCKWAVE_2_LIFETIME_SEC = 0.7;
 const CHARGE_APPEAR_SHOCKWAVE_2_COLOR = "#ffffff";
-const CHARGE_APPEAR_PARTICLE_COUNT = 32;
+const CHARGE_APPEAR_PARTICLE_COUNT = 20;
 const CHARGE_APPEAR_PARTICLE_SPEED_MIN = 250;
 const CHARGE_APPEAR_PARTICLE_SPEED_MAX = 400;
 const CHARGE_APPEAR_PARTICLE_LIFETIME_SEC = 0.6;
@@ -684,14 +684,7 @@ const BURST_SW1_R_END = 220;
 const BURST_SW1_LW_START = 8;
 const BURST_SW1_LW_END = 1;
 const BURST_SW1_COLOR = "#ff3344";
-const BURST_SW2_DELAY_SEC = 0.05;
-const BURST_SW2_LIFETIME_SEC = 0.5;
-const BURST_SW2_R_START = 140;
-const BURST_SW2_R_END = 260;
-const BURST_SW2_LW_START = 4;
-const BURST_SW2_LW_END = 0.5;
-const BURST_SW2_COLOR = "#ffaa22";
-const BURST_STREAMER_COUNT = 24;
+const BURST_STREAMER_COUNT = 12;
 const BURST_STREAMER_SPEED_MIN = 400;
 const BURST_STREAMER_SPEED_MAX = 550;
 const BURST_STREAMER_LIFETIME_SEC = 0.25;
@@ -968,7 +961,6 @@ export class Sentinel implements Enemy {
   // space rather than in the global Particle pipeline so we can
   // honour the spec'd shape.
   private bossFlashTimer = 0;
-  private pendingShockwave2DelayTimer = -1;
   private streamers: {
     x: number;
     y: number;
@@ -1752,7 +1744,10 @@ export class Sentinel implements Enemy {
   private triggerEnergyBurst(ctxRoom: EnemyContext): void {
     // Shockwave 1 fires immediately into the shared rings list —
     // the existing ring renderer interpolates radius / line width /
-    // alpha across age so we get the visual for free.
+    // alpha across age so we get the visual for free. Shockwave 2
+    // (a delayed second ring) was dropped during the visual budget
+    // pass; it overlapped with shockwave 1 enough that the visual
+    // delta wasn't worth the extra ring.
     ctxRoom.rings.push({
       x: this.x,
       y: this.y,
@@ -1765,9 +1760,6 @@ export class Sentinel implements Enemy {
       endLineWidth: BURST_SW1_LW_END,
       glowBlur: 16,
     });
-    // Shockwave 2 is delayed BURST_SW2_DELAY_SEC; parked on a
-    // per-frame countdown that fires the ring once.
-    this.pendingShockwave2DelayTimer = BURST_SW2_DELAY_SEC;
     // Boss flash — additive white overlay on the body for ~80ms.
     this.bossFlashTimer = BURST_FLASH_DURATION_SEC;
     // Streamers — kept on the boss instance because they're line
@@ -1819,27 +1811,9 @@ export class Sentinel implements Enemy {
     }
   }
 
-  private tickEnergyBurst(ctxRoom: EnemyContext, dt: number): void {
+  private tickEnergyBurst(_ctxRoom: EnemyContext, dt: number): void {
     if (this.bossFlashTimer > 0) {
       this.bossFlashTimer = Math.max(0, this.bossFlashTimer - dt);
-    }
-    if (this.pendingShockwave2DelayTimer >= 0) {
-      this.pendingShockwave2DelayTimer -= dt;
-      if (this.pendingShockwave2DelayTimer <= 0) {
-        this.pendingShockwave2DelayTimer = -1;
-        ctxRoom.rings.push({
-          x: this.x,
-          y: this.y,
-          age: 0,
-          lifetime: BURST_SW2_LIFETIME_SEC,
-          startR: BURST_SW2_R_START,
-          endR: BURST_SW2_R_END,
-          color: BURST_SW2_COLOR,
-          startLineWidth: BURST_SW2_LW_START,
-          endLineWidth: BURST_SW2_LW_END,
-          glowBlur: 12,
-        });
-      }
     }
     for (const s of this.streamers) {
       s.x += s.vx * dt;
@@ -2895,7 +2869,6 @@ export class Sentinel implements Enemy {
     // Clear any in-flight energy-burst remnants so they don't bleed
     // into the dying cinematic.
     this.bossFlashTimer = 0;
-    this.pendingShockwave2DelayTimer = -1;
     this.streamers.length = 0;
     // Reset Ring Burst — rings snap back to default radii so the
     // dying cinematic renders the canonical silhouette and the
@@ -3738,9 +3711,11 @@ export class Sentinel implements Enemy {
       opacity = RB_CYAN_INDICATOR_PEAK_OPACITY * (1 - u);
     }
     if (opacity <= 0) return;
-    // Animated dash offset driven by combatElapsedSec so the
-    // pattern keeps marching even across separate Ring Bursts
-    // (it ticks across the whole fight).
+    // Single dashed stroke (was a 2-pass bloom + main stack — the
+    // dash pattern carries the read on its own; the bloom was
+    // redundant after the visual-budget pass). Animated offset
+    // driven by combatElapsedSec so the pattern marches across
+    // the whole fight.
     const dashOffset =
       -this.combatElapsedSec * RB_CYAN_INDICATOR_DASH_RATE_PX_PER_SEC;
     const r = this.ringRadiusOuter;
@@ -3748,13 +3723,6 @@ export class Sentinel implements Enemy {
     ctx.setLineDash(RB_CYAN_INDICATOR_DASH_PATTERN);
     ctx.lineDashOffset = dashOffset;
     ctx.strokeStyle = RB_CYAN_INDICATOR_COLOR;
-    // Wider, dimmer bloom pass first.
-    ctx.lineWidth = RB_CYAN_INDICATOR_LW_BLOOM;
-    ctx.globalAlpha = opacity * RB_CYAN_INDICATOR_BLOOM_OPACITY_MUL;
-    ctx.beginPath();
-    ctx.arc(0, 0, r, 0, Math.PI * 2);
-    ctx.stroke();
-    // Crisp main pass.
     ctx.lineWidth = RB_CYAN_INDICATOR_LW_MAIN;
     ctx.globalAlpha = opacity;
     ctx.beginPath();
@@ -3771,96 +3739,80 @@ export class Sentinel implements Enemy {
     radius: number,
     rotState: { angle: number },
     depth: RingDepth,
-    /** Multiplier on every alpha in this depth (bloom / shadow /
-     *  bright / marker). Used by the Ring Burst transitions to
-     *  fade mid + inner rings smoothly across detach + reassemble
-     *  without snapping. 1 if omitted. */
+    /** Alpha multiplier on glow + main + markers. Used by Ring
+     *  Burst transitions to fade mid + inner across detach +
+     *  reassemble without snapping. 1 if omitted. */
     alphaMul = 1,
-    /** Optional override of the bright-stroke alpha (after the
-     *  alphaMul multiplier). Outer ring uses this for its slow
-     *  sub-pulse so the depth config can stay declarative. */
+    /** Optional override of the main-stroke alpha (after alphaMul).
+     *  Outer ring uses this for its slow sub-pulse. */
     brightAlphaOverride?: number,
   ): void {
     ctx.save();
     ctx.rotate(rotState.angle);
-    // Optional outermost bloom — a wider, dimmer halo painted before
-    // the shadow so it reads as a soft glow around the ring.
-    if (
-      depth.bloomColor !== undefined &&
-      depth.bloomLineWidth !== undefined &&
-      depth.bloomAlpha !== undefined
-    ) {
+    // Optional outer glow — single wide low-alpha pass. Mid + inner
+    // rings skip this entirely (`glowColor === null`).
+    if (depth.glowColor !== null) {
       ctx.beginPath();
       ctx.arc(0, 0, radius, 0, Math.PI * 2);
-      ctx.strokeStyle = depth.bloomColor;
-      ctx.lineWidth = depth.bloomLineWidth;
-      ctx.globalAlpha = depth.bloomAlpha * alphaMul;
+      ctx.strokeStyle = depth.glowColor;
+      ctx.lineWidth = depth.glowLineWidth;
+      ctx.globalAlpha = depth.glowAlpha * alphaMul;
       ctx.stroke();
     }
-    // Shadow stroke — gives the ring perceived thickness.
-    ctx.beginPath();
-    ctx.arc(0, 0, radius, 0, Math.PI * 2);
-    ctx.strokeStyle = depth.shadowColor;
-    ctx.lineWidth = depth.shadowLineWidth;
-    ctx.globalAlpha = depth.shadowAlpha * alphaMul;
-    ctx.stroke();
-    // Bright stroke on top.
+    // Main stroke (optionally dashed for the inner ring).
     ctx.beginPath();
     ctx.arc(0, 0, radius, 0, Math.PI * 2);
     ctx.strokeStyle = depth.brightColor;
     ctx.lineWidth = depth.brightLineWidth;
-    const brightBase = brightAlphaOverride ?? depth.brightAlpha;
-    ctx.globalAlpha = brightBase * alphaMul;
+    ctx.globalAlpha = (brightAlphaOverride ?? depth.brightAlpha) * alphaMul;
+    if (depth.brightDashPattern) ctx.setLineDash(depth.brightDashPattern);
     ctx.stroke();
-    // Three rotation-tracking arc markers — without them a perfect
-    // circle reads as static even when angle is changing.
-    ctx.strokeStyle = depth.markerColor;
-    ctx.lineWidth = depth.markerLineWidth;
-    ctx.globalAlpha = (depth.markerAlpha ?? 1) * alphaMul;
-    const markerArc = depth.markerArcRad ?? RING_MARKER_ARC_RAD;
-    for (let i = 0; i < RING_MARKER_COUNT; i++) {
-      const start = (i / RING_MARKER_COUNT) * Math.PI * 2;
-      ctx.beginPath();
-      ctx.arc(0, 0, radius, start, start + markerArc);
-      ctx.stroke();
+    if (depth.brightDashPattern) ctx.setLineDash([]);
+    // Rotation markers — drop count is config-driven; 0 disables.
+    if (depth.markerCount > 0) {
+      ctx.strokeStyle = depth.markerColor;
+      ctx.lineWidth = depth.markerLineWidth;
+      ctx.globalAlpha = (depth.markerAlpha ?? 1) * alphaMul;
+      const markerArc = depth.markerArcRad ?? RING_MARKER_ARC_RAD;
+      for (let i = 0; i < depth.markerCount; i++) {
+        const start = (i / depth.markerCount) * Math.PI * 2;
+        ctx.beginPath();
+        ctx.arc(0, 0, radius, start, start + markerArc);
+        ctx.stroke();
+      }
     }
     ctx.globalAlpha = 1;
     ctx.restore();
   }
 
   private renderEyeLayers(ctx: CanvasRenderingContext2D): void {
-    // Eye breath — uniform scale + ext-glow alpha sync. Independent
-    // of the body's pulse so two cycles overlap rather than echo.
+    // Compressed from 8 layers + 8 radial spokes to 4 layers in the
+    // visual-budget pass. Vulnerable adds a separate halo on top of
+    // the static stack and overrides the rim / pupil colours so the
+    // open-eye reads as the gold target.
     const vulnerable = this.ringBurstPhase === "vulnerable";
     let breathScale: number;
-    let extGlowAlpha: number;
     if (vulnerable) {
       // Vulnerable amplification — bigger asymmetric pulse around
       // RB_EYE_VULNERABLE_SCALE_MID = 1.04 (so the eye sits a bit
-      // larger than rest), full amber rim alpha.
+      // larger than rest).
       breathScale =
         RB_EYE_VULNERABLE_SCALE_MID +
         Math.sin(this.eyeVulnerablePulsePhase) *
           RB_EYE_VULNERABLE_SCALE_AMPLITUDE;
-      extGlowAlpha = 1;
     } else {
       breathScale =
         EYE_SCALE_MIN +
         ((Math.sin(this.eyeBreathPhase) + 1) / 2) *
           (EYE_SCALE_MAX - EYE_SCALE_MIN);
-      extGlowAlpha =
-        EYE_EXT_GLOW_ALPHA_MIN +
-        ((Math.sin(this.eyeBreathPhase) + 1) / 2) *
-          (EYE_EXT_GLOW_ALPHA_MAX - EYE_EXT_GLOW_ALPHA_MIN);
     }
 
     ctx.save();
     ctx.scale(breathScale, breathScale);
 
-    // === Vulnerable-only outermost halo (bloom) ===
-    // Drawn FIRST (outermost-first) so the rest of the eye stack
-    // paints over it. Pulses alpha 0.20 ↔ 0.45 in lockstep with
-    // the breath cycle.
+    // Vulnerable-only outermost halo — drawn FIRST so the rest of
+    // the stack paints over it. Pulses alpha 0.18 ↔ 0.40 in
+    // lockstep with the breath cycle.
     if (vulnerable) {
       const haloAlpha =
         RB_EYE_HALO_ALPHA_MIN +
@@ -3876,26 +3828,16 @@ export class Sentinel implements Enemy {
 
     for (let i = 0; i < EYE_LAYERS.length; i++) {
       const layer = EYE_LAYERS[i];
-      // Vulnerable per-layer overrides — boost ext glow + amber rim
-      // and switch the warm pupil to neutral white so the contrast
-      // against the gold rim reads cleanly.
       let stroke = layer.stroke;
       let fill = layer.fill;
-      let lineWidth = layer.lineWidth;
-      let alpha = i === 0 ? extGlowAlpha : (layer.alpha ?? 1);
+      const lineWidth = layer.lineWidth;
+      const alpha = layer.alpha ?? 1;
       if (vulnerable) {
-        if (i === 0) {
-          // ext glow — wider lineWidth + breath-driven brighter alpha
-          lineWidth = 9;
-          alpha = 0.1 + 0.15 * ((Math.sin(this.eyeVulnerablePulsePhase) + 1) / 2);
-        } else if (i === 1) {
-          // amber rim — thicker + more saturated colour
-          lineWidth = 2.5;
-          stroke = "#ffbb33";
-        } else if (i === 7) {
-          // pupil fill — pure white, no warm cream
-          fill = "#ffffff";
-        }
+        // Amber rim brightens to `#ffbb33`; pupil core flips to
+        // neutral white so the contrast against the gold rim reads
+        // cleanly. The other two layers stay the same.
+        if (i === 0 && stroke) stroke = "#ffbb33";
+        if (i === 3 && fill) fill = "#ffffff";
       }
       ctx.beginPath();
       ctx.arc(0, 0, layer.r, 0, Math.PI * 2);
@@ -3909,32 +3851,6 @@ export class Sentinel implements Enemy {
         ctx.lineWidth = lineWidth;
         ctx.stroke();
       }
-      // After the inner-ring layer (index 4) but before the white
-      // hot cores (5+), paint a soft fuzzy pupil glow so the
-      // pupil-vicinity reads as a hot point in vulnerable.
-      if (vulnerable && i === 4) {
-        ctx.beginPath();
-        ctx.arc(0, 0, RB_EYE_PUPIL_GLOW_R, 0, Math.PI * 2);
-        ctx.strokeStyle = "#ffffff";
-        ctx.lineWidth = RB_EYE_PUPIL_GLOW_LW;
-        ctx.globalAlpha = RB_EYE_PUPIL_GLOW_ALPHA;
-        ctx.stroke();
-      }
-    }
-
-    // Eight radial spokes inside the iris — give the eye the "alive"
-    // feel without animating each one separately.
-    ctx.strokeStyle = EYE_SPOKE_COLOR;
-    ctx.lineWidth = EYE_SPOKE_LINE_WIDTH;
-    ctx.globalAlpha = EYE_SPOKE_ALPHA;
-    for (let i = 0; i < EYE_SPOKE_COUNT; i++) {
-      const a = (i / EYE_SPOKE_COUNT) * Math.PI * 2;
-      const cos = Math.cos(a);
-      const sin = Math.sin(a);
-      ctx.beginPath();
-      ctx.moveTo(EYE_SPOKE_INNER_R * cos, EYE_SPOKE_INNER_R * sin);
-      ctx.lineTo(EYE_SPOKE_OUTER_R * cos, EYE_SPOKE_OUTER_R * sin);
-      ctx.stroke();
     }
 
     ctx.globalAlpha = 1;
@@ -4029,39 +3945,29 @@ export class Sentinel implements Enemy {
       rbGlowMul *
       chargeGlowMul;
 
-    // Outer ring with a glow halo — alpha tracks bodyGlowAlpha for
-    // the breath sync. Whole hex stack is wrapped in bodyOpacity so
-    // it ghosts during Ring Burst detach / vulnerable / reassemble.
-    // The hex frame strokes track the active phase accent.
+    // Body silhouette — single hex frame painted as a glow + main
+    // pair (was a `drawNeon` two-pass shadowBlur stack + nested
+    // MIDDLE / INNER hexes; the inner hexes were decorative
+    // "circuitry" that didn't carry gameplay info). The glow alpha
+    // tracks bodyGlowAlpha for the breath sync; main is the
+    // canonical 2.5 px accent stroke. Whole pair is wrapped in
+    // bodyOpacity so it ghosts during Ring Burst detach /
+    // vulnerable / reassemble. Telegraph / charge widen the glow
+    // line so the silhouette flares without an extra stroke pass.
     const hexAccent = this.accentColor();
     ctx.save();
     ctx.rotate(this.rotation);
-    ctx.globalAlpha = this.bodyOpacity;
-    drawNeon(
-      ctx,
-      () => {
-        ctx.globalAlpha = bodyGlowAlpha * this.bodyOpacity;
-        strokeHexagon(ctx, OUTER_VERTS, pulseScale);
-        ctx.strokeStyle = hexAccent;
-        ctx.lineWidth = 3;
-        ctx.stroke();
-        ctx.globalAlpha = this.bodyOpacity;
-      },
-      hexAccent,
-      this.radialPhase === "telegraph" ? 40 : 22,
-      10,
-    );
-
-    ctx.globalAlpha = 0.7 * this.bodyOpacity;
-    strokeHexagon(ctx, MIDDLE_VERTS, pulseScale);
+    const glowLineWidth = this.radialPhase === "telegraph" ? 14 : 8;
+    // Glow pass — wide, low alpha.
+    strokeHexagon(ctx, OUTER_VERTS, pulseScale);
     ctx.strokeStyle = hexAccent;
-    ctx.lineWidth = 2;
+    ctx.lineWidth = glowLineWidth;
+    ctx.globalAlpha = bodyGlowAlpha * this.bodyOpacity;
     ctx.stroke();
-
-    ctx.globalAlpha = 0.5 * this.bodyOpacity;
-    strokeHexagon(ctx, INNER_VERTS, pulseScale);
-    ctx.strokeStyle = hexAccent;
-    ctx.lineWidth = 1.5;
+    // Main pass — crisp accent edge.
+    strokeHexagon(ctx, OUTER_VERTS, pulseScale);
+    ctx.lineWidth = 2.5;
+    ctx.globalAlpha = this.bodyOpacity;
     ctx.stroke();
     ctx.globalAlpha = 1;
     ctx.restore();
@@ -4109,11 +4015,11 @@ export class Sentinel implements Enemy {
     const accent = this.accentColor();
     const outerDepthBase = inRingBurst ? OUTER_RING_DEPTH_RB : OUTER_RING_DEPTH;
     // Spread the per-phase accent over the outer-ring depth config
-    // so the bright + bloom strokes shift hue with the phase. Markers
-    // in RB stay white for legibility; outside RB markers track
+    // so the glow + main strokes shift hue with the phase. Markers
+    // in RB stay white for legibility; outside RB markers track the
     // accent so the colour doesn't fight the shell.
     const outerDepth: RingDepth = inRingBurst
-      ? { ...outerDepthBase, brightColor: accent, bloomColor: accent }
+      ? { ...outerDepthBase, brightColor: accent, glowColor: accent }
       : { ...outerDepthBase, brightColor: accent, markerColor: accent };
     // Cyan dashed indicator — drawn UNDER the outer ring (before
     // renderDepthRing) so the red shell paints on top and the
@@ -4176,25 +4082,10 @@ export class Sentinel implements Enemy {
       );
     }
 
-    // Fragments orbiting the outer vertices — counter-rotation.
-    // Same body-opacity gate as the shells so they vanish together
-    // during Ring Burst.
-    ctx.save();
-    ctx.rotate(this.fragmentRotation);
-    ctx.fillStyle = SENTINEL_COLOR;
-    ctx.globalAlpha = 0.85 * this.bodyOpacity;
-    for (const v of OUTER_VERTS) {
-      ctx.beginPath();
-      ctx.moveTo(v.x * 1.18, v.y * 1.18);
-      const ax = -v.y * 0.08;
-      const ay = v.x * 0.08;
-      ctx.lineTo(v.x * 1.04 + ax, v.y * 1.04 + ay);
-      ctx.lineTo(v.x * 1.04 - ax, v.y * 1.04 - ay);
-      ctx.closePath();
-      ctx.fill();
-    }
-    ctx.globalAlpha = 1;
-    ctx.restore();
+    // (The six counter-rotating "rivet" fragments at the outer
+    // vertices were dropped in the visual-budget pass — they were
+    // decorative and didn't carry gameplay info. `fragmentRotation`
+    // still ticks but is unused by this renderer.)
 
     // === Central eye stack ===
     this.renderEyeLayers(ctx);

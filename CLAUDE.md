@@ -961,36 +961,54 @@ transitions for score + Game Complete.
     `hitHeavy` + `alert` for layered shimmer.
 
     **Visual hierarchy during vulnerable / reassemble:**
-    - **Eye** is the brightest element. Vulnerable adds a wide
-      `#ffaa22` halo (r 44, lw 14) pulsing alpha 0.20 ↔ 0.45
-      synced to the breath, beefier ext glow, a soft white pupil
-      glow, neutral-white pupil fill, and an asymmetric breath
-      cycle 0.90 ↔ 1.18 (mid 1.04). On detach → vulnerable a
-      one-shot golden attention pulse expands r 24 → 110 over
-      600 ms.
-    - **Outer ring** triple-stack (`#ff3344` bloom 14 px alpha
-      0.12 + `#660022` shadow 10 px + `#ff4455` bright 5 px)
-      with `#ffffff` 6 px markers spanning 40°, plus a slow
+    **Visual budget**: max 2 stacked strokes per element (glow +
+    main). No `shadowBlur` on the per-frame body, ring, or eye
+    paths. Internal hex circuitry, corner rivets, the eight iris
+    radial spokes, and the third "shadow" depth-ring stroke were
+    dropped after profiling — they were cosmetic, didn't carry
+    gameplay information, and accounted for ~30 % of per-frame
+    stroke operations on the boss. Particle counts on the same
+    pass: RB detach 18 → 12, eye-hit halves 12 → 8, phase
+    transition climax 32 → 20, charge vanish implosion 40 → 24,
+    charge arrival explosion 32 → 20, radial-burst streamers
+    24 → 12. The radial-burst's second (delayed) shockwave was
+    also dropped — it overlapped with the first too much to
+    earn its keep.
+    - **Eye** is the brightest element. Compressed from 8 layers
+      + 8 radial spokes to 4 layers (amber rim + dark base, red
+      iris fill + outline, soft pupil halo, pupil core).
+      Vulnerable adds a wide `#ffaa22` halo on top (r 44, lw 12)
+      pulsing alpha 0.18 ↔ 0.40 synced to the breath, brightens
+      the rim to `#ffbb33`, switches the pupil to neutral white,
+      and runs an asymmetric breath cycle 0.90 ↔ 1.18 (mid 1.04).
+      On detach → vulnerable a one-shot golden attention pulse
+      expands r 24 → 110 over 600 ms.
+    - **Outer ring** two-pass stack (`#ff3344` glow lw 10 alpha
+      0.20 + `#ff4455` bright lw 4 alpha 1.0) with two `#ffffff`
+      lw 5 markers spanning 30° on opposite sides, plus a slow
       bright-stroke alpha sub-pulse (period 1.1 s, range
       0.85 ↔ 1.0) so the only damaging shell visually shouts
       "danger here."
-    - **Cyan dashed indicator** (`#7dd3fc`, 2 px main + 5 px
-      bloom at 0.25× opacity, 8/8 dash pattern, animated offset
-      at 30 px/s) drawn UNDER the outer ring on the same
-      radius — the red shell paints on top and the cyan peeks
-      out from beneath, reading as "this red object is the
-      dashable phase." Opacity ramps `0 → 0.6` over detach
-      (linear), holds at `0.6` with a `0.6 ↔ 0.85` pulse on a
-      0.9 s period during vulnerable, and fades `0.6 → 0`
-      across reassemble. Same visual language as the cyan
-      dashed walls in the tutorial / Room 4. Not applied to
-      mid / inner (they're dimmed to background) or the eye
-      (its own gold + reticle iconography carries the read).
+    - **Cyan dashed indicator** (`#7dd3fc`, 2.5 px single stroke,
+      8/8 dash pattern, animated offset at 30 px/s) drawn UNDER
+      the outer ring on the same radius — the red shell paints
+      on top and the cyan peeks out from beneath, reading as
+      "this red object is the dashable phase." Opacity ramps
+      `0 → 0.6` over detach (linear), holds at `0.6` with a
+      `0.6 ↔ 0.85` pulse on a 0.9 s period during vulnerable,
+      and fades `0.6 → 0` across reassemble. Same visual
+      language as the cyan dashed walls in the tutorial /
+      Room 4. Not applied to mid / inner (they're dimmed to
+      background) or the eye (its own gold + reticle
+      iconography carries the read).
     - **Mid + inner** desaturate to `#8a2030` / `#5a1020` at
-      0.40 / 0.30 alpha (markers correspondingly dim) so they
-      read as background decoration. The cross-fade is driven
-      by `dimRamp` 0..1 driven by `easeInOutCubic` across detach
-      + reassemble — bright depth + dim depth are rendered with
+      0.40 / 0.30 alpha so they read as background decoration.
+      The mid ring keeps two short dim markers; the inner ring
+      drops markers entirely and uses a dotted main stroke
+      (`[2, 6]` dash pattern) so the rotation still reads
+      without an extra pass. The cross-fade is driven by
+      `dimRamp` 0..1 on `easeInOutCubic` across detach +
+      reassemble — bright depth + dim depth are rendered with
       complementary alphas so the transition is smooth.
     - **Body** opacity drops to 0.12 in vulnerable (lerps to /
       from across detach + reassemble). Almost-ghost silhouette
