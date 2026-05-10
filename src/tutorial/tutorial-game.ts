@@ -72,6 +72,8 @@ import {
   resolvePlayerWallCollisions,
   type Wall,
 } from "../lib/walls";
+import { TrainingDummy } from "../lib/enemies/training-dummy";
+import { createMarker } from "../lib/markers";
 import { buildRoom0 } from "./room0";
 import { buildRoom1 } from "./room1";
 import { buildRoom2 } from "./room2";
@@ -389,10 +391,266 @@ export function start(canvas: HTMLCanvasElement): void {
   const camera: Camera = createCamera();
   let currentKey: Key | null = null;
   let keyHeld = false;
-  // Index of the next-to-reach tutorial marker (Room 0). Reset on
-  // every room enter; markers are progressed by overlap in the sim
-  // loop, and the room is "cleared" once markerIndex equals length.
+  // Number of tutorial markers reached this room — purely a counter
+  // for HUD / phase-progress checks. Reset on transition; advanced
+  // by the marker block in the sim loop when an unreached marker
+  // overlaps the player.
   let markerIndex = 0;
+
+  // Tutorial Room 0 phase machine. Three phases (movement → dash →
+  // combat → complete), each owning its own world objects (markers,
+  // dash wall, training dummy). Phase transitions splice items in
+  // and out of currentRoom.{markers,walls,enemies}.
+  type Room0Phase = "movement" | "dash" | "combat" | "complete";
+  let room0Phase: Room0Phase = "movement";
+  let room0DashWall: Wall | null = null;
+  let room0Dummy: TrainingDummy | null = null;
+  let room0DummyHpAtLastProgress = 0;
+
+  // Tutorial hint banner — bottom-center text with keycap glyphs and
+  // a fade-in/out + idle pulse. Rendered after the HUD in screen
+  // coords so it sits above everything else.
+  type HintState = "idle" | "showing" | "visible" | "hiding";
+  let hintText: string | null = null;
+  let hintState: HintState = "idle";
+  let hintAge = 0;
+  let hintPulsing = false;
+  let hintPendingText: string | null = null;
+  const HINT_FADE_IN_SEC = 0.3;
+  const HINT_FADE_OUT_SEC = 0.2;
+  const HINT_IDLE_PULSE_AFTER_SEC = 5;
+  const HINT_PULSE_PERIOD_SEC = 0.5;
+
+  function showHint(text: string): void {
+    if (hintState === "idle" || !hintText) {
+      hintText = text;
+      hintState = "showing";
+      hintAge = 0;
+      hintPulsing = false;
+      hintPendingText = null;
+    } else {
+      hintPendingText = text;
+      if (hintState !== "hiding") {
+        hintState = "hiding";
+        hintAge = 0;
+      }
+      hintPulsing = false;
+    }
+  }
+  function tickHint(dt: number): void {
+    if (hintState === "idle") return;
+    hintAge += dt;
+    if (hintState === "showing" && hintAge >= HINT_FADE_IN_SEC) {
+      hintState = "visible";
+      hintAge = 0;
+    } else if (hintState === "hiding" && hintAge >= HINT_FADE_OUT_SEC) {
+      if (hintPendingText) {
+        hintText = hintPendingText;
+        hintPendingText = null;
+        hintState = "showing";
+        hintAge = 0;
+        hintPulsing = false;
+      } else {
+        hintState = "idle";
+        hintText = null;
+      }
+    }
+    hintPulsing =
+      hintState === "visible" && hintAge >= HINT_IDLE_PULSE_AFTER_SEC;
+  }
+
+  function room0Enter(phase: Room0Phase): void {
+    room0Phase = phase;
+    if (phase === "movement") {
+      // Initial state — Room 0 already ships with the four direction
+      // markers; just queue the hint.
+      showHint("USE [W][A][S][D] TO MOVE");
+    } else if (phase === "dash") {
+      // Replace movement markers with a single goal beyond the wall.
+      currentRoom.markers = [createMarker(950, 400, 1, "→")];
+      markerIndex = 0;
+      // Horizontal wall obstacle the player has to dash through.
+      room0DashWall = { x: 580, y: 385, w: 200, h: 30 };
+      currentRoom.walls.push(room0DashWall);
+      showHint("PRESS [X] TO DASH");
+    } else if (phase === "combat") {
+      currentRoom.markers = undefined;
+      markerIndex = 0;
+      if (room0DashWall) {
+        currentRoom.walls = currentRoom.walls.filter(
+          (w) => w !== room0DashWall,
+        );
+        room0DashWall = null;
+      }
+      const dummy = new TrainingDummy(600, 400);
+      room0Dummy = dummy;
+      room0DummyHpAtLastProgress = dummy.hp;
+      currentRoom.enemies.push(dummy);
+      showHint("DASH THROUGH THE TARGET 3 TIMES TO DESTROY IT");
+    } else {
+      // complete — open the door, swap to the proceed prompt.
+      if (currentRoom.door) currentRoom.door.state = "open";
+      state.clearedRoomIds.add(currentRoom.id);
+      audio.play.multUp(5);
+      showHint("WELL DONE — PROCEED →");
+    }
+  }
+
+  function tickRoom0(): void {
+    if (currentRoom.id !== "room0") return;
+    const markers = currentRoom.markers;
+    if (
+      room0Phase === "movement" &&
+      markers &&
+      markers.length > 0 &&
+      markers.every((m) => m.reached)
+    ) {
+      room0Enter("dash");
+    } else if (
+      room0Phase === "dash" &&
+      markers &&
+      markers.length > 0 &&
+      markers.every((m) => m.reached)
+    ) {
+      room0Enter("combat");
+    } else if (room0Phase === "combat" && room0Dummy) {
+      // Reset the hint pulse timer on dummy damage progress.
+      if (room0Dummy.hp < room0DummyHpAtLastProgress) {
+        hintAge = 0;
+        room0DummyHpAtLastProgress = room0Dummy.hp;
+      }
+      if (room0Dummy.isDead()) {
+        room0Enter("complete");
+      }
+    }
+  }
+
+  type HintToken = { kind: "text" | "key"; value: string };
+  function parseHintTokens(text: string): HintToken[] {
+    const tokens: HintToken[] = [];
+    const re = /\[([A-Z])\]/g;
+    let last = 0;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text))) {
+      if (m.index > last)
+        tokens.push({ kind: "text", value: text.slice(last, m.index) });
+      tokens.push({ kind: "key", value: m[1] });
+      last = m.index + m[0].length;
+    }
+    if (last < text.length)
+      tokens.push({ kind: "text", value: text.slice(last) });
+    return tokens;
+  }
+
+  function roundedRectPath(
+    c: CanvasRenderingContext2D,
+    x: number,
+    y: number,
+    w: number,
+    h: number,
+    r: number,
+  ): void {
+    c.beginPath();
+    c.moveTo(x + r, y);
+    c.lineTo(x + w - r, y);
+    c.quadraticCurveTo(x + w, y, x + w, y + r);
+    c.lineTo(x + w, y + h - r);
+    c.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+    c.lineTo(x + r, y + h);
+    c.quadraticCurveTo(x, y + h, x, y + h - r);
+    c.lineTo(x, y + r);
+    c.quadraticCurveTo(x, y, x + r, y);
+    c.closePath();
+  }
+
+  function drawTutorialHint(): void {
+    if (hintState === "idle" || !hintText) return;
+    let alpha = 1;
+    let slideY = 0;
+    if (hintState === "showing") {
+      const t = Math.min(1, hintAge / HINT_FADE_IN_SEC);
+      alpha = t;
+      slideY = (1 - t) * 8;
+    } else if (hintState === "hiding") {
+      const t = Math.min(1, hintAge / HINT_FADE_OUT_SEC);
+      alpha = 1 - t;
+      slideY = -t * 8;
+    }
+    let scale = 1;
+    if (hintPulsing && hintState === "visible") {
+      const phase =
+        ((hintAge - HINT_IDLE_PULSE_AFTER_SEC) /
+          HINT_PULSE_PERIOD_SEC) *
+        Math.PI *
+        2;
+      scale = 1 + 0.05 * (Math.sin(phase) * 0.5 + 0.5);
+    }
+
+    const tokens = parseHintTokens(hintText);
+    const fontSize = 28;
+    const padX = 18;
+    const padY = 10;
+    const keyW = 32;
+    const keyH = 32;
+    const keyGap = 4;
+    ctx.save();
+    ctx.font = `700 ${fontSize}px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif`;
+    ctx.textBaseline = "middle";
+    ctx.textAlign = "left";
+
+    const widths: number[] = [];
+    let totalContent = 0;
+    for (const tk of tokens) {
+      if (tk.kind === "text") {
+        const w = ctx.measureText(tk.value).width;
+        widths.push(w);
+        totalContent += w;
+      } else {
+        widths.push(keyW);
+        totalContent += keyW + keyGap;
+      }
+    }
+    const totalW = totalContent + padX * 2;
+    const totalH = fontSize + padY * 2;
+    const cx = viewW / 2;
+    const cy = viewH - 80 + slideY;
+    ctx.translate(cx, cy);
+    ctx.scale(scale, scale);
+    ctx.globalAlpha = alpha;
+
+    // backplate
+    ctx.fillStyle = "rgba(10, 14, 26, 0.6)";
+    roundedRectPath(ctx, -totalW / 2, -totalH / 2, totalW, totalH, 8);
+    ctx.fill();
+
+    let cursor = -totalW / 2 + padX;
+    const HINT_COLOR = "#ffd60a";
+    for (let i = 0; i < tokens.length; i++) {
+      const tk = tokens[i];
+      if (tk.kind === "text") {
+        ctx.fillStyle = HINT_COLOR;
+        ctx.shadowColor = HINT_COLOR;
+        ctx.shadowBlur = hintPulsing ? 24 : 12;
+        ctx.font = `700 ${fontSize}px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif`;
+        ctx.textAlign = "left";
+        ctx.fillText(tk.value, cursor, 0);
+        cursor += widths[i];
+      } else {
+        // keycap
+        ctx.shadowBlur = 0;
+        ctx.fillStyle = "rgba(255, 255, 255, 0.95)";
+        roundedRectPath(ctx, cursor, -keyH / 2, keyW, keyH, 4);
+        ctx.fill();
+        ctx.fillStyle = "#0a0e1a";
+        ctx.font =
+          "600 22px ui-monospace, SFMono-Regular, Menlo, monospace";
+        ctx.textAlign = "center";
+        ctx.fillText(tk.value, cursor + keyW / 2, 1);
+        cursor += keyW + keyGap;
+      }
+    }
+    ctx.restore();
+  }
 
   const rooms = new Map<string, Room>();
   rooms.set("room0", buildRoom0());
@@ -439,6 +697,7 @@ export function start(canvas: HTMLCanvasElement): void {
   }
   spawnPlayerInCurrentRoom();
   snapCameraToRoom();
+  syncTutorialStateForRoom();
 
   function rebuildAllRooms() {
     rooms.set("room0", buildRoom0());
@@ -447,9 +706,30 @@ export function start(canvas: HTMLCanvasElement): void {
     rooms.set("room3", buildRoom3());
   }
 
+  /**
+   * Reset tutorial-only state to whatever the current room expects:
+   * Room 0 returns to phase "movement" with the spawn hint, other
+   * rooms clear the hint entirely. Called after every transition,
+   * restart, and on initial start.
+   */
+  function syncTutorialStateForRoom() {
+    room0Phase = "movement";
+    room0DashWall = null;
+    room0Dummy = null;
+    room0DummyHpAtLastProgress = 0;
+    hintText = null;
+    hintState = "idle";
+    hintAge = 0;
+    hintPulsing = false;
+    hintPendingText = null;
+    if (currentRoom.id === "room0") {
+      room0Enter("movement");
+    }
+  }
+
   function restartRun() {
     rebuildAllRooms();
-    currentRoom = rooms.get("room1")!;
+    currentRoom = rooms.get("room0")!;
     state.runState = "playing";
     state.hp = 3;
     state.score = 0;
@@ -478,6 +758,7 @@ export function start(canvas: HTMLCanvasElement): void {
     spawnPlayerInCurrentRoom();
     resetEyeState(player);
     snapCameraToRoom();
+    syncTutorialStateForRoom();
   }
 
   function transitionToRoom(id: string) {
@@ -493,6 +774,7 @@ export function start(canvas: HTMLCanvasElement): void {
     markerIndex = 0;
     spawnPlayerInCurrentRoom();
     snapCameraToRoom();
+    syncTutorialStateForRoom();
   }
 
   function roomBounds(): WorldBounds {
@@ -975,9 +1257,16 @@ export function start(canvas: HTMLCanvasElement): void {
     // and emit a single smash for that surface normal.
     const preVx = player.vx;
     const preVy = player.vy;
+    // Dash wall (Room 0 phase 2) is permeable during dash i-frames so
+    // the player can phase through it — that's the whole point of
+    // the lesson. Filter it out of the wall list while dashing.
+    const wallsForCollision =
+      player.dashIframeTime > 0 && room0DashWall
+        ? currentRoom.walls.filter((w) => w !== room0DashWall)
+        : currentRoom.walls;
     const collisionResult = resolvePlayerWallCollisions(
       player,
-      currentRoom.walls,
+      wallsForCollision,
       half,
     );
     if (
@@ -1291,19 +1580,24 @@ export function start(canvas: HTMLCanvasElement): void {
       }
     }
 
-    // tutorial markers — tick all (so future markers also breathe in
-    // sync) and advance the active one when the player walks over it.
+    // tutorial markers — non-sequential. Each unreached marker
+    // ticks its pulse, and any of them can be reached by the player
+    // walking over it. Reached markers retire and stop rendering.
     if (currentRoom.markers && currentRoom.markers.length > 0) {
-      for (const m of currentRoom.markers) tickMarker(m, dt);
-      if (markerIndex < currentRoom.markers.length) {
-        const active = currentRoom.markers[markerIndex];
-        if (markerOverlapsPlayer(active, player.x, player.y)) {
-          // Mini "reach" feedback — green ring + 6 particles + audio.
+      for (const m of currentRoom.markers) {
+        if (m.reached) continue;
+        tickMarker(m, dt);
+        if (markerOverlapsPlayer(m, player.x, player.y)) {
+          m.reached = true;
           markerIndex += 1;
+          // Resetting hintAge gives the player credit for progress —
+          // the 5-sec idle pulse only fires when the phase has
+          // genuinely stalled.
+          hintAge = 0;
           audio.play.pickupGrab("hp");
           rings.push({
-            x: active.x,
-            y: active.y,
+            x: m.x,
+            y: m.y,
             age: 0,
             lifetime: 0.35,
             startR: 16,
@@ -1317,8 +1611,8 @@ export function start(canvas: HTMLCanvasElement): void {
             const a = Math.random() * Math.PI * 2;
             const sp = 180 + Math.random() * 140;
             particles.push({
-              x: active.x,
-              y: active.y,
+              x: m.x,
+              y: m.y,
               vx: Math.cos(a) * sp,
               vy: Math.sin(a) * sp,
               initialSize: 3,
@@ -1371,6 +1665,8 @@ export function start(canvas: HTMLCanvasElement): void {
       }
     }
 
+    tickRoom0();
+    tickHint(dt);
     checkRoomCleared();
 
     // eye state: pupil tracks the closest threat in the room, dash ghosts
@@ -1460,14 +1756,11 @@ export function start(canvas: HTMLCanvasElement): void {
     drawWalls(ctx, currentRoom.walls);
     if (currentRoom.door) drawDoor(ctx, currentRoom.door);
 
-    // tutorial markers — drawn after walls, before enemies. The
-    // currently-active marker pulses bright + shows its label;
-    // already-reached markers (index < markerIndex) are skipped.
+    // tutorial markers — drawn after walls, before enemies. All
+    // unreached markers render in their active style (pulse + label);
+    // reached ones are skipped by drawMarker itself.
     if (currentRoom.markers) {
-      for (let i = 0; i < currentRoom.markers.length; i++) {
-        if (i < markerIndex) continue;
-        drawMarker(ctx, currentRoom.markers[i], i === markerIndex);
-      }
+      for (const m of currentRoom.markers) drawMarker(ctx, m);
     }
 
     // detection rings (drawn under everything so they read as a
@@ -1692,6 +1985,7 @@ export function start(canvas: HTMLCanvasElement): void {
     }
 
     drawHUD();
+    drawTutorialHint();
 
     if (state.runState === "failed") drawFailedOverlay();
     if (state.runState === "completed") drawCompletedOverlay();
@@ -1751,10 +2045,15 @@ export function start(canvas: HTMLCanvasElement): void {
     const colB = cx + 100;
     const y0 = 18;
 
+    // Right HUD slot — markers progress while a markered phase is
+    // active (Room 0 phases 1 and 2), otherwise enemy count.
+    const showMarkers = !!(
+      currentRoom.markers && currentRoom.markers.length > 0
+    );
     ctx.font = "500 11px system-ui, -apple-system, sans-serif";
     ctx.fillStyle = "#7d8590";
     ctx.fillText("TUTORIAL — ROOM", colA, y0);
-    ctx.fillText("ENEMIES", colB, y0);
+    ctx.fillText(showMarkers ? "MARKERS" : "ENEMIES", colB, y0);
 
     ctx.font = "600 22px ui-monospace, SFMono-Regular, Menlo, monospace";
     ctx.fillStyle = "#ffffff";
@@ -1771,13 +2070,22 @@ export function start(canvas: HTMLCanvasElement): void {
               : 1;
     ctx.fillText(`${roomNum} / ${ROOM_TOTAL}`, colA, y0 + 14);
 
-    const alive = aliveEnemies().length;
-    if (alive > 0) {
-      ctx.fillText(`${alive}`, colB, y0 + 14);
+    if (showMarkers) {
+      const total = currentRoom.markers!.length;
+      const reached = currentRoom.markers!.reduce(
+        (n, m) => n + (m.reached ? 1 : 0),
+        0,
+      );
+      ctx.fillText(`${reached} / ${total}`, colB, y0 + 14);
     } else {
-      ctx.fillStyle = PALETTE.pickupHP;
-      ctx.font = "600 18px system-ui, -apple-system, sans-serif";
-      ctx.fillText("CLEARED", colB, y0 + 16);
+      const alive = aliveEnemies().length;
+      if (alive > 0) {
+        ctx.fillText(`${alive}`, colB, y0 + 14);
+      } else {
+        ctx.fillStyle = PALETTE.pickupHP;
+        ctx.font = "600 18px system-ui, -apple-system, sans-serif";
+        ctx.fillText("CLEARED", colB, y0 + 16);
+      }
     }
 
     const y1 = y0 + 50;

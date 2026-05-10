@@ -16,10 +16,14 @@ export type Marker = {
   x: number;
   y: number;
   number: number;
-  /** Floating label shown above the active marker. */
+  /** Floating label shown above the marker while still active. */
   label: string;
   /** Animation phase advanced each frame; drives the breathing pulse. */
   pulsePhase: number;
+  /** Set true once the player has touched this marker. Reached
+   *  markers stop ticking, render, and overlap-checking — they're
+   *  effectively retired. */
+  reached: boolean;
 };
 
 export function createMarker(
@@ -28,7 +32,7 @@ export function createMarker(
   number: number,
   label: string,
 ): Marker {
-  return { x, y, number, label, pulsePhase: 0 };
+  return { x, y, number, label, pulsePhase: 0, reached: false };
 }
 
 export function tickMarker(marker: Marker, dt: number): void {
@@ -46,26 +50,22 @@ export function markerOverlapsPlayer(
 }
 
 /**
- * Draw a marker. Active markers get the full glow + label; future
- * markers (not yet reached) render as a dim silhouette so the player
- * can see the path ahead but knows which one to chase next.
+ * Draw an active (not-yet-reached) marker with full glow + label.
+ * Reached markers are skipped — the engine doesn't call this for them.
  */
 export function drawMarker(
   ctx: CanvasRenderingContext2D,
   marker: Marker,
-  isActive: boolean,
 ): void {
-  const pulse = isActive
-    ? 1 + Math.sin(marker.pulsePhase) * MARKER_PULSE_AMPLITUDE
-    : 1;
+  if (marker.reached) return;
+  const pulse = 1 + Math.sin(marker.pulsePhase) * MARKER_PULSE_AMPLITUDE;
   const r = MARKER_RADIUS * pulse;
   ctx.save();
-  ctx.globalAlpha = isActive ? 1 : 0.35;
   drawNeon(
     ctx,
     () => {
       ctx.fillStyle = PALETTE.pickupHP;
-      ctx.globalAlpha = isActive ? 0.18 : 0.08;
+      ctx.globalAlpha = 0.18;
       ctx.beginPath();
       ctx.arc(marker.x, marker.y, r, 0, Math.PI * 2);
       ctx.fill();
@@ -86,15 +86,14 @@ export function drawMarker(
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   ctx.fillText(String(marker.number), marker.x, marker.y);
-  if (isActive) {
-    ctx.fillStyle = PALETTE.pickupHP;
-    ctx.font = "600 13px ui-monospace, SFMono-Regular, Menlo, monospace";
-    ctx.textBaseline = "alphabetic";
-    ctx.shadowColor = PALETTE.pickupHP;
-    ctx.shadowBlur = 10;
-    ctx.fillText(marker.label, marker.x, marker.y - r - 14);
-    ctx.shadowBlur = 0;
-  }
+  // Floating label
+  ctx.fillStyle = PALETTE.pickupHP;
+  ctx.font = "600 13px ui-monospace, SFMono-Regular, Menlo, monospace";
+  ctx.textBaseline = "alphabetic";
+  ctx.shadowColor = PALETTE.pickupHP;
+  ctx.shadowBlur = 10;
+  ctx.fillText(marker.label, marker.x, marker.y - r - 14);
+  ctx.shadowBlur = 0;
   ctx.restore();
 }
 

@@ -3,7 +3,7 @@ import type { FloatingText, Particle, Ring } from "../particles";
 import type { Player } from "../player";
 import type { Wall } from "../walls";
 
-export type EnemyType = "turret" | "watcher" | "hunter";
+export type EnemyType = "turret" | "watcher" | "hunter" | "training-dummy";
 
 /**
  * Awareness state for the per-enemy detection ramp:

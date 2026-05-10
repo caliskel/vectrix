@@ -10,10 +10,21 @@ const DOOR_CENTER_Y = 400;
 const DOOR_W = 30;
 const DOOR_H = 120;
 
+// Tutorial Room 0 — controls onboarding. Player spawns at (200, 400)
+// and the engine drives a 3-phase progression:
+//
+//   1. Movement: 4 markers in 4 directions, any-order. Hint
+//      "USE [W][A][S][D] TO MOVE".
+//   2. Dash: a single marker behind a horizontal wall obstacle that
+//      can only be passed during dash i-frames. Hint "PRESS [X] TO
+//      DASH".
+//   3. Combat: a TrainingDummy in the center. Three dash-throughs
+//      kill it. Hint "DASH THROUGH THE TARGET 3 TIMES TO DESTROY IT".
+//
+// Phase wiring lives in tutorial-game.ts; this factory only sets up
+// the initial Phase 1 state — perimeter walls, the four direction
+// markers, and a closed door.
 export function buildRoom0(): Room {
-  // Tutorial controls room — no enemies, just five sequenced markers
-  // that teach D / W / A / S / X. Two short pillar walls between
-  // markers 4 and 5 force the player into a dash.
   const gapTop = DOOR_CENTER_Y - DOOR_H / 2;
   const gapBottom = DOOR_CENTER_Y + DOOR_H / 2;
   const walls: Wall[] = [
@@ -27,10 +38,6 @@ export function buildRoom0(): Room {
       w: WALL_T,
       h: ROOM_H - gapBottom,
     },
-    // Twin pillar walls between markers 4 and 5 with a narrow gap
-    // that's awkward to walk through — easier to dash.
-    { x: 700, y: 350, w: 50, h: 70 },
-    { x: 700, y: 480, w: 50, h: 70 },
   ];
 
   return {
@@ -47,12 +54,12 @@ export function buildRoom0(): Room {
     nextRoomId: "room1",
     spawnX: 200,
     spawnY: 400,
+    // Phase 1 — four movement markers reachable in any order.
     markers: [
-      createMarker(600, 400, 1, "→ MOVE RIGHT (D)"),
-      createMarker(600, 200, 2, "↑ MOVE UP (W)"),
-      createMarker(200, 200, 3, "← MOVE LEFT (A)"),
-      createMarker(200, 600, 4, "↓ MOVE DOWN (S)"),
-      createMarker(1000, 400, 5, "DASH THROUGH (X)"),
+      createMarker(600, 400, 1, "→"),
+      createMarker(200, 200, 2, "↖"),
+      createMarker(1000, 200, 3, "↗"),
+      createMarker(600, 700, 4, "↓"),
     ],
   };
 }
