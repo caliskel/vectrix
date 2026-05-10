@@ -1277,9 +1277,70 @@ export function start(canvas: HTMLCanvasElement): void {
 
     const half = settings.player.size / 2;
     const wasDashing = player.dashTime > 0;
+
+    // Explicit arena-perimeter clamp + smash — mirrors the sandbox
+    // arena pattern so a hit on the room border lands the same
+    // visual + audio cue regardless of mode. Runs BEFORE the wall
+    // resolve so the perimeter is handled directly (the resolve's
+    // smallest-penetration heuristic can pick the wrong push axis
+    // on a deep penetration of a 30 px-thick wall, dropping smash
+    // entirely). Interior walls (pillars, Room 0 dash wall, door)
+    // are still routed through resolveEntityWallCollisions below;
+    // smashCooldown prevents double-fire if both paths hit.
+    const perimW = currentRoom.width ?? ROOM_W_PX;
+    const perimH = currentRoom.height ?? ROOM_H_PX;
+    const PERIMETER_T = 30;
+    const minX = PERIMETER_T + half;
+    const maxX = perimW - PERIMETER_T - half;
+    const minY = PERIMETER_T + half;
+    const maxY = perimH - PERIMETER_T - half;
+    const door = currentRoom.door;
+    const doorOpen = door?.state === "open";
+    const inDoorY =
+      doorOpen && door
+        ? player.y > door.y - door.h / 2 - half &&
+          player.y < door.y + door.h / 2 + half
+        : false;
+    if (player.x < minX) {
+      player.x = minX;
+      if (player.vx < 0) {
+        const s = triggerPlayerSmash(player, 1, 0, -player.vx);
+        if (s >= 0) audio.play.smash(s);
+      }
+      player.vx = 0;
+    }
+    if (player.y < minY) {
+      player.y = minY;
+      if (player.vy < 0) {
+        const s = triggerPlayerSmash(player, 0, 1, -player.vy);
+        if (s >= 0) audio.play.smash(s);
+      }
+      player.vy = 0;
+    }
+    // Right perimeter is gated on the open door — when the door is
+    // open and the player is aligned with its y range, skip the
+    // clamp so the transition fires.
+    if (player.x > maxX && !inDoorY) {
+      player.x = maxX;
+      if (player.vx > 0) {
+        const s = triggerPlayerSmash(player, -1, 0, player.vx);
+        if (s >= 0) audio.play.smash(s);
+      }
+      player.vx = 0;
+    }
+    if (player.y > maxY) {
+      player.y = maxY;
+      if (player.vy > 0) {
+        const s = triggerPlayerSmash(player, 0, -1, player.vy);
+        if (s >= 0) audio.play.smash(s);
+      }
+      player.vy = 0;
+    }
+
     // Capture inward velocity before resolve zeroes the stopped axis.
     // After resolving, pick whichever axis carried the larger impact
-    // and emit a single smash for that surface normal.
+    // and emit a single smash for that surface normal — covers
+    // interior walls (perimeter is already handled above).
     const preVx = player.vx;
     const preVy = player.vy;
     // Dash wall (Room 0 phase 2) is permeable during dash i-frames so
