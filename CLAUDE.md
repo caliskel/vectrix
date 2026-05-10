@@ -739,11 +739,32 @@ transitions for score + Game Complete.
     100 ms then pulses 0.8 ↔ 1.4 scale on a 250 ms period. Final
     100 ms layer a countdown: arrow scales to ×1.6 with a fast
     1 → 0.4 → 1 alpha strobe and a chirp fires on the threshold
-    crossing, so firing-2 entry is impossible to miss. (Conflict
-    resolution with the other three attacks runs through the
-    universal mutual-exclusion gate; sub-phases here don't count
-    as a new attack — `isAnyAttackActive()` stays true across
-    the whole cycle.)
+    crossing, so firing-2 entry is impossible to miss.
+    **Light trail.** During firing-1 / mid-pause / firing-2 the
+    beam leaves a fading pink arc (max age 400 ms; outer / mid /
+    inner stroke stack in `#ff5577` / `#ff5577` / `#ffaaaa`).
+    Trail capture uses the unwiggled `currentSweepBeamAngle()`,
+    so mid-pause pushes pile at the static end-angle as
+    "concentrated residue." When firing-2 starts, both arcs are
+    on screen at once — the fading forward trail and the forming
+    return trail — which is the highlight visual moment of the
+    attack. Trail is render-only (no collision) and skipped in
+    telegraph.
+    **Recovery fade.** The beam doesn't snap off — staged opacity
+    decay across glow layers: core fades by 250 ms (easeOutQuad,
+    `1 - u²`), mid-glow by 400 ms (easeOutCubic, `1 - u³`), outer
+    bloom by 500 ms (easeOutQuart, `1 - u⁴`). Trail entries keep
+    aging through recovery and dissolve naturally inside the
+    400 ms window. A pink release ring (`#ff5577`, r 24 → 180,
+    lw 6 → 0.5, lifetime 500 ms) blooms at the boss centre at
+    recovery start as visual punctuation. (Audio-side: the boss
+    audio pass should later add an exponential drone-gain ramp
+    to 0 over the 500 ms recovery; no continuous drone synth
+    exists yet to fade.)
+    (Conflict resolution with the other three attacks runs
+    through the universal mutual-exclusion gate; sub-phases
+    here don't count as a new attack — `isAnyAttackActive()`
+    stays true across the whole cycle.)
   - **Ring Burst** — phase 1's defining mechanic. The three
     shells detach + expand, the body goes ghosted, and the eye
     becomes the only damage path. Sub-state machine

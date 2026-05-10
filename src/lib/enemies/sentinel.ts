@@ -485,7 +485,29 @@ const SWEEP_LASER_ARC_ALPHA_MAX = 0.2;
 const SWEEP_LASER_ARC_PULSE_PERIOD_SEC = 0.4;
 const SWEEP_LASER_DIR_TRIANGLE_OFFSET = 100;
 const SWEEP_LASER_DIR_TRIANGLE_SIZE = 10;
-const SWEEP_LASER_RECOVERY_FADE_SEC = 0.2;
+// Recovery staged fade — bloom dissipates last, so the residual
+// glow reads like a hot wire cooling instead of a flat cut. Each
+// layer uses its own duration + easing curve.
+const SWEEP_LASER_RECOVERY_CORE_FADE_SEC = 0.25;
+const SWEEP_LASER_RECOVERY_MID_FADE_SEC = 0.4;
+const SWEEP_LASER_RECOVERY_OUTER_FADE_SEC = 0.5;
+// Release ring — single bloom at firing-2 → recovery as visual
+// punctuation that the attack ended.
+const SWEEP_LASER_RELEASE_RING_R_START = 24;
+const SWEEP_LASER_RELEASE_RING_R_END = 180;
+const SWEEP_LASER_RELEASE_RING_LIFETIME_SEC = 0.5;
+const SWEEP_LASER_RELEASE_RING_LW_START = 6;
+const SWEEP_LASER_RELEASE_RING_LW_END = 0.5;
+const SWEEP_LASER_RELEASE_RING_COLOR = "#ff5577";
+// Light trail — pink residue painted along every recent beam
+// position during firing. Visual only; collision / particle
+// emission keep using `currentSweepBeamAngle()`.
+const SWEEP_TRAIL_MAX_AGE_SEC = 0.4;
+const SWEEP_TRAIL_MAX_ENTRIES = 30;
+const SWEEP_TRAIL_BASE_OPACITY = 0.22;
+const SWEEP_TRAIL_BASE_LINEWIDTH = 8;
+const SWEEP_TRAIL_OUTER_COLOR = "#ff5577";
+const SWEEP_TRAIL_INNER_COLOR = "#ffaaaa";
 const SWEEP_LASER_BEAM_PARTICLE_INTERVAL_SEC = 0.05;
 const SWEEP_LASER_BEAM_PARTICLE_SPEED = 600;
 const SWEEP_LASER_BEAM_PARTICLE_LIFETIME_SEC = 0.2;
@@ -668,6 +690,10 @@ type SweepPhase =
   | "mid-pause"
   | "firing-2"
   | "recovery";
+
+// Pink residue painted behind the moving beam — captured each frame
+// of the firing window, ages out over `SWEEP_TRAIL_MAX_AGE_SEC`.
+type SweepTrailEntry = { angle: number; age: number };
 
 type RingBurstPhase =
   | "idle"
@@ -873,6 +899,7 @@ export class Sentinel implements Enemy {
   private sweepLaserDirection: 1 | -1 = 1;
   private sweepLaserDashOffset = 0;
   private sweepLaserBeamParticleTimer = 0;
+  private sweepTrail: SweepTrailEntry[] = [];
   // Set true on a successful eye dash-through; tickRingBurst drains
   // it next frame so triggerEyeHitFeedback can fire with ctxRoom in
   // hand (tryDashDamage doesn't get ctxRoom in its signature).
@@ -1988,6 +2015,17 @@ export class Sentinel implements Enemy {
 
     this.sweepLaserTimer += dt;
 
+    // Trail aging — runs every tick across telegraph / firing /
+    // recovery so existing entries fade naturally regardless of
+    // phase. New entries are pushed only during the firing window
+    // (the beamActive block below).
+    if (this.sweepTrail.length > 0) {
+      for (const entry of this.sweepTrail) entry.age += dt;
+      this.sweepTrail = this.sweepTrail.filter(
+        (e) => e.age < SWEEP_TRAIL_MAX_AGE_SEC,
+      );
+    }
+
     if (this.sweepLaserPhase === "telegraph") {
       const span =
         SWEEP_LASER_TELEGRAPH_DASH_PATTERN[0] +
@@ -1999,6 +2037,9 @@ export class Sentinel implements Enemy {
         this.sweepLaserPhase = "firing-1";
         this.sweepLaserTimer = 0;
         this.sweepLaserBeamParticleTimer = 0;
+        // Clean slate for the trail — guards against any leftover
+        // entries from a previous attack that didn't fully age out.
+        this.sweepTrail = [];
       }
       return;
     }
@@ -2050,6 +2091,21 @@ export class Sentinel implements Enemy {
           drag: 0.97,
         });
       }
+      // Trail push — capture this frame's beam angle as fresh
+      // residue. Mid-pause pushes pile up at the static end-angle
+      // since `currentSweepBeamAngle()` returns the unwiggled value;
+      // that intentional concentration reads as "the beam is
+      // gathering itself" before the return.
+      this.sweepTrail.push({
+        angle: this.currentSweepBeamAngle(),
+        age: 0,
+      });
+      if (this.sweepTrail.length > SWEEP_TRAIL_MAX_ENTRIES) {
+        this.sweepTrail.splice(
+          0,
+          this.sweepTrail.length - SWEEP_TRAIL_MAX_ENTRIES,
+        );
+      }
     }
 
     if (this.sweepLaserPhase === "firing-1") {
@@ -2092,6 +2148,25 @@ export class Sentinel implements Enemy {
       if (this.sweepLaserTimer >= SWEEP_LASER_FIRING_2_SEC) {
         this.sweepLaserPhase = "recovery";
         this.sweepLaserTimer = 0;
+        // Release ring — short pink bloom at the boss centre as
+        // visual punctuation that the attack just ended. Pairs
+        // with the staged glow fade in renderSweepLaserBeam.
+        // (Audio-side: the boss audio pass should later add an
+        // exponential drone-gain ramp to 0 over SWEEP_LASER_
+        // RECOVERY_OUTER_FADE_SEC; no continuous drone synth
+        // exists yet to fade.)
+        ctxRoom.rings.push({
+          x: this.x,
+          y: this.y,
+          age: 0,
+          lifetime: SWEEP_LASER_RELEASE_RING_LIFETIME_SEC,
+          startR: SWEEP_LASER_RELEASE_RING_R_START,
+          endR: SWEEP_LASER_RELEASE_RING_R_END,
+          color: SWEEP_LASER_RELEASE_RING_COLOR,
+          startLineWidth: SWEEP_LASER_RELEASE_RING_LW_START,
+          endLineWidth: SWEEP_LASER_RELEASE_RING_LW_END,
+          glowBlur: 12,
+        });
       }
       return;
     }
@@ -2229,6 +2304,7 @@ export class Sentinel implements Enemy {
     this.sweepLaserPhase = "idle";
     this.sweepLaserTimer = 0;
     this.sweepLaserIdleTimer = 0;
+    this.sweepTrail = [];
     this.phaseTransition = null;
     this.phaseMarkerFlashTimer1to2 = -1;
     this.phaseMarkerFlashTimer2to3 = -1;
@@ -2468,22 +2544,40 @@ export class Sentinel implements Enemy {
       a += wiggle;
     }
     const reach = Math.hypot(this.arenaW, this.arenaH);
+
+    // Trail (residue) — drawn first so the live beam paints on top.
+    // Renders independently of the main-beam fade so it can outlive
+    // the beam's outer-bloom layer if it has older entries.
+    if (this.sweepTrail.length > 0) {
+      this.renderSweepTrail(ctx, reach);
+    }
+
+    // Staged recovery fade — bloom dissipates last so the beam
+    // reads as "cooling" rather than snapping off. Each layer has
+    // its own duration + easing curve.
+    let coreAlpha = 1;
+    let midAlpha = 1;
+    let outerAlpha = 1;
+    if (this.sweepLaserPhase === "recovery") {
+      const t = this.sweepLaserTimer;
+      const cu = Math.min(1, t / SWEEP_LASER_RECOVERY_CORE_FADE_SEC);
+      const mu = Math.min(1, t / SWEEP_LASER_RECOVERY_MID_FADE_SEC);
+      const ou = Math.min(1, t / SWEEP_LASER_RECOVERY_OUTER_FADE_SEC);
+      // easeOutQuad / easeOutCubic / easeOutQuart — 1 - u^n.
+      coreAlpha = 1 - cu * cu;
+      midAlpha = 1 - mu * mu * mu;
+      outerAlpha = 1 - ou * ou * ou * ou;
+    }
+    if (coreAlpha <= 0 && midAlpha <= 0 && outerAlpha <= 0) {
+      // Beam fully cooled — trail (if any) was already drawn above.
+      return;
+    }
     const endX = this.x + Math.cos(a) * reach;
     const endY = this.y + Math.sin(a) * reach;
-    // Recovery fade — beam alpha eases to zero over the first
-    // SWEEP_LASER_RECOVERY_FADE_SEC of recovery.
-    let alpha = 1;
-    if (this.sweepLaserPhase === "recovery") {
-      alpha = Math.max(
-        0,
-        1 - this.sweepLaserTimer / SWEEP_LASER_RECOVERY_FADE_SEC,
-      );
-    }
-    if (alpha <= 0) return;
     // Mid-pause breath — easeInOutSine 0 → 1 → 0 across the 800 ms
     // window. Slow inhale/exhale (sin(π·u) gives 0 → 1 → 0 with
-    // eased shoulders) instead of the prior triangle flash; reads
-    // as "the beam is charging the return shot."
+    // eased shoulders); reads as "the beam is charging the return
+    // shot." Skipped outside mid-pause.
     let breath = 0;
     if (this.sweepLaserPhase === "mid-pause") {
       const u = Math.min(
@@ -2512,14 +2606,14 @@ export class Sentinel implements Enemy {
     // Outer glow layer
     ctx.strokeStyle = accent;
     ctx.lineWidth = 24;
-    ctx.globalAlpha = outerGlowAlpha * alpha;
+    ctx.globalAlpha = outerGlowAlpha * outerAlpha;
     ctx.beginPath();
     ctx.moveTo(this.x, this.y);
     ctx.lineTo(endX, endY);
     ctx.stroke();
     // Mid layer
     ctx.lineWidth = 14;
-    ctx.globalAlpha = 0.4 * alpha;
+    ctx.globalAlpha = 0.4 * midAlpha;
     ctx.beginPath();
     ctx.moveTo(this.x, this.y);
     ctx.lineTo(endX, endY);
@@ -2527,7 +2621,7 @@ export class Sentinel implements Enemy {
     // Hot core
     ctx.strokeStyle = coreColor;
     ctx.lineWidth = coreLineWidth;
-    ctx.globalAlpha = 1 * alpha;
+    ctx.globalAlpha = 1 * coreAlpha;
     ctx.beginPath();
     ctx.moveTo(this.x, this.y);
     ctx.lineTo(endX, endY);
@@ -2541,6 +2635,43 @@ export class Sentinel implements Enemy {
     if (this.sweepLaserPhase === "mid-pause") {
       this.renderSweepReverseArrow(ctx, a);
     }
+  }
+
+  private renderSweepTrail(
+    ctx: CanvasRenderingContext2D,
+    reach: number,
+  ): void {
+    ctx.save();
+    for (const entry of this.sweepTrail) {
+      const fade = 1 - entry.age / SWEEP_TRAIL_MAX_AGE_SEC;
+      if (fade <= 0) continue;
+      const endX = this.x + Math.cos(entry.angle) * reach;
+      const endY = this.y + Math.sin(entry.angle) * reach;
+      // Outer fading bloom — softest, widest stroke.
+      ctx.strokeStyle = SWEEP_TRAIL_OUTER_COLOR;
+      ctx.lineWidth = SWEEP_TRAIL_BASE_LINEWIDTH * fade * 1.8;
+      ctx.globalAlpha = SWEEP_TRAIL_BASE_OPACITY * fade * 0.4;
+      ctx.beginPath();
+      ctx.moveTo(this.x, this.y);
+      ctx.lineTo(endX, endY);
+      ctx.stroke();
+      // Mid trail — same colour, narrower, brighter.
+      ctx.lineWidth = SWEEP_TRAIL_BASE_LINEWIDTH * fade;
+      ctx.globalAlpha = SWEEP_TRAIL_BASE_OPACITY * fade * 0.7;
+      ctx.beginPath();
+      ctx.moveTo(this.x, this.y);
+      ctx.lineTo(endX, endY);
+      ctx.stroke();
+      // Hot inner residue — thin near-white core.
+      ctx.strokeStyle = SWEEP_TRAIL_INNER_COLOR;
+      ctx.lineWidth = SWEEP_TRAIL_BASE_LINEWIDTH * fade * 0.4;
+      ctx.globalAlpha = SWEEP_TRAIL_BASE_OPACITY * fade;
+      ctx.beginPath();
+      ctx.moveTo(this.x, this.y);
+      ctx.lineTo(endX, endY);
+      ctx.stroke();
+    }
+    ctx.restore();
   }
 
   private renderSweepReverseArrow(
