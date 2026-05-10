@@ -88,6 +88,13 @@ const AIMED_LINE_GLOW = 12;
 const AIMED_DIAMOND_SIZE = 14;
 const AIMED_MUZZLE_PARTICLE_COUNT = 8;
 const AIMED_MUZZLE_PARTICLE_LIFETIME_SEC = 0.2;
+// Tracking — line follows the live player position throughout
+// telegraph; angle is locked only at the firing transition.
+// 3 rad/s lets a normal walk be tracked but a sideways dash escape.
+const AIMED_MAX_ANGULAR_VEL = 3.0;
+// Confirmation flash on telegraph → firing — line goes solid +
+// fully opaque for SNAP_SEC, then fades to nothing.
+const AIMED_SNAP_DURATION_SEC = 0.08;
 
 // Dying timeline (ms, all relative to dying-state entry).
 const DYING_SLOWMO_RAMP_MS = 200;
@@ -331,6 +338,18 @@ function nextRingRetargetMs(): number {
   );
 }
 
+/** Shortest signed angular difference (target − current) in
+ *  [-π, π]. Used by the aimed-shot tracker so a chase across the
+ *  ±π discontinuity goes the short way around (across the seam)
+ *  instead of unwinding 2π through the far side. */
+function shortestAngleDiff(target: number, current: number): number {
+  const TWO_PI = Math.PI * 2;
+  let d = (target - current) % TWO_PI;
+  if (d < -Math.PI) d += TWO_PI;
+  else if (d > Math.PI) d -= TWO_PI;
+  return d;
+}
+
 export type SentinelState =
   | "intro"
   | "idle"
@@ -458,11 +477,25 @@ export class Sentinel implements Enemy {
   private aimedPhase: AttackPhase = "idle";
   private aimedTimer = 0;
   private aimedIdleTimer = 0;
-  private aimedLockX = 0;
-  private aimedLockY = 0;
+  /** Live aim angle while telegraphing — chases the player at up
+   *  to AIMED_MAX_ANGULAR_VEL each frame. Promoted to the firing
+   *  angle the instant we transition out of telegraph. */
+  private aimedTrackedAngle = 0;
+  /** Frozen at telegraph → firing transition; bullets all fire
+   *  along this angle. Set once and never updated during firing. */
   private aimedAngle = 0;
   private aimedShotsFired = 0;
   private aimedDashOffset = 0; // crawl offset for the dashed telegraph line
+  /** Counts down through the post-telegraph "snap" confirm flash.
+   *  While > 0, the aim line redraws solid + opaque so the player
+   *  reads "the angle just locked, bullets coming." */
+  private aimedSnapTimer = 0;
+  /** Cached player position from the last update tick — used by
+   *  renderAimedTelegraph to place the diamond on the player's
+   *  current distance projected along the tracked angle. draw()
+   *  doesn't get a player handle; we stash it instead. */
+  private lastPlayerX = 0;
+  private lastPlayerY = 0;
 
   // Attack 3 — Ring Burst sub-machine. Has the highest priority of
   // the three: when ringBurstPhase !== "idle", radial / aimed
@@ -649,6 +682,11 @@ export class Sentinel implements Enemy {
   // -------- combat (idle / attacking) --------
 
   private updateCombat(ctxRoom: EnemyContext, dt: number): void {
+    // Cache player position so renderAimedTelegraph can place the
+    // diamond at the player's distance projection along the tracked
+    // angle. draw() has no ctxRoom, so we stash it.
+    this.lastPlayerX = ctxRoom.player.x;
+    this.lastPlayerY = ctxRoom.player.y;
     // Figure-8 (lemniscate) around the arena centre — fully
     // independent of the player. amplitudes are inset by hitbox +
     // FIGURE_EIGHT_EDGE_PAD_PX so the path never crosses walls. dt
@@ -704,6 +742,12 @@ export class Sentinel implements Enemy {
     }
     const ringBurstActive = this.ringBurstPhase !== "idle";
 
+    // Aimed-shot snap-confirm flash decays unconditionally — it's a
+    // transient visual, lives 80 ms after the telegraph locks.
+    if (this.aimedSnapTimer > 0) {
+      this.aimedSnapTimer = Math.max(0, this.aimedSnapTimer - dt);
+    }
+
     // === Attack scheduling — dual sub-state machines ===
     // Only one attack runs at a time. Whichever attack is in a
     // non-idle phase blocks the other one's cooldown from ticking,
@@ -746,7 +790,27 @@ export class Sentinel implements Enemy {
           const span = AIMED_DASH_PATTERN[0] + AIMED_DASH_PATTERN[1];
           this.aimedDashOffset =
             (this.aimedDashOffset + AIMED_DASH_RATE * dt) % span;
+          // Track the player at a capped angular velocity.
+          const desired = Math.atan2(
+            ctxRoom.player.y - this.y,
+            ctxRoom.player.x - this.x,
+          );
+          const delta = shortestAngleDiff(
+            desired,
+            this.aimedTrackedAngle,
+          );
+          const maxStep = AIMED_MAX_ANGULAR_VEL * dt;
+          if (Math.abs(delta) > maxStep) {
+            this.aimedTrackedAngle += Math.sign(delta) * maxStep;
+          } else {
+            this.aimedTrackedAngle = desired;
+          }
           if (this.aimedTimer >= AIMED_TELEGRAPH_SEC) {
+            // Lock the angle now — bullets all fire along this.
+            // Fire the snap-confirm flash so the player reads
+            // "the angle just locked."
+            this.aimedAngle = this.aimedTrackedAngle;
+            this.aimedSnapTimer = AIMED_SNAP_DURATION_SEC;
             this.aimedPhase = "firing";
             this.aimedTimer = 0;
             this.aimedShotsFired = 0;
@@ -861,12 +925,14 @@ export class Sentinel implements Enemy {
     this.aimedPhase = "telegraph";
     this.aimedTimer = 0;
     this.aimedDashOffset = 0;
-    this.aimedLockX = player.x;
-    this.aimedLockY = player.y;
-    this.aimedAngle = Math.atan2(
-      this.aimedLockY - this.y,
-      this.aimedLockX - this.x,
+    // First-frame snap to the player so the line doesn't sweep in
+    // from a stale angle. Subsequent telegraph frames track the
+    // live player at a capped angular velocity.
+    this.aimedTrackedAngle = Math.atan2(
+      player.y - this.y,
+      player.x - this.x,
     );
+    this.aimedAngle = this.aimedTrackedAngle;
   }
 
   private fireRadialBurst(ctxRoom: EnemyContext): void {
@@ -1382,6 +1448,9 @@ export class Sentinel implements Enemy {
     if (this.aimedPhase === "telegraph") {
       this.renderAimedTelegraph(ctx);
     }
+    if (this.aimedSnapTimer > 0) {
+      this.renderAimedSnapFlash(ctx);
+    }
     this.renderBody(ctx, 1);
     if (this.streamers.length > 0) {
       this.renderStreamers(ctx);
@@ -1421,18 +1490,19 @@ export class Sentinel implements Enemy {
   }
 
   private renderAimedTelegraph(ctx: CanvasRenderingContext2D): void {
-    // Locked dashed line from boss centre out to the arena edge in
-    // the direction captured at telegraph entry. Crawls forward at
-    // AIMED_DASH_RATE to read as a live threat.
+    // Live tracked-angle line from boss centre out to the arena
+    // edge. Angle updates each frame in update() at up to
+    // AIMED_MAX_ANGULAR_VEL — a normal walk gets tracked, a late
+    // sideways dash escapes.
     const dist = rayDistToArenaEdge(
       this.x,
       this.y,
-      this.aimedAngle,
+      this.aimedTrackedAngle,
       this.arenaW,
       this.arenaH,
     );
-    const endX = this.x + Math.cos(this.aimedAngle) * dist;
-    const endY = this.y + Math.sin(this.aimedAngle) * dist;
+    const endX = this.x + Math.cos(this.aimedTrackedAngle) * dist;
+    const endY = this.y + Math.sin(this.aimedTrackedAngle) * dist;
     ctx.save();
     ctx.strokeStyle = SENTINEL_COLOR;
     ctx.lineWidth = 2;
@@ -1447,9 +1517,15 @@ export class Sentinel implements Enemy {
     ctx.setLineDash([]);
     ctx.restore();
 
-    // Pulsing diamond on the locked target — sin wave at the
-    // telegraph-window frequency so it does roughly two pulses
-    // before the bullets fly.
+    // Diamond at the player's distance projected along the tracked
+    // angle — sticks to the player while the line chases, then
+    // snaps to the locked angle the moment firing starts (player
+    // distance still drives the radius).
+    const pdx = this.lastPlayerX - this.x;
+    const pdy = this.lastPlayerY - this.y;
+    const playerDist = Math.hypot(pdx, pdy);
+    const diamondX = this.x + Math.cos(this.aimedTrackedAngle) * playerDist;
+    const diamondY = this.y + Math.sin(this.aimedTrackedAngle) * playerDist;
     const pulse =
       1 +
       0.2 *
@@ -1458,12 +1534,41 @@ export class Sentinel implements Enemy {
         );
     const half = (AIMED_DIAMOND_SIZE / 2) * pulse;
     ctx.save();
-    ctx.translate(this.aimedLockX, this.aimedLockY);
+    ctx.translate(diamondX, diamondY);
     ctx.rotate(Math.PI / 4);
     ctx.fillStyle = SENTINEL_COLOR;
     ctx.shadowColor = SENTINEL_COLOR;
     ctx.shadowBlur = AIMED_LINE_GLOW;
     ctx.fillRect(-half, -half, half * 2, half * 2);
+    ctx.restore();
+  }
+
+  /** Brief snap-confirm flash drawn the 80 ms after the telegraph
+   *  locks. Solid (no dash), full opacity → fade to 0, so the
+   *  player reads "the angle just locked, bullets coming." Drawn
+   *  in firing phase, separate from the telegraph dashed line. */
+  private renderAimedSnapFlash(ctx: CanvasRenderingContext2D): void {
+    const alpha = this.aimedSnapTimer / AIMED_SNAP_DURATION_SEC;
+    if (alpha <= 0) return;
+    const dist = rayDistToArenaEdge(
+      this.x,
+      this.y,
+      this.aimedAngle,
+      this.arenaW,
+      this.arenaH,
+    );
+    const endX = this.x + Math.cos(this.aimedAngle) * dist;
+    const endY = this.y + Math.sin(this.aimedAngle) * dist;
+    ctx.save();
+    ctx.globalAlpha = Math.min(1, 0.7 + 0.3 * alpha);
+    ctx.strokeStyle = SENTINEL_COLOR;
+    ctx.lineWidth = 2.5;
+    ctx.shadowColor = SENTINEL_COLOR;
+    ctx.shadowBlur = AIMED_LINE_GLOW + 4;
+    ctx.beginPath();
+    ctx.moveTo(this.x, this.y);
+    ctx.lineTo(endX, endY);
+    ctx.stroke();
     ctx.restore();
   }
 

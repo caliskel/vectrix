@@ -656,16 +656,22 @@ transitions for score + Game Complete.
     single firing frame (12 bullets fanned at 350 px/s) +
     0.3 s recovery + 0.65 s idle gap. Spawns from the live
     boss position.
-  - **Aimed Shot Trio** — 4.35 s total cycle: 0.6 s telegraph
-    that locks `(lockX, lockY) = player.x/y at entry` and
-    captures `aimAngle` (the line and bullets stay frozen on
-    that angle — player must side-step off the line) + 0.45 s
-    firing window with 3 bullets fired 150 ms apart along the
-    locked angle at 450 px/s + 0.3 s recovery + 3.0 s cooldown.
-    The telegraph draws a dashed cyan-style line from the boss
-    to the arena edge (10/8 dash pattern crawling at 60 px/s,
-    line glow 12) plus a 14 × 14 px diamond pulsing 0.8 ↔ 1.2
-    on the locked target. Each fired bullet pops an 8-particle
+  - **Aimed Shot Trio** — 4.35 s total cycle. The telegraph line
+    **tracks the live player position** through its 0.6 s window
+    at a max angular velocity of `AIMED_MAX_ANGULAR_VEL = 3 rad/s`
+    (`shortestAngleDiff` keeps the chase short around the ±π
+    seam). Normal walking is tracked easily; a sideways dash late
+    in the telegraph breaks the lock — that's the skill
+    expression. The angle is captured at the telegraph → firing
+    transition and held through the 0.45 s firing window
+    (3 bullets fired 150 ms apart at 450 px/s) + 0.3 s recovery
+    + 3.0 s cooldown. The telegraph draws a dashed line from the
+    boss to the arena edge (10/8 dash pattern crawling at
+    60 px/s, line glow 12) plus a 14 × 14 px diamond pulsing
+    0.8 ↔ 1.2 at the player's distance projected along the
+    tracked angle (the diamond literally chases the player). At
+    the lock moment a 80 ms solid-line snap-flash confirms "angle
+    locked, bullets coming." Each fired bullet pops an 8-particle
     muzzle flash at the boss centre.
   - **Ring Burst** — phase 1's defining mechanic. The three
     shells detach + expand, the body goes ghosted, and the eye
