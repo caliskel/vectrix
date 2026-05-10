@@ -40,7 +40,7 @@ import {
   drawEnemyDetection,
   updateEnemyAwareness,
 } from "../lib/enemies/awareness";
-import { Sentinel } from "../lib/enemies/sentinel";
+import { Sentinel, type SentinelState } from "../lib/enemies/sentinel";
 import type { Enemy, Laser } from "../lib/enemies/types";
 import {
   emitBulletHit,
@@ -102,12 +102,6 @@ const WATCHER_KILL_SCORE = 800;
 const HUNTER_KILL_SCORE = 600;
 const SENTINEL_KILL_SCORE = 5000;
 // Boss-room sequence timings (seconds)
-const BOSS_INTRO_SEC = 2.0;
-const BOSS_INTRO_SCALE_UP_SEC = 1.5;
-const BOSS_DEATH_FLASH_START_SEC = 1.0;
-const BOSS_DEATH_FLASH_END_SEC = 1.4;
-const BOSS_DEATH_VICTORY_FADE_IN_SEC = 1.7;
-const BOSS_DEATH_TOTAL_SEC = 3.0;
 const LASER_DODGE_SCORE = 50;
 const LASER_HIT_PADDING = 6; // px added to player half for laser collision
 const LASER_FRIENDLY_FIRE_HALF_WIDTH = 8; // matches firing-beam visual width
@@ -317,11 +311,6 @@ function drawLaser(ctx: CanvasRenderingContext2D, l: Laser): void {
 
 type RunState = "playing" | "failed" | "completed";
 
-// Boss-room (Room 5) sequence state machine. The campaign loop only
-// touches this when the player is actually inside the boss room;
-// `phase: "none"` is the resting state for every other room.
-type BossPhase = "none" | "intro" | "fight" | "death" | "complete";
-
 type FailedSnapshot = {
   score: number;
   bestScore: number | null;
@@ -350,17 +339,14 @@ type GameState = {
   screenFlashOpacity: number;
   failedSnapshot: FailedSnapshot | null;
   /** Cumulative time the campaign run has been "playing" — paused
-   *  during intro/death/complete phases and during pause-menu /
-   *  failed states. Used by the Game Complete overlay. */
+   *  while the Sentinel cinematic phases (intro / dying) freeze the
+   *  world, and while the failed/completed overlays are up. Read by
+   *  the Game Complete overlay. */
   elapsed: number;
-  /** Boss-room sequence state. `none` outside Room 5. */
-  bossPhase: BossPhase;
-  bossPhaseTimer: number;
-  /** Last position of the Sentinel — captured at death so the
-   *  layered explosion / VICTORY text anchor stays put even after
-   *  the enemy itself is removed. */
-  bossDeathX: number;
-  bossDeathY: number;
+  /** Tracked across frames so we can credit the kill score on the
+   *  combat → dying transition and pop Game Complete on dying →
+   *  defeated. Equals "none" while the player isn't in Room 5. */
+  prevSentinelState: SentinelState | "none";
 };
 
 export function start(canvas: HTMLCanvasElement): void {
@@ -455,10 +441,7 @@ export function start(canvas: HTMLCanvasElement): void {
     screenFlashOpacity: 0,
     failedSnapshot: null,
     elapsed: 0,
-    bossPhase: "none",
-    bossPhaseTimer: 0,
-    bossDeathX: 0,
-    bossDeathY: 0,
+    prevSentinelState: "none",
   };
 
   let currentRoom: Room = rooms.get("room1")!;
@@ -525,8 +508,7 @@ export function start(canvas: HTMLCanvasElement): void {
     state.screenFlashOpacity = 0;
     state.failedSnapshot = null;
     state.elapsed = 0;
-    state.bossPhase = "none";
-    state.bossPhaseTimer = 0;
+    state.prevSentinelState = "none";
     bullets = [];
     particles = [];
     rings = [];
@@ -554,15 +536,10 @@ export function start(canvas: HTMLCanvasElement): void {
     spawnPlayerInCurrentRoom();
     applyInitialKey();
     snapCameraToRoom();
-    // Boss-room hook: entering Room 5 kicks off the intro sequence
-    // (player movement frozen, Sentinel scaling up, "SENTINEL" text).
-    // Other rooms reset bossPhase to none.
-    if (currentRoom.id === "room5") {
-      startBossIntro();
-    } else {
-      state.bossPhase = "none";
-      state.bossPhaseTimer = 0;
-    }
+    // Sentinel owns its own intro state — entering Room 5 lands the
+    // boss in `state: "intro"` from the constructor; no external
+    // priming is needed.
+    state.prevSentinelState = currentRoom.id === "room5" ? "intro" : "none";
   }
 
   function roomBounds(): WorldBounds {
@@ -617,7 +594,7 @@ export function start(canvas: HTMLCanvasElement): void {
 
   // Game-complete DOM overlay shown after the boss-death sequence
   // finishes. The frame loop calls `completeMenu.show(...)` once with
-  // the final score + elapsed time when bossPhase flips to "complete".
+  // the final score + elapsed time when sentinel.state hits "defeated".
   const completeMenu = createGameCompleteMenu({
     onPlayAgain: () => {
       restartRun();
@@ -825,6 +802,19 @@ export function start(canvas: HTMLCanvasElement): void {
     if (state.hitIframe > 0) return;
     if (player.dashIframeTime > 0) return;
     if (isGodMode()) return;
+    // Player invuln during boss cinematic phases — leftover bullets
+    // from the last burst can't kill them mid-VICTORY.
+    {
+      const sentinelGuard = findSentinel();
+      if (
+        sentinelGuard &&
+        (sentinelGuard.state === "intro" ||
+          sentinelGuard.state === "dying" ||
+          sentinelGuard.state === "defeated")
+      ) {
+        return;
+      }
+    }
     audio.play.hit();
     state.hp -= 1;
     state.hitIframe = HIT_IFRAME;
@@ -910,59 +900,46 @@ export function start(canvas: HTMLCanvasElement): void {
     return null;
   }
 
-  function startBossIntro() {
-    state.bossPhase = "intro";
-    state.bossPhaseTimer = 0;
-    const sentinel = findSentinel();
-    if (sentinel) {
-      sentinel.spawnScale = 0.1;
-      sentinel.attacksEnabled = false;
+  // Drains Sentinel.pendingShake* into rooms-game's shake state so
+  // the boss can request screen shake without a direct reference to
+  // triggerShake. Polled each frame after Sentinel.update.
+  function consumeSentinelEffects(sentinel: Sentinel): void {
+    if (sentinel.pendingShakePx > 0 && sentinel.pendingShakeSec > 0) {
+      triggerShake(sentinel.pendingShakePx, sentinel.pendingShakeSec);
+      sentinel.pendingShakePx = 0;
+      sentinel.pendingShakeSec = 0;
     }
   }
 
-  function triggerBossDeath(sentinel: Sentinel) {
-    state.bossPhase = "death";
-    state.bossPhaseTimer = 0;
-    state.bossDeathX = sentinel.x;
-    state.bossDeathY = sentinel.y;
-    // Layered explosion — six fragments per shell flying outward, plus
-    // a wider red particle cloud. The hexagon vertex angles drive the
-    // fragment directions so the burst echoes the boss silhouette.
-    for (let i = 0; i < 6; i++) {
-      const a = -Math.PI / 2 + i * (Math.PI / 3);
-      const speed = 220 + Math.random() * 120;
-      particles.push({
-        x: sentinel.x,
-        y: sentinel.y,
-        vx: Math.cos(a) * speed,
-        vy: Math.sin(a) * speed,
-        initialSize: 8,
-        color: PALETTE.bullet,
-        age: 0,
-        lifetime: 0.9,
-        glowStrong: 14,
-        glowSoft: 6,
-        drag: 0.94,
-      });
+  // Watches sentinel state transitions so kill score lands at the
+  // dying entry, and Game Complete pops at the dying → defeated
+  // boundary. Runs once per frame after Sentinel.update.
+  function reconcileSentinelTransitions(sentinel: Sentinel): void {
+    const prev = state.prevSentinelState;
+    const cur = sentinel.state;
+    if (prev === cur) return;
+    if (
+      (prev === "idle" || prev === "attacking") &&
+      cur === "dying"
+    ) {
+      // Final hit landed — credit score + a "+N" floater.
+      state.score += SENTINEL_KILL_SCORE;
+      addFloatingText(
+        floatingTexts,
+        `+${SENTINEL_KILL_SCORE}`,
+        sentinel.x,
+        sentinel.y - 40,
+        { size: 30, color: PALETTE.bullet, lifetime: 1.0, vy: -20 },
+      );
     }
-    for (let i = 0; i < 18; i++) {
-      const a = Math.random() * Math.PI * 2;
-      const speed = 180 + Math.random() * 220;
-      particles.push({
-        x: sentinel.x,
-        y: sentinel.y,
-        vx: Math.cos(a) * speed,
-        vy: Math.sin(a) * speed,
-        initialSize: 4,
-        color: PALETTE.bullet,
-        age: 0,
-        lifetime: 0.7 + Math.random() * 0.4,
-        glowStrong: 8,
-        glowSoft: 4,
-        drag: 0.95,
+    if (prev === "dying" && cur === "defeated") {
+      completeMenu.show({
+        score: state.score,
+        time: state.elapsed,
       });
+      state.runState = "completed";
     }
-    triggerShake(12, 0.3);
+    state.prevSentinelState = cur;
   }
 
   function checkRoomCleared() {
@@ -1029,17 +1006,6 @@ export function start(canvas: HTMLCanvasElement): void {
       currentRoom.door.pulse += dt;
     }
 
-    // Run timer ticks while playing (and not paused mid-boss intro
-    // or death). Read by the Game Complete overlay.
-    if (
-      state.runState === "playing" &&
-      state.bossPhase !== "intro" &&
-      state.bossPhase !== "death" &&
-      state.bossPhase !== "complete"
-    ) {
-      state.elapsed += dt;
-    }
-
     if (state.runState === "failed" || state.runState === "completed") {
       if (state.hitVignette > 0) {
         state.hitVignette = Math.max(0, state.hitVignette - dt);
@@ -1055,56 +1021,75 @@ export function start(canvas: HTMLCanvasElement): void {
       return;
     }
 
-    // Boss intro / death — sim is paused; only the eye and the boss
-    // sequence visuals tick. Sentinel still ticks its own animation
-    // through `boss-phase`-aware update calls, but enemy combat and
-    // player input are gated.
-    if (state.bossPhase === "intro") {
-      state.bossPhaseTimer += dt;
-      const sentinel = findSentinel();
-      if (sentinel) {
-        const t = Math.min(
-          1,
-          state.bossPhaseTimer / BOSS_INTRO_SCALE_UP_SEC,
-        );
-        const eased = 1 - Math.pow(1 - t, 3);
-        sentinel.spawnScale = 0.1 + (1 - 0.1) * eased;
-      }
-      if (state.bossPhaseTimer >= BOSS_INTRO_SEC) {
-        state.bossPhase = "fight";
-        state.bossPhaseTimer = 0;
-        if (sentinel) {
-          sentinel.spawnScale = 1;
-          sentinel.attacksEnabled = true;
+    // Sentinel cinematic phases (intro / dying) freeze the world —
+    // player input is suppressed and combat sim is skipped, but the
+    // boss itself still ticks (its own state machine drives the
+    // cinematic timers off `unscaledDt`).
+    const sentinel = findSentinel();
+    if (sentinel && sentinel.shouldFreezeWorld()) {
+      keys.clear();
+      sentinel.update({
+        dt,
+        unscaledDt: dt,
+        player,
+        bullets,
+        particles,
+        rings,
+        floatingTexts,
+        lasers,
+        bulletsConfig: {
+          speed: settings.bullets.speed,
+          size: settings.bullets.size,
+          color: settings.bullets.color,
+        },
+        playerHalfSize: settings.player.size / 2,
+        playerMaxSpeed: settings.player.maxSpeed,
+        walls: currentRoom.walls,
+      });
+      consumeSentinelEffects(sentinel);
+      reconcileSentinelTransitions(sentinel);
+      // Particles + rings spawned by the boss (materialization burst,
+      // dying cinder) keep ticking even while the rest of the world
+      // is frozen.
+      for (const p of particles) {
+        p.age += dt;
+        p.x += p.vx * dt;
+        p.y += p.vy * dt;
+        if (p.drag !== 1) {
+          const k = Math.pow(p.drag, dt * 60);
+          p.vx *= k;
+          p.vy *= k;
         }
       }
+      particles = particles.filter((p) => p.age < p.lifetime);
+      // Player eye still animates so the orb breathes during the
+      // cinematic.
       updateEye(player, dt, {
         threat: null,
         size: settings.player.size,
         dashDurationSec: settings.dash.durationMs / 1000,
       });
+      if (state.screenShakeRemaining > 0) {
+        state.screenShakeRemaining = Math.max(
+          0,
+          state.screenShakeRemaining - dt,
+        );
+      }
+      if (state.screenFlashRemaining > 0) {
+        state.screenFlashRemaining = Math.max(
+          0,
+          state.screenFlashRemaining - dt,
+        );
+      }
       render();
       requestAnimationFrame(frame);
       return;
     }
-    if (state.bossPhase === "death") {
-      state.bossPhaseTimer += dt;
-      if (state.bossPhaseTimer >= BOSS_DEATH_TOTAL_SEC) {
-        state.bossPhase = "complete";
-        state.runState = "completed";
-        completeMenu.show({
-          score: state.score,
-          time: state.elapsed,
-        });
-      }
-      updateEye(player, dt, {
-        threat: null,
-        size: settings.player.size,
-        dashDurationSec: settings.dash.durationMs / 1000,
-      });
-      render();
-      requestAnimationFrame(frame);
-      return;
+
+    // Run-time ticks only when neither cinematic nor overlay is
+    // pausing the sim.
+    if (state.runState === "playing") {
+      state.elapsed += dt;
     }
 
     // -------- running --------
@@ -1344,6 +1329,11 @@ export function start(canvas: HTMLCanvasElement): void {
     // enemies update
     const enemyCtx = {
       dt,
+      // Same as `dt` while no slow-mo is active. Sentinel reads
+      // `unscaledDt` for its own cinematic timers; the field stays
+      // wired so the contract is consistent with the freeze branch
+      // and any future timeScale work.
+      unscaledDt: dt,
       player,
       bullets,
       particles,
@@ -1380,6 +1370,16 @@ export function start(canvas: HTMLCanvasElement): void {
       updateEnemyAwareness(e, player.x, player.y, dt, awarenessTrigger);
     }
     for (const e of currentRoom.enemies) e.update(enemyCtx);
+
+    // Sentinel transitions (combat → dying → defeated) drive score
+    // and the Game Complete overlay; pendingShake* gets drained.
+    {
+      const sentinelTick = findSentinel();
+      if (sentinelTick) {
+        consumeSentinelEffects(sentinelTick);
+        reconcileSentinelTransitions(sentinelTick);
+      }
+    }
 
     // age + cull lasers (self-expire by total duration)
     for (const l of lasers) l.age += dt;
@@ -1561,13 +1561,6 @@ export function start(canvas: HTMLCanvasElement): void {
           if (e.isDead()) {
             emitEnemyKill(makeImpactCtx(), e);
             destroyEnemy(e);
-            // Sentinel kill kicks off the boss-death sequence —
-            // captures the boss position, spawns the layered
-            // explosion fragments, sets bossPhase = "death" so the
-            // frame loop short-circuits to the slowmo / VICTORY beat.
-            if (e instanceof Sentinel && state.bossPhase === "fight") {
-              triggerBossDeath(e);
-            }
           } else {
             emitEnemyDamage(makeImpactCtx(), e, player.x, player.y);
           }
@@ -1922,14 +1915,13 @@ export function start(canvas: HTMLCanvasElement): void {
   }
 
   function drawBossOverlay() {
-    if (state.bossPhase === "none") return;
     const sentinel = findSentinel();
-    // HP bar — visible while the Sentinel is alive (intro + fight).
-    if (
-      sentinel &&
-      !sentinel.isDead() &&
-      (state.bossPhase === "fight" || state.bossPhase === "intro")
-    ) {
+    if (!sentinel) return;
+    // HP bar — shown only after the intro lands (state === "idle" or
+    // "attacking"). Hidden during intro/dying/defeated.
+    const showHpBar =
+      sentinel.state === "idle" || sentinel.state === "attacking";
+    if (showHpBar) {
       const sideMargin = 100;
       const barH = 18;
       const barW = viewW - sideMargin * 2;
@@ -1957,59 +1949,10 @@ export function start(canvas: HTMLCanvasElement): void {
       ctx.fillText(`${sentinel.hp} / 30`, barX + barW, barY - 12);
       ctx.restore();
     }
-    // Intro: "SENTINEL" title fades in / hold / fade out across the
-    // 2 s intro window. The text is centered on screen.
-    if (state.bossPhase === "intro") {
-      const t = state.bossPhaseTimer;
-      let alpha = 0;
-      if (t < 0.3) alpha = t / 0.3;
-      else if (t < 1.3) alpha = 1;
-      else if (t < 1.8) alpha = 1 - (t - 1.3) / 0.5;
-      if (alpha > 0) {
-        ctx.save();
-        ctx.globalAlpha = alpha;
-        ctx.font = "700 60px ui-monospace, SFMono-Regular, Menlo, monospace";
-        ctx.fillStyle = PALETTE.bullet;
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        ctx.shadowColor = PALETTE.bullet;
-        ctx.shadowBlur = 24;
-        ctx.fillText("SENTINEL", viewW / 2, viewH / 2);
-        ctx.restore();
-      }
-    }
-    // Death: white flash overlay around BOSS_DEATH_FLASH_*; "VICTORY"
-    // text fades in shortly after and stays on through the rest of the
-    // sequence so the player reads it before the Game Complete menu
-    // pops.
-    if (state.bossPhase === "death") {
-      const t = state.bossPhaseTimer;
-      // White flash
-      if (t >= BOSS_DEATH_FLASH_START_SEC && t < BOSS_DEATH_FLASH_END_SEC) {
-        const span = BOSS_DEATH_FLASH_END_SEC - BOSS_DEATH_FLASH_START_SEC;
-        const local = (t - BOSS_DEATH_FLASH_START_SEC) / span;
-        const flashAlpha = local < 0.25 ? local / 0.25 : 1 - (local - 0.25) / 0.75;
-        ctx.save();
-        ctx.fillStyle = "#ffffff";
-        ctx.globalAlpha = Math.max(0, Math.min(1, flashAlpha)) * 0.7;
-        ctx.fillRect(0, 0, viewW, viewH);
-        ctx.restore();
-      }
-      // VICTORY text
-      if (t >= BOSS_DEATH_VICTORY_FADE_IN_SEC) {
-        const fade = Math.min(1, (t - BOSS_DEATH_VICTORY_FADE_IN_SEC) / 0.5);
-        ctx.save();
-        ctx.globalAlpha = fade;
-        ctx.font = "700 60px ui-monospace, SFMono-Regular, Menlo, monospace";
-        ctx.fillStyle = PALETTE.pickupHP;
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        ctx.shadowColor = PALETTE.pickupHP;
-        ctx.shadowBlur = 24;
-        ctx.fillText("VICTORY", viewW / 2, viewH / 2);
-        ctx.restore();
-      }
-    }
+    // Sentinel-owned screen overlays — fade rect, "SENTINEL" /
+    // "VICTORY" titles, white flash. The boss handles its own
+    // timing internally; we just delegate the draw call.
+    sentinel.drawScreenOverlay(ctx, viewW, viewH);
   }
 
   function drawHUD() {

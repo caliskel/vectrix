@@ -618,35 +618,64 @@ enemies dead" rule — the Game Complete overlay runs ~3 s after
 the kill, so the door rarely matters in practice. `useCamera =
 true`, spawn at (200, 600), `nextRoomId = null`.
 
-The boss-room sequence is owned by `rooms-game.ts` via a
-`bossPhase` state machine: `none → intro → fight → death →
-complete`.
+The Sentinel owns its own state machine —
+`SentinelState = "intro" | "idle" | "attacking" | "dying" |
+"defeated"`. rooms-game just queries `sentinel.state`,
+`sentinel.timeScale`, and `sentinel.shouldFreezeWorld()`,
+delegates the screen-overlay draw, and reacts to state
+transitions for score + Game Complete.
 
-- **intro** (2.0 s): runs the moment the player enters Room 5.
-  Player input is frozen, enemy and bullet sim is paused, the
-  Sentinel scales up from 0.1 → 1.0 with an ease-out cubic
-  (`Sentinel.spawnScale` is set externally; `attacksEnabled = false`
-  during intro), and a 60 px red "SENTINEL" title fades in /
-  holds / fades out across the window.
-- **fight**: standard sim. Sentinel does its thing — slow
-  orbital pursuit, radial-burst attack on a 2.5 s cycle (0.4 s
-  telegraph + 12 bullets at 350 px/s + 0.3 s recovery). A red
-  HP bar (full width minus 100 px sides) sits beneath the HUD
-  header showing current/30 HP.
-- **death**: kicked off when a dash-through hit takes Sentinel
-  to 0 HP. `triggerBossDeath()` snapshots the boss position and
-  spawns a layered explosion (6 vertex-aligned fragments + 18
-  red particles) plus a 12 px / 300 ms screen shake. Across the
-  3 s window: 1.0 s of fragments flying, then a 400 ms white
-  flash, then a green "VICTORY" title fades in. Player and sim
-  are paused.
-- **complete**: at the end of the death window, runState flips
-  to `"completed"` and the `createGameCompleteMenu` DOM overlay
-  shows with the final score + elapsed time. PLAY AGAIN
-  restarts (new run, back to room1); MAIN MENU navigates to /.
+- **intro** (3300 ms, all timings in ms relative to state entry):
+  runs the moment Room 5 is entered. `shouldFreezeWorld()` is
+  true, so rooms-game suppresses player input + skips combat
+  sim; the boss is invulnerable.
+  - 0–800 ms: black fade overlay 0 → 0.7, boss invisible.
+  - 800–1600 ms: body materializes via `easeOutBack` scale
+    `0 → 1`. At 800 ms the boss spawns one 16-particle radial
+    burst (200–350 px/s, 800 ms life). Fade overlay drops
+    0.7 → 0.3.
+  - 1600–1700 ms: 12 px screen shake (requested via
+    `pendingShakePx/Sec` and drained by rooms-game's
+    `consumeSentinelEffects`); fade overlay finishes at 0.
+  - 1700–3300 ms: red 60 px "SENTINEL" title fades in
+    (1700–1900) / holds (1900–3000) / fades out (3000–3300).
+  At 3300 ms the boss flips to `"idle"` and the HP bar appears.
+- **idle / attacking**: orbital pursuit (orbit-centre lerp 0.02,
+  Rx 400 / Ry 300, position lerp 0.05) + radial-burst cycle on
+  a 2.5 s cadence (0.4 s telegraph + 12 bullets at 350 px/s +
+  0.3 s recovery). Damage via dash-through (1 HP per dash)
+  works only in these two states. The HP bar sits under the
+  HUD header showing current/30.
+- **dying** (6050 ms): triggered by `takeDamage` driving HP to
+  0. `shouldFreezeWorld()` is true again — the death cinematic
+  is the focus. `Sentinel.timeScale` ramps `1.0 → 0.3` over the
+  first 200 ms, holds at 0.3 until 1000 ms, then eases back to
+  1.0 across the weakpoint window. Six fragments per ring
+  spawn at 1000 / 1500 / 2000 ms (line segments 20×4 px,
+  250 px/s outward, ±4 rad/s spin, 1500 ms life with a 500 ms
+  fade-out). The central weakpoint scales 1 → 4 + glow 22 →
+  60 across 2500–3000 ms. A 0.7-alpha white flash hits at
+  3000 ms (peak 3050, end 3300). A green "VICTORY" title fades
+  in over 3050–3350 ms and holds. The cinematic timer runs on
+  `unscaledDt` so the slow-mo doesn't recursively slow the
+  cinematic itself.
+- **defeated**: terminal. `isDead()` flips to true. rooms-game's
+  `reconcileSentinelTransitions` catches the transition and
+  pops the Game Complete DOM overlay; runState flips to
+  `"completed"`.
 
-Restart and transitionToRoom both reset `bossPhase` to `"none"`
-so a re-entry plays the intro again from scratch.
+Score (`+5000`) is credited on the `idle/attacking → dying`
+transition with a floating "+5000" tag at the boss centre. The
+standard `emitEnemyKill` / `destroyEnemy` ring + particle FX is
+skipped for the Sentinel because the dying state owns its own
+visuals — `tryDashDamage` only lands during idle/attacking, so
+the kill block in rooms-game never sees `isDead() === true` for
+the Sentinel.
+
+Restart and transitionToRoom both reset
+`state.prevSentinelState`; a fresh Sentinel instance always
+constructs in `"intro"`, so re-entering Room 5 plays the
+intro from scratch.
 
 ## Enemy awareness system (`lib/enemies/awareness.ts`)
 
@@ -969,11 +998,11 @@ settings overlay on Esc / Tab.
 
 ### TODO (rooms direction)
 
-- **Sentinel boss** — current Room 5 ships only the skeleton:
-  one phase, one attack (radial burst), the intro / death
-  sequences and the Game Complete overlay. Next iterations will
-  layer phase 2 / phase 3 attacks (sweep laser, charge, minion
-  spawns), richer telegraphs, and tuned pacing.
+- **Sentinel boss** — Room 5 currently ships one phase with one
+  attack (radial burst); intro and dying cinematics are wired
+  end-to-end via the Sentinel state machine. Next iterations
+  layer phase 2 / phase 3 attacks (sweep laser, charge,
+  minion spawns), richer telegraphs, and tuned pacing.
 - **Key icon visual polish** — the `drawKey` glyph is a diamond
   + stem; readable but a bit primitive. A more iconic key shape
   (or a proper sprite) would improve the HUD slot too.

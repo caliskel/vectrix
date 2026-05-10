@@ -11,20 +11,32 @@ import type {
 
 // === Sentinel — campaign boss ===
 //
-// Mid-air construct. Three nested hexagonal shells rotating around a
-// central red eye, with six small triangular fragments orbiting the
-// outer ring in the opposite direction. Drifts on a slow orbit
-// around a lerped player-tracking centre so the boss "circles" the
-// player without lunging. Single attack in this iteration: a 12-bullet
-// radial burst on a 2.5 s cadence with a 0.4 s telegraph and a 0.3 s
-// recovery beat.
-//
-// HP 30, dies on dash-through hits only (no friendly fire in the
-// boss room — only the player damages the boss).
+// Self-contained state machine: intro → idle/attacking → dying →
+// defeated. The boss owns its own intro materialization, attack
+// cycle, dying choreography (slow-mo, layered ring fragments,
+// weakpoint grow, white flash, VICTORY text). rooms-game only
+// queries `state`, `timeScale`, and the public draw / overlay hooks
+// — it doesn't drive the boss timing itself.
 
-const SENTINEL_COLOR = "#ff2d55";
+const SENTINEL_COLOR = "#ff3344";
+const VICTORY_COLOR = "#22ff88";
+const FADE_OVERLAY_COLOR = "rgba(0, 0, 0, ALPHA)"; // ALPHA replaced at use
 const SENTINEL_HP_MAX = 30;
 const SENTINEL_HITBOX_RADIUS = 110;
+
+// Intro timeline (ms, all relative to state entry).
+const INTRO_FADE_END_MS = 800;
+const INTRO_MATERIALIZE_END_MS = 1600;
+const INTRO_SHAKE_END_MS = 1700;
+const INTRO_TEXT_START_MS = 1700;
+const INTRO_TEXT_FADE_IN_END_MS = 1900;
+const INTRO_TEXT_HOLD_END_MS = 3000;
+const INTRO_TEXT_END_MS = 3300;
+const INTRO_TOTAL_MS = 3300;
+
+// Materialization particle burst (16 radial particles spawned once at 800ms).
+const MATERIALIZE_PARTICLE_COUNT = 16;
+const MATERIALIZE_PARTICLE_LIFETIME_MS = 800;
 
 // Idle anim
 const ROTATION_RATE = 0.25; // rad/s
@@ -44,20 +56,40 @@ const POSITION_LERP = 0.05;
 // Attack — radial burst
 const ATTACK_PERIOD_SEC = 2.5;
 const TELEGRAPH_SEC = 0.4;
-const BURST_FIRE_SEC = 0.05; // single-frame burst, but small window
+const BURST_FIRE_SEC = 0.05;
 const RECOVERY_SEC = 0.3;
 const BURST_BULLET_COUNT = 12;
 const BURST_BULLET_SPEED = 350;
 
-// Hexagon vertex sets (local space), used both for shell outlines and
-// for the fragment positions (one per outer-shell vertex).
+// Dying timeline (ms, all relative to dying-state entry).
+const DYING_SLOWMO_RAMP_MS = 200;
+const DYING_SLOWMO_HOLD_END_MS = 1000;
+const DYING_OUTER_EXPLODE_MS = 1000;
+const DYING_MIDDLE_EXPLODE_MS = 1500;
+const DYING_INNER_EXPLODE_MS = 2000;
+const DYING_WEAKPOINT_START_MS = 2500;
+const DYING_WEAKPOINT_END_MS = 3000;
+const DYING_FLASH_START_MS = 3000;
+const DYING_FLASH_PEAK_MS = 3050;
+const DYING_FLASH_END_MS = 3300;
+const DYING_VICTORY_START_MS = 3050;
+const DYING_VICTORY_FADE_IN_END_MS = 3350;
+const DYING_TOTAL_MS = 6050; // 3050 + 3000 ms hold
+
+const FRAGMENT_LIFETIME_MS = 1500;
+const FRAGMENT_FADE_OUT_MS = 500;
+const FRAGMENT_SPEED = 250;
+const FRAGMENT_LENGTH = 20;
+const FRAGMENT_THICKNESS = 4;
+const FRAGMENT_ANGULAR_VEL_RANGE = 4; // ±rad/s
+
+// Hexagon vertex sets — used both for shell outlines and fragment
+// spawn directions (one per outer-shell vertex).
 const OUTER_VERTS = hexVerts(110);
 const MIDDLE_VERTS = hexVerts(85);
 const INNER_VERTS = hexVerts(60);
 
 function hexVerts(r: number): { x: number; y: number }[] {
-  // Pointy-top hexagon: top vertex at -r on the y axis, then every 60°
-  // clockwise. Matches the spec's vertex list.
   const verts: { x: number; y: number }[] = [];
   for (let i = 0; i < 6; i++) {
     const a = -Math.PI / 2 + i * (Math.PI / 3);
@@ -66,7 +98,30 @@ function hexVerts(r: number): { x: number; y: number }[] {
   return verts;
 }
 
-type AttackPhase = "idle" | "telegraph" | "burst" | "recovery";
+function easeOutBack(t: number): number {
+  const c1 = 1.70158;
+  const c3 = c1 + 1;
+  return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
+}
+
+export type SentinelState =
+  | "intro"
+  | "idle"
+  | "attacking"
+  | "dying"
+  | "defeated";
+
+type AttackPhase = "between" | "telegraph" | "burst" | "recovery";
+
+type DyingFragment = {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  angle: number;
+  angularVel: number;
+  age: number; // ms
+};
 
 export class Sentinel implements Enemy {
   readonly type: EnemyType = "sentinel";
@@ -83,11 +138,24 @@ export class Sentinel implements Enemy {
   hitboxRadius = SENTINEL_HITBOX_RADIUS;
   hitByLaserId = 0;
   awarenessState: AwarenessState = "idle";
-  detectionRadius = 0; // unused — Sentinel always combat-active
+  detectionRadius = 0;
   alertTimer = 0;
   deAggroCooldownTimer = 0;
   vx = 0;
   vy = 0;
+
+  // Boss state machine — public so rooms-game can read transitions.
+  state: SentinelState = "intro";
+  // ms since entry into the current state
+  stateTimer = 0;
+  /** Multiplier rooms-game applies to its dt. Sentinel drives this
+   *  during dying so the world slows around the death cinematic. */
+  timeScale = 1;
+  /** Set by Sentinel each frame when it wants a one-shot screen
+   *  shake; rooms-game polls + clears after applying. amount in px,
+   *  duration in seconds. */
+  pendingShakePx = 0;
+  pendingShakeSec = 0;
 
   // anim
   private rotation = 0;
@@ -101,20 +169,30 @@ export class Sentinel implements Enemy {
   private orbitPhase: number;
 
   // attack
-  private attackPhase: AttackPhase = "idle";
-  private attackTimer = 0; // seconds in current phase
-  private cycleTimer = 0; // total cycle time, fires telegraph at PERIOD
+  private attackPhase: AttackPhase = "between";
+  private attackTimer = 0;
+  private cycleTimer = 0;
 
   // damage / death
-  private destroyed = false;
   private dashIdAlreadyDamaged = -1;
 
-  // intro spawn — scaled in by the rooms-game intro sequence. Caller
-  // sets this to a fraction in [0..1]; the body draws at that scale.
-  spawnScale = 1;
-  // attacks paused while spawnScale < 1 so the intro reads as a calm
-  // "I exist now" beat before the first burst.
-  attacksEnabled = true;
+  // intro one-shots
+  private materializationSpawned = false;
+  private introShakeFired = false;
+
+  // dying state — fragments + which rings have exploded yet
+  private fragments: DyingFragment[] = [];
+  private outerExploded = false;
+  private middleExploded = false;
+  private innerExploded = false;
+  private weakpointScale = 1;
+  private weakpointGlowBlur = 22;
+  /** Captured boss centre at the moment dying starts. The death
+   *  cinematic anchors fragments + weakpoint + flash on this point
+   *  rather than the live x/y so the boss doesn't drift while
+   *  blowing up. */
+  private deathX = 0;
+  private deathY = 0;
 
   constructor(x: number, y: number) {
     this.x = x;
@@ -124,33 +202,123 @@ export class Sentinel implements Enemy {
     this.orbitCenterY = y;
     this.orbitPhase = Math.random() * Math.PI * 2;
     initAwareness(this, 0);
-    this.awarenessState = "aggro"; // always combat-active
+    // Always combat-active; we gate behaviour off `state`, not the
+    // awareness machine.
+    this.awarenessState = "aggro";
   }
 
   isDead(): boolean {
-    return this.destroyed;
+    return this.state === "defeated";
+  }
+
+  /** True when rooms-game should freeze player input + skip world
+   *  sim. Boss intro and dying are cinematic moments — the player
+   *  watches. */
+  shouldFreezeWorld(): boolean {
+    return this.state === "intro" || this.state === "dying";
   }
 
   takeDamage(amount: number): void {
-    if (this.destroyed) return;
+    // Damage only lands during active combat. Intro and dying phases
+    // are invulnerable cinematic windows; defeated is a no-op.
+    if (this.state !== "idle" && this.state !== "attacking") return;
     this.hp = Math.max(0, this.hp - amount);
     if (this.hp <= 0) {
-      this.destroyed = true;
+      this.enterDying();
     }
   }
 
   update(ctxRoom: EnemyContext): void {
-    if (this.destroyed) return;
-    const { dt, player } = ctxRoom;
+    // Sentinel uses unscaledDt (the real frame delta) for its own
+    // state timer so the dying slow-mo doesn't slow the cinematic
+    // itself recursively. EnemyContext.unscaledDt is set by
+    // rooms-game; falls back to `dt` for any caller that hasn't
+    // wired it through.
+    const realDt = ctxRoom.unscaledDt ?? ctxRoom.dt;
 
-    // Idle anims tick regardless of attack phase.
-    this.rotation += ROTATION_RATE * dt;
-    this.fragmentRotation += FRAGMENT_ROTATION_RATE * dt;
-    this.pulsePhase += (Math.PI * 2 * dt) / PULSE_PERIOD_SEC;
-    this.eyePulsePhase += (Math.PI * 2 * dt) / EYE_PULSE_PERIOD_SEC;
+    // Background animations — outer ring rotation, body pulse — keep
+    // ticking outside dying/defeated so the boss feels alive even
+    // during intro materialization.
+    if (this.state !== "dying" && this.state !== "defeated") {
+      this.rotation += ROTATION_RATE * realDt;
+      this.fragmentRotation += FRAGMENT_ROTATION_RATE * realDt;
+      this.pulsePhase += (Math.PI * 2 * realDt) / PULSE_PERIOD_SEC;
+      this.eyePulsePhase +=
+        (Math.PI * 2 * realDt) / EYE_PULSE_PERIOD_SEC;
+    }
 
-    // Orbital movement — orbitCenter lerps toward the player slowly
-    // so the orbit drifts after them but doesn't snap.
+    switch (this.state) {
+      case "intro":
+        this.updateIntro(ctxRoom, realDt);
+        break;
+      case "idle":
+      case "attacking":
+        this.updateCombat(ctxRoom, realDt);
+        break;
+      case "dying":
+        this.updateDying(ctxRoom, realDt);
+        break;
+      case "defeated":
+        // no-op; rooms-game shows Game Complete overlay
+        break;
+    }
+  }
+
+  // -------- intro --------
+
+  private updateIntro(ctxRoom: EnemyContext, dt: number): void {
+    this.stateTimer += dt * 1000;
+
+    // Materialization particle burst — fires once at the moment the
+    // boss starts becoming visible.
+    if (
+      !this.materializationSpawned &&
+      this.stateTimer >= INTRO_FADE_END_MS
+    ) {
+      this.materializationSpawned = true;
+      this.spawnMaterializationBurst(ctxRoom);
+    }
+    // 12 px screen shake on completion of the materialization scale.
+    if (
+      !this.introShakeFired &&
+      this.stateTimer >= INTRO_MATERIALIZE_END_MS
+    ) {
+      this.introShakeFired = true;
+      this.pendingShakePx = 12;
+      this.pendingShakeSec = (INTRO_SHAKE_END_MS - INTRO_MATERIALIZE_END_MS) / 1000;
+    }
+    if (this.stateTimer >= INTRO_TOTAL_MS) {
+      this.state = "idle";
+      this.stateTimer = 0;
+    }
+  }
+
+  private spawnMaterializationBurst(ctxRoom: EnemyContext): void {
+    for (let i = 0; i < MATERIALIZE_PARTICLE_COUNT; i++) {
+      const angle = (i / MATERIALIZE_PARTICLE_COUNT) * Math.PI * 2;
+      const speed = 200 + Math.random() * 150;
+      ctxRoom.particles.push({
+        x: this.x,
+        y: this.y,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed,
+        initialSize: 4,
+        color: SENTINEL_COLOR,
+        age: 0,
+        lifetime: MATERIALIZE_PARTICLE_LIFETIME_MS / 1000,
+        glowStrong: 12,
+        glowSoft: 5,
+        drag: 0.94,
+      });
+    }
+  }
+
+  // -------- combat (idle / attacking) --------
+
+  private updateCombat(ctxRoom: EnemyContext, dt: number): void {
+    const { player } = ctxRoom;
+
+    // Orbital movement.
     this.orbitCenterX += (player.x - this.orbitCenterX) * ORBIT_CENTER_LERP;
     this.orbitCenterY += (player.y - this.orbitCenterY) * ORBIT_CENTER_LERP;
     this.orbitPhase += ORBIT_PHASE_RATE * dt;
@@ -160,22 +328,18 @@ export class Sentinel implements Enemy {
       this.orbitCenterY + Math.sin(this.orbitPhase) * ORBIT_RY;
     this.x += (targetX - this.x) * POSITION_LERP;
     this.y += (targetY - this.y) * POSITION_LERP;
-    // Velocity is reported for any future systems that read it
-    // (impacts knockback uses peak fields, not vx/vy).
     this.vx = (targetX - this.x) * POSITION_LERP * 60;
     this.vy = (targetY - this.y) * POSITION_LERP * 60;
 
-    if (!this.attacksEnabled) return;
-
-    // Attack cycle. cycleTimer counts up across all phases; we read
-    // attackPhase/attackTimer to decide what to do.
+    // Attack cycle. cycleTimer counts up across phases.
     this.cycleTimer += dt;
     this.attackTimer += dt;
     switch (this.attackPhase) {
-      case "idle": {
+      case "between": {
         if (this.cycleTimer >= ATTACK_PERIOD_SEC) {
           this.attackPhase = "telegraph";
           this.attackTimer = 0;
+          this.state = "attacking";
         }
         break;
       }
@@ -196,9 +360,10 @@ export class Sentinel implements Enemy {
       }
       case "recovery": {
         if (this.attackTimer >= RECOVERY_SEC) {
-          this.attackPhase = "idle";
+          this.attackPhase = "between";
           this.attackTimer = 0;
           this.cycleTimer = 0;
+          this.state = "idle";
         }
         break;
       }
@@ -221,14 +386,222 @@ export class Sentinel implements Enemy {
     }
   }
 
+  // -------- dying --------
+
+  private enterDying(): void {
+    this.state = "dying";
+    this.stateTimer = 0;
+    this.deathX = this.x;
+    this.deathY = this.y;
+    // Freeze any in-flight burst — telegraph or recovery beats stop
+    // cold so the death cinematic owns the audio/visual focus.
+    this.attackPhase = "between";
+    this.attackTimer = 0;
+    this.cycleTimer = 0;
+  }
+
+  private updateDying(_ctxRoom: EnemyContext, dt: number): void {
+    this.stateTimer += dt * 1000;
+    const t = this.stateTimer;
+
+    // ---- timeScale: 1.0 → 0.3 over first 200ms, hold at 0.3 until
+    // 1000ms, then ease 0.3 → 1.0 across the weakpoint window.
+    if (t < DYING_SLOWMO_RAMP_MS) {
+      this.timeScale = 1 - 0.7 * (t / DYING_SLOWMO_RAMP_MS);
+    } else if (t < DYING_SLOWMO_HOLD_END_MS) {
+      this.timeScale = 0.3;
+    } else if (t < DYING_WEAKPOINT_START_MS) {
+      this.timeScale = 0.3;
+    } else if (t < DYING_WEAKPOINT_END_MS) {
+      const u =
+        (t - DYING_WEAKPOINT_START_MS) /
+        (DYING_WEAKPOINT_END_MS - DYING_WEAKPOINT_START_MS);
+      this.timeScale = 0.3 + 0.7 * u;
+    } else {
+      this.timeScale = 1;
+    }
+
+    // Constant 4 px shake during the slow-mo hold; the user spec calls
+    // for "screen shake 4px постоянный" through the slowmo window.
+    if (t < DYING_SLOWMO_HOLD_END_MS) {
+      this.pendingShakePx = 4;
+      this.pendingShakeSec = dt; // refresh each frame
+    }
+
+    // ---- fragment spawns: outer / middle / inner at the spec'd
+    // thresholds. Each ring spawns 6 fragments at the boss's death
+    // position, flying out along that ring's hex-vertex angles.
+    if (!this.outerExploded && t >= DYING_OUTER_EXPLODE_MS) {
+      this.outerExploded = true;
+      this.spawnRingFragments(110);
+    }
+    if (!this.middleExploded && t >= DYING_MIDDLE_EXPLODE_MS) {
+      this.middleExploded = true;
+      this.spawnRingFragments(85);
+    }
+    if (!this.innerExploded && t >= DYING_INNER_EXPLODE_MS) {
+      this.innerExploded = true;
+      this.spawnRingFragments(60);
+    }
+
+    // Fragments tick on REAL dt so the cinematic timing isn't
+    // affected by timeScale.
+    for (const f of this.fragments) {
+      f.x += f.vx * dt;
+      f.y += f.vy * dt;
+      f.angle += f.angularVel * dt;
+      f.age += dt * 1000;
+    }
+    this.fragments = this.fragments.filter(
+      (f) => f.age < FRAGMENT_LIFETIME_MS,
+    );
+
+    // ---- weakpoint: scale 1 → 4, glow 20 → 60 across 2500..3000ms.
+    if (t < DYING_WEAKPOINT_START_MS) {
+      this.weakpointScale = 1;
+      this.weakpointGlowBlur = 22;
+    } else if (t < DYING_WEAKPOINT_END_MS) {
+      const u =
+        (t - DYING_WEAKPOINT_START_MS) /
+        (DYING_WEAKPOINT_END_MS - DYING_WEAKPOINT_START_MS);
+      this.weakpointScale = 1 + 3 * u;
+      this.weakpointGlowBlur = 22 + 38 * u;
+    } else {
+      this.weakpointScale = 4;
+      this.weakpointGlowBlur = 60;
+    }
+
+    if (t >= DYING_TOTAL_MS) {
+      this.state = "defeated";
+      this.stateTimer = 0;
+      this.timeScale = 1;
+    }
+  }
+
+  private spawnRingFragments(radius: number): void {
+    for (let i = 0; i < 6; i++) {
+      const a = -Math.PI / 2 + i * (Math.PI / 3);
+      // Spawn on the ring at its vertex angle, flying outward.
+      const spawnX = this.deathX + Math.cos(a) * radius;
+      const spawnY = this.deathY + Math.sin(a) * radius;
+      const angularVel =
+        (Math.random() * 2 - 1) * FRAGMENT_ANGULAR_VEL_RANGE;
+      this.fragments.push({
+        x: spawnX,
+        y: spawnY,
+        vx: Math.cos(a) * FRAGMENT_SPEED,
+        vy: Math.sin(a) * FRAGMENT_SPEED,
+        angle: a, // initial orientation — fragment is a short line
+        angularVel,
+        age: 0,
+      });
+    }
+  }
+
+  // -------- draw (world space) --------
+
   draw(ctx: CanvasRenderingContext2D): void {
-    if (this.destroyed) return;
+    if (this.state === "defeated") return;
+
+    if (this.state === "intro") {
+      this.renderIntro(ctx);
+      return;
+    }
+    if (this.state === "dying") {
+      this.renderDying(ctx);
+      return;
+    }
+    // idle / attacking — full body
+    this.renderBody(ctx, 1);
+  }
+
+  private renderIntro(ctx: CanvasRenderingContext2D): void {
+    const t = this.stateTimer;
+    if (t < INTRO_FADE_END_MS) return; // boss hidden during the fade-in
+    if (t < INTRO_MATERIALIZE_END_MS) {
+      const u =
+        (t - INTRO_FADE_END_MS) /
+        (INTRO_MATERIALIZE_END_MS - INTRO_FADE_END_MS);
+      const scale = Math.max(0, easeOutBack(u));
+      this.renderBody(ctx, scale);
+      return;
+    }
+    // Full-size body for the rest of intro (1600..3300ms).
+    this.renderBody(ctx, 1);
+  }
+
+  private renderDying(ctx: CanvasRenderingContext2D): void {
+    const t = this.stateTimer;
+
+    // ---- jitter: ±3px around the death position
+    const jx = (Math.random() - 0.5) * 6;
+    const jy = (Math.random() - 0.5) * 6;
+
+    // Render each remaining ring shell at the death position. As
+    // each ring "explodes", we stop drawing it.
+    ctx.save();
+    ctx.translate(this.deathX + jx, this.deathY + jy);
+    ctx.rotate(this.rotation);
+    if (!this.outerExploded) strokeRing(ctx, OUTER_VERTS, 3, 1.0, 22);
+    if (!this.middleExploded) strokeRing(ctx, MIDDLE_VERTS, 2, 0.7, 0);
+    if (!this.innerExploded) strokeRing(ctx, INNER_VERTS, 1.5, 0.5, 0);
+    ctx.restore();
+
+    // Fragments — short line segments, fade out over the last
+    // FRAGMENT_FADE_OUT_MS of their lifetime.
+    ctx.save();
+    ctx.strokeStyle = SENTINEL_COLOR;
+    ctx.lineWidth = FRAGMENT_THICKNESS;
+    ctx.lineCap = "round";
+    for (const f of this.fragments) {
+      const fade =
+        f.age > FRAGMENT_LIFETIME_MS - FRAGMENT_FADE_OUT_MS
+          ? Math.max(
+              0,
+              1 -
+                (f.age - (FRAGMENT_LIFETIME_MS - FRAGMENT_FADE_OUT_MS)) /
+                  FRAGMENT_FADE_OUT_MS,
+            )
+          : 1;
+      ctx.globalAlpha = fade;
+      ctx.save();
+      ctx.translate(f.x, f.y);
+      ctx.rotate(f.angle);
+      ctx.beginPath();
+      ctx.moveTo(-FRAGMENT_LENGTH / 2, 0);
+      ctx.lineTo(FRAGMENT_LENGTH / 2, 0);
+      ctx.stroke();
+      ctx.restore();
+    }
+    ctx.globalAlpha = 1;
+    ctx.restore();
+
+    // Weakpoint (central eye) growing in the final beat of dying.
+    if (t >= DYING_INNER_EXPLODE_MS) {
+      ctx.save();
+      ctx.translate(this.deathX, this.deathY);
+      const scale = this.weakpointScale;
+      ctx.shadowColor = SENTINEL_COLOR;
+      ctx.shadowBlur = this.weakpointGlowBlur;
+      ctx.fillStyle = SENTINEL_COLOR;
+      ctx.beginPath();
+      ctx.arc(0, 0, 14 * scale, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = "#ffffff";
+      ctx.beginPath();
+      ctx.arc(0, 0, 6 * scale, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+  }
+
+  private renderBody(ctx: CanvasRenderingContext2D, scale: number): void {
     ctx.save();
     ctx.translate(this.x, this.y);
-    if (this.spawnScale !== 1) {
-      ctx.scale(this.spawnScale, this.spawnScale);
-    }
-    // Telegraph jitter — small random offset while charging the burst.
+    if (scale !== 1) ctx.scale(scale, scale);
+
+    // Telegraph jitter — small random offset while charging.
     if (this.attackPhase === "telegraph") {
       const t = Math.min(1, this.attackTimer / TELEGRAPH_SEC);
       const intensity = 2 * t;
@@ -242,8 +615,6 @@ export class Sentinel implements Enemy {
     const eyePulseScale =
       1 + Math.sin(this.eyePulsePhase) * EYE_PULSE_AMPLITUDE;
 
-    // Hexagon shells. Outer ring gets a neon halo; middle / inner are
-    // flat strokes.
     ctx.save();
     ctx.rotate(this.rotation);
 
@@ -274,8 +645,7 @@ export class Sentinel implements Enemy {
     ctx.globalAlpha = 1;
     ctx.restore();
 
-    // Fragments — six small triangles orbiting the outer vertices
-    // counter to the main rotation.
+    // Fragments orbiting the outer vertices — counter-rotation.
     ctx.save();
     ctx.rotate(this.fragmentRotation);
     ctx.fillStyle = SENTINEL_COLOR;
@@ -293,8 +663,7 @@ export class Sentinel implements Enemy {
     ctx.globalAlpha = 1;
     ctx.restore();
 
-    // Central eye — three concentric circles + white pupil. Pupil
-    // grows during telegraph to amplify the "about to fire" cue.
+    // Central eye.
     ctx.fillStyle = SENTINEL_COLOR;
     ctx.globalAlpha = 0.45;
     circle(ctx, 0, 0, 35 * eyePulseScale);
@@ -315,7 +684,6 @@ export class Sentinel implements Enemy {
         : 6;
     circle(ctx, 0, 0, pupilR);
 
-    // Hit flash — white silhouette overlay so dash-throughs read.
     if (this.hitFlashTime > 0) {
       ctx.globalCompositeOperation = "lighter";
       ctx.fillStyle = "#ffffff";
@@ -328,7 +696,134 @@ export class Sentinel implements Enemy {
     ctx.restore();
   }
 
+  // -------- screen-space overlays (intro fade, SENTINEL/VICTORY
+  // text, white flash). Called by rooms-game after the world render
+  // restores the screen-space transform. --------
+
+  drawScreenOverlay(
+    ctx: CanvasRenderingContext2D,
+    viewW: number,
+    viewH: number,
+  ): void {
+    if (this.state === "intro") {
+      this.drawIntroOverlay(ctx, viewW, viewH);
+    } else if (this.state === "dying") {
+      this.drawDyingOverlay(ctx, viewW, viewH);
+    }
+  }
+
+  private drawIntroOverlay(
+    ctx: CanvasRenderingContext2D,
+    viewW: number,
+    viewH: number,
+  ): void {
+    const t = this.stateTimer;
+    // Fade-in 0..0.7 across [0, 800), 0.7..0.3 across [800, 1600),
+    // 0.3..0 across [1600, 1700).
+    let fadeAlpha = 0;
+    if (t < INTRO_FADE_END_MS) {
+      fadeAlpha = 0.7 * (t / INTRO_FADE_END_MS);
+    } else if (t < INTRO_MATERIALIZE_END_MS) {
+      const u =
+        (t - INTRO_FADE_END_MS) /
+        (INTRO_MATERIALIZE_END_MS - INTRO_FADE_END_MS);
+      fadeAlpha = 0.7 - 0.4 * u;
+    } else if (t < INTRO_SHAKE_END_MS) {
+      const u =
+        (t - INTRO_MATERIALIZE_END_MS) /
+        (INTRO_SHAKE_END_MS - INTRO_MATERIALIZE_END_MS);
+      fadeAlpha = 0.3 - 0.3 * u;
+    }
+    if (fadeAlpha > 0) {
+      ctx.save();
+      ctx.fillStyle = FADE_OVERLAY_COLOR.replace("ALPHA", fadeAlpha.toFixed(3));
+      ctx.fillRect(0, 0, viewW, viewH);
+      ctx.restore();
+    }
+
+    // SENTINEL title — fade in, hold, fade out across [1700, 3300].
+    if (t >= INTRO_TEXT_START_MS && t < INTRO_TEXT_END_MS) {
+      let alpha = 0;
+      if (t < INTRO_TEXT_FADE_IN_END_MS) {
+        alpha =
+          (t - INTRO_TEXT_START_MS) /
+          (INTRO_TEXT_FADE_IN_END_MS - INTRO_TEXT_START_MS);
+      } else if (t < INTRO_TEXT_HOLD_END_MS) {
+        alpha = 1;
+      } else {
+        alpha =
+          1 -
+          (t - INTRO_TEXT_HOLD_END_MS) /
+            (INTRO_TEXT_END_MS - INTRO_TEXT_HOLD_END_MS);
+      }
+      if (alpha > 0) {
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.font = "700 60px ui-monospace, SFMono-Regular, Menlo, monospace";
+        ctx.fillStyle = SENTINEL_COLOR;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.shadowColor = SENTINEL_COLOR;
+        ctx.shadowBlur = 24;
+        ctx.fillText("SENTINEL", viewW / 2, viewH / 2);
+        ctx.restore();
+      }
+    }
+  }
+
+  private drawDyingOverlay(
+    ctx: CanvasRenderingContext2D,
+    viewW: number,
+    viewH: number,
+  ): void {
+    const t = this.stateTimer;
+    // White flash: 0 → 0.7 across [3000, 3050], 0.7 → 0 across
+    // [3050, 3300].
+    if (t >= DYING_FLASH_START_MS && t < DYING_FLASH_END_MS) {
+      let alpha;
+      if (t < DYING_FLASH_PEAK_MS) {
+        alpha =
+          0.7 *
+          ((t - DYING_FLASH_START_MS) /
+            (DYING_FLASH_PEAK_MS - DYING_FLASH_START_MS));
+      } else {
+        alpha =
+          0.7 *
+          (1 -
+            (t - DYING_FLASH_PEAK_MS) /
+              (DYING_FLASH_END_MS - DYING_FLASH_PEAK_MS));
+      }
+      if (alpha > 0) {
+        ctx.save();
+        ctx.fillStyle = "#ffffff";
+        ctx.globalAlpha = alpha;
+        ctx.fillRect(0, 0, viewW, viewH);
+        ctx.restore();
+      }
+    }
+    // VICTORY title — fade in over 300ms starting at 3050, then hold.
+    if (t >= DYING_VICTORY_START_MS) {
+      const alpha = Math.min(
+        1,
+        (t - DYING_VICTORY_START_MS) /
+          (DYING_VICTORY_FADE_IN_END_MS - DYING_VICTORY_START_MS),
+      );
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.font = "700 60px ui-monospace, SFMono-Regular, Menlo, monospace";
+      ctx.fillStyle = VICTORY_COLOR;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.shadowColor = VICTORY_COLOR;
+      ctx.shadowBlur = 24;
+      ctx.fillText("VICTORY", viewW / 2, viewH / 2);
+      ctx.restore();
+    }
+  }
+
   overlapsPlayer(px: number, py: number, half: number): boolean {
+    // Contact damage is suppressed during cinematic phases.
+    if (this.state === "intro" || this.state === "dying") return false;
     const dx = px - this.x;
     const dy = py - this.y;
     const r = SENTINEL_HITBOX_RADIUS + half;
@@ -341,7 +836,7 @@ export class Sentinel implements Enemy {
     py: number,
     half: number,
   ): boolean {
-    if (this.destroyed) return false;
+    if (this.state !== "idle" && this.state !== "attacking") return false;
     if (dashId === this.dashIdAlreadyDamaged) return false;
     if (!this.overlapsPlayer(px, py, half)) return false;
     this.dashIdAlreadyDamaged = dashId;
@@ -364,6 +859,26 @@ function strokeHexagon(
     else ctx.lineTo(x, y);
   }
   ctx.closePath();
+}
+
+function strokeRing(
+  ctx: CanvasRenderingContext2D,
+  verts: { x: number; y: number }[],
+  lineWidth: number,
+  alpha: number,
+  glow: number,
+): void {
+  ctx.save();
+  if (glow > 0) {
+    ctx.shadowColor = SENTINEL_COLOR;
+    ctx.shadowBlur = glow;
+  }
+  ctx.globalAlpha = alpha;
+  strokeHexagon(ctx, verts, 1);
+  ctx.strokeStyle = SENTINEL_COLOR;
+  ctx.lineWidth = lineWidth;
+  ctx.stroke();
+  ctx.restore();
 }
 
 function circle(

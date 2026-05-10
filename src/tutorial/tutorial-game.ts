@@ -1480,6 +1480,7 @@ export function start(canvas: HTMLCanvasElement): void {
     // enemies update
     const enemyCtx = {
       dt,
+      unscaledDt: dt,
       player,
       bullets,
       particles,

@@ -49,6 +49,12 @@ export type Laser = {
 // FX, etc. into the room's shared lists. No global state.
 export type EnemyContext = {
   dt: number;
+  /** Unscaled per-frame delta in seconds. Almost always equal to
+   *  `dt`; rooms-game only diverges them while a Sentinel is dying
+   *  (its slow-mo applies a sub-1 timeScale to `dt`). Enemies that
+   *  drive cinematic timers — currently just Sentinel — read this so
+   *  the cinematic itself isn't recursively slowed. */
+  unscaledDt: number;
   player: Player;
   bullets: Bullet[];
   particles: Particle[];
