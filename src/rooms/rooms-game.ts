@@ -848,7 +848,7 @@ export function start(canvas: HTMLCanvasElement): void {
     return { particles, rings, triggerShake, triggerScreenFlash };
   }
 
-  function takeHit() {
+  function takeHit(amount: number = 1) {
     if (state.runState !== "playing") return;
     if (state.hitIframe > 0) return;
     if (player.dashIframeTime > 0) return;
@@ -867,7 +867,7 @@ export function start(canvas: HTMLCanvasElement): void {
       }
     }
     audio.play.hit();
-    state.hp -= 1;
+    state.hp = Math.max(0, state.hp - amount);
     state.hitIframe = HIT_IFRAME;
     state.hitVignette = HIT_VIGNETTE;
     eyeOnHit(player);
@@ -963,9 +963,18 @@ export function start(canvas: HTMLCanvasElement): void {
     }
     if (sentinel.requestPlayerHit) {
       sentinel.requestPlayerHit = false;
+      const dmg = sentinel.requestedPlayerHitDamage;
+      sentinel.requestedPlayerHitDamage = 1;
       // takeHit gates by hitIframe, dashIframe, godMode, and the
       // boss-cinematic guard internally — no extra checks needed.
-      takeHit();
+      takeHit(dmg);
+    }
+    // Phase 3 mob spawns — Sentinel finishes a Hunter spawn animation,
+    // we adopt the Hunter into the active enemy list so it ticks /
+    // renders / takes damage like any other room enemy.
+    const mobs = sentinel.consumeSpawnedMobs();
+    if (mobs.length > 0) {
+      for (const m of mobs) currentRoom.enemies.push(m);
     }
   }
 

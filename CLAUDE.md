@@ -697,15 +697,21 @@ transitions for score + Game Complete.
   the cinematic.
 
   The boss runs **three parallel attack sub-machines** in phase
-  1, four in phase 2+. **Mutual exclusion**: only one attack
+  1, four in phase 2, **five in phase 3** (the new Charge attack
+  joins the rotation). **Mutual exclusion**: only one attack
   sub-state machine can be in a non-idle phase at any moment.
   While any attack is active, all other cooldown timers are
   paused (so a long-running attack never lets others pile up
   readiness mid-flight, which would fire the next attack
   instantly on recovery end). Tie-break priority on simultaneous
-  cooldown expiry: **ring burst > sweep > aimed > radial** —
-  RB is the defining mechanic, sweep is the phase-2+ signature,
-  aimed is point threat, radial is filler.
+  cooldown expiry: **ring burst > charge > sweep > aimed >
+  radial** — RB is the defining mechanic; Charge is the phase-3
+  panic moment (beats sweep on a tied cooldown so the dash
+  doesn't get pre-empted by a routine laser); sweep is the
+  phase-2+ signature; aimed is point threat; radial is filler.
+  **Mob spawn** runs as a *parallel* timer (phase 3 only), NOT
+  subject to mutual exclusion — Hunter spawns can fire while
+  any attack is active.
   - **Radial Burst** — 1.4 s total cycle: 0.4 s telegraph +
     single firing frame (12 bullets fanned at 350 px/s) +
     0.3 s recovery + 0.65 s idle gap. Spawns from the live
@@ -784,6 +790,65 @@ transitions for score + Game Complete.
     through the universal mutual-exclusion gate; sub-phases
     here don't count as a new attack — `isAnyAttackActive()`
     stays true across the whole cycle.)
+  - **Charge** — phase 3 only. Boss vanishes from its current
+    position, reappears at the arena edge, telegraphs a fixed
+    line through the predicted player position, then dashes
+    along that line at lethal speed. Sub-state machine
+    `idle / vanish / telegraph / rushing / recovery`. Cooldown
+    `CHARGE_BASE_COOLDOWN_SEC = 9 s × PHASE_CADENCE` from
+    recovery end. Timings: **0.35 s vanish** (body opacity 1 → 0
+    over 250 ms; one-shot 24-particle implosion at the start —
+    particles ride a 80 px radius inward at 200–350 px/s),
+    **0.9 s telegraph** (body fades 0 → 1 over 400 ms at the
+    captured chargeStart, dashed warning line painted from
+    chargeStart to chargeEnd with outer / mid / core glow stack
+    `#ff2266` / `#ff5577` plus pulsing diamond + arrow markers
+    at the endpoints; final 200 ms strobe the line opacity 5×
+    as the rushing-entry countdown), **0.4 s rushing** (linear
+    boss lerp start → end, 4 px / 100 ms shake on entry, body
+    glow ×1.4, ghost trail captured each frame as a fading pink
+    silhouette, sideways wake particles at 16/s), **0.6 s
+    recovery** (pink release ring r 30 → 200 over 500 ms,
+    movement transition snapshots back into the figure-8 the
+    same way RB recovery does).
+    Player target = `player.position + player.velocity * 0.6 s`
+    locked at vanish → telegraph; no homing afterwards. Damage:
+    point-segment distance from player to the full charge line
+    < `CHARGE_HIT_RADIUS = 50 px` deals **2 HP** (latched once
+    per pass via `chargeHitLanded` so the player can't get
+    multi-hit by overlapping the segment for several frames
+    before i-frames latch). Body remains invulnerable through
+    every charge phase — `bodyDamageActive()` short-circuits
+    when `chargePhase !== "idle"` so the dash isn't a
+    drive-by damage opportunity. Audio reuses `alert` (vanish)
+    + `hitHeavy` (rushing) as placeholders until the BWOAH /
+    bossWarp synths land.
+  - **Mob spawn** — phase 3 only, runs in parallel with the
+    attack scheduler. Cap `MOB_MAX_ALIVE = 2`. First spawn
+    `MOB_SPAWN_FIRST_DELAY_SEC = 4 s` after phase-3 entry,
+    then every `MOB_SPAWN_INTERVAL_SEC = 10 s`. Spawned
+    enemy is a `Hunter` with `startsAggressive: true` so it's
+    on-the-chase from frame one. Edge spawn picks a random
+    side / offset (`MOB_SPAWN_INSET_PX = 30` from the wall);
+    spawn ring r 10 → 80 over 700 ms (`#cc4488`), 12 radial
+    particles 150–250 px/s. Hunter is **deferred** until the
+    spawn animation finishes — Sentinel queues
+    `pendingSpawnRequest`s that materialize into a real
+    `Hunter` instance and get pushed into
+    `pendingSpawnedMobs`; rooms-game polls
+    `sentinel.consumeSpawnedMobs()` each frame in
+    `consumeSentinelEffects` and appends the new Hunter to
+    `currentRoom.enemies`. **Phase-3 entry** triggers a
+    forced *dramatic* spawn from the boss centre on the
+    climax of the 2 → 3 transition cinematic: ring r 10 → 140
+    over 900 ms with lw 8 → 0.5, 24 particles at 300–450 px/s,
+    Hunter ejected with random-direction `300 px/s` initial
+    velocity. Then the regular cadence kicks in 4 s later, so
+    Phase 3 opens with two Hunters in the first 5 seconds.
+    Mob spawn timer is gated by `bossPhase === 3` only — it
+    runs while the boss is mid-attack. Spawned mobs do **not**
+    auto-die when the boss reaches `dying`; the player has to
+    clean them up before VICTORY.
   - **Ring Burst** — phase 1's defining mechanic. The three
     shells detach + expand, the body goes ghosted, and the eye
     becomes the only damage path. Sub-state machine
@@ -1256,18 +1321,18 @@ settings overlay on Esc / Tab.
 
 ### TODO (rooms direction)
 
-- **Sentinel boss** — Phases 1 + 2 ship: phase 1 has three attacks
-  (radial / aimed / Ring Burst), phase 2 adds Sweep Laser, the
-  cadence multiplier ramp + the 2 s phase-transition cinematic
-  are wired across both boundaries. Phase 3 (HP 20→0) is
-  reachable and runs at 0.65× cadence, but its dedicated attacks
-  (charge + minion spawn) land in the next iteration. **Mechanic
-  engagement is now mandatory**: HP_MAX bumped 30 → 60 and the
-  body is invulnerable outside RB-`vulnerable`, so the eye in
-  Ring Burst is the *only* damage path (previously body could be
-  cheese-dashed for 1 HP each). Boss audio for sweep laser /
-  phase transition / Ring Burst telegraph still reuses `alert` /
-  `hitHeavy` placeholders — proper layered synths are next-up.
+- **Sentinel boss** — Phases 1 + 2 + 3 ship. Phase 1 has three
+  attacks (radial / aimed / Ring Burst); phase 2 adds Sweep
+  Laser; phase 3 adds **Charge** + the parallel **Hunter mob
+  spawn** system. Cadence multiplier ramp + the 2 s
+  phase-transition cinematic are wired across both boundaries.
+  **Mechanic engagement is mandatory**: HP_MAX 60 with the body
+  invulnerable outside RB-`vulnerable`, so the eye in Ring Burst
+  is the *only* damage path. Boss audio for sweep laser / phase
+  transition / Ring Burst telegraph / Charge vanish + rushing
+  still reuses `alert` / `hitHeavy` placeholders — proper
+  layered synths (drone for sweep, BWOAH for Charge, bossWarp
+  for vanish) are the next iteration.
 - **Key icon visual polish** — the `drawKey` glyph is a diamond
   + stem; readable but a bit primitive. A more iconic key shape
   (or a proper sprite) would improve the HUD slot too.
