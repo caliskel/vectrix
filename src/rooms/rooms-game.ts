@@ -1997,6 +1997,29 @@ export function start(canvas: HTMLCanvasElement): void {
       ctx.lineWidth = 1;
       ctx.strokeRect(barX + 0.5, barY + 0.5, barW - 1, barH - 1);
 
+      // Phase boundary markers — thin vertical ticks at HP 20 + 10
+      // (i.e. 2/3 + 1/3 of bar width). Each flashes white for
+      // PHASE_TRANSITION_HP_MARKER_FLASH_SEC when the corresponding
+      // phase transition climax fires; sentinel exposes the
+      // countdown timers and rooms-game just lerps the colour.
+      const baseMarkerAlpha = 0.4;
+      const markerThresholds: { fraction: number; flash: number }[] = [
+        { fraction: 20 / 30, flash: sentinel.phaseMarkerFlashTimer1to2 },
+        { fraction: 10 / 30, flash: sentinel.phaseMarkerFlashTimer2to3 },
+      ];
+      const PHASE_FLASH_SEC = 0.3;
+      ctx.lineWidth = 2;
+      for (const m of markerThresholds) {
+        const x = barX + barW * m.fraction;
+        const flashRamp = m.flash > 0 ? m.flash / PHASE_FLASH_SEC : 0;
+        const alpha = baseMarkerAlpha + (1 - baseMarkerAlpha) * flashRamp;
+        ctx.strokeStyle = `rgba(255, 255, 255, ${alpha.toFixed(3)})`;
+        ctx.beginPath();
+        ctx.moveTo(x, barY);
+        ctx.lineTo(x, barY + barH);
+        ctx.stroke();
+      }
+
       ctx.font = "500 11px ui-monospace, SFMono-Regular, Menlo, monospace";
       ctx.fillStyle = "#ffffff";
       ctx.textAlign = "right";

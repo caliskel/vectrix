@@ -402,6 +402,83 @@ const RB_EYE_HIT_PARTICLE_LIFETIME_SEC = 0.5;
 const RB_EYE_HIT_SHAKE_PX = 8;
 const RB_EYE_HIT_SHAKE_SEC = 0.2;
 
+// === Phase 1 / 2 / 3 framework ===
+//
+// Phase tracks the active "act" of the fight; HP boundaries 20 + 10
+// drive transitions. Each phase scales every attack cooldown by
+// PHASE_CADENCE so the rotation tightens as the fight escalates,
+// without touching the inner telegraph / fire / recovery beats
+// (those stay readable). New attacks unlock per phase: sweep laser
+// in phase 2, charge + minion spawns in phase 3 (placeholder for
+// the next iteration).
+const PHASE_HP_BOUNDARY_1_TO_2 = 20;
+const PHASE_HP_BOUNDARY_2_TO_3 = 10;
+const PHASE_CADENCE: Record<1 | 2 | 3, number> = {
+  1: 1.0, // baseline
+  2: 0.8,
+  3: 0.65,
+};
+// Accent shifts. The eye keeps `#ffaa22` in every phase (the
+// "opportunity" cue), only the body / ring / bullet hue moves.
+const ACCENT_PER_PHASE: Record<1 | 2 | 3, string> = {
+  1: "#ff3344",
+  2: "#ff5511",
+  3: "#ff2266",
+};
+const MID_RING_COLOR_PER_PHASE: Record<1 | 2 | 3, string> = {
+  1: "#ff5577",
+  2: "#ff7733",
+  3: "#ff5588",
+};
+
+// Phase transition cinematic — a single 2000 ms window broken into
+// four sub-beats (hitstop / build / climax / settle). Sentinel goes
+// invulnerable + frozen for the whole window. Timestamps in ms,
+// resolved against `phaseTransition.elapsed`.
+const PHASE_TRANSITION_TOTAL_MS = 2000;
+const PHASE_TRANSITION_HITSTOP_END_MS = 300;
+const PHASE_TRANSITION_BUILD_END_MS = 1200;
+const PHASE_TRANSITION_CLIMAX_END_MS = 1500;
+const PHASE_TRANSITION_SETTLE_END_MS = 2000;
+const PHASE_TRANSITION_HITSTOP_TIMESCALE = 0.15;
+const PHASE_TRANSITION_BUILD_TIMESCALE = 0.4;
+const PHASE_TRANSITION_RING_INTERVAL_MS = 100;
+const PHASE_TRANSITION_RING_LIFETIME_SEC = 0.6;
+const PHASE_TRANSITION_RING_R0 = 30;
+const PHASE_TRANSITION_RING_R1 = 200;
+const PHASE_TRANSITION_BUILD_SHAKE_MIN_PX = 2;
+const PHASE_TRANSITION_BUILD_SHAKE_MAX_PX = 8;
+const PHASE_TRANSITION_CLIMAX_SHAKE_PX = 12;
+const PHASE_TRANSITION_CLIMAX_SHAKE_SEC = 0.2;
+const PHASE_TRANSITION_CLIMAX_PARTICLE_COUNT = 32;
+const PHASE_TRANSITION_CLIMAX_PARTICLE_SPEED_MIN = 300;
+const PHASE_TRANSITION_CLIMAX_PARTICLE_SPEED_MAX = 500;
+const PHASE_TRANSITION_CLIMAX_PARTICLE_LIFETIME_SEC = 0.6;
+const PHASE_TRANSITION_HITSTOP_SHAKE_PX = 6;
+const PHASE_TRANSITION_HITSTOP_SHAKE_SEC = 0.1;
+const PHASE_TRANSITION_HP_MARKER_FLASH_SEC = 0.3;
+
+// Sweep Laser — phase 2+ attack. The boss anchors a 180° beam, then
+// rotates it across the player's quadrant over 1.5 s. Player either
+// stands on the cold side or dashes through the beam under
+// i-frames; standing in the path otherwise = 1 HP.
+const SWEEP_LASER_TELEGRAPH_SEC = 0.8;
+const SWEEP_LASER_FIRING_SEC = 1.5;
+const SWEEP_LASER_RECOVERY_SEC = 0.4;
+const SWEEP_LASER_BASE_COOLDOWN_SEC = 5.0;
+const SWEEP_LASER_BEAM_HIT_HALF_ANGLE = 0.04; // ~2.3° each side
+const SWEEP_LASER_TELEGRAPH_DASH_PATTERN: [number, number] = [10, 8];
+const SWEEP_LASER_TELEGRAPH_DASH_RATE = 80;
+const SWEEP_LASER_ARC_ALPHA_MIN = 0.1;
+const SWEEP_LASER_ARC_ALPHA_MAX = 0.2;
+const SWEEP_LASER_ARC_PULSE_PERIOD_SEC = 0.4;
+const SWEEP_LASER_DIR_TRIANGLE_OFFSET = 100;
+const SWEEP_LASER_DIR_TRIANGLE_SIZE = 10;
+const SWEEP_LASER_RECOVERY_FADE_SEC = 0.2;
+const SWEEP_LASER_BEAM_PARTICLE_INTERVAL_SEC = 0.05;
+const SWEEP_LASER_BEAM_PARTICLE_SPEED = 600;
+const SWEEP_LASER_BEAM_PARTICLE_LIFETIME_SEC = 0.2;
+
 // Energy burst — fired on the radial-burst telegraph → firing
 // transition. Two shockwave rings, a brief boss flash, and a
 // streamer puff out the boss centre.
@@ -503,6 +580,31 @@ function drawReticleTriangle(
   }
   ctx.closePath();
   ctx.fill();
+}
+
+/** Linearly interpolate between two `#rrggbb` colours. Used by the
+ *  phase-transition settle window so the boss's accent shifts
+ *  rather than snapping. Falls back to `target` if either string
+ *  doesn't parse. */
+function lerpHex(from: string, to: string, t: number): string {
+  const a = parseHex(from);
+  const b = parseHex(to);
+  if (!a || !b) return to;
+  const r = Math.round(a.r + (b.r - a.r) * t);
+  const g = Math.round(a.g + (b.g - a.g) * t);
+  const bl = Math.round(a.b + (b.b - a.b) * t);
+  return `rgb(${r}, ${g}, ${bl})`;
+}
+
+function parseHex(hex: string): { r: number; g: number; b: number } | null {
+  const m = /^#([0-9a-fA-F]{6})$/.exec(hex);
+  if (!m) return null;
+  const v = parseInt(m[1], 16);
+  return {
+    r: (v >> 16) & 0xff,
+    g: (v >> 8) & 0xff,
+    b: v & 0xff,
+  };
 }
 
 function shortestAngleDiff(target: number, current: number): number {
@@ -693,6 +795,39 @@ export class Sentinel implements Enemy {
   // Hitstop on a successful eye hit — sets sentinel.timeScale low
   // for RB_EYE_HITSTOP_SEC so the impact reads as a single beat.
   private eyeHitstopTimer = 0;
+
+  // === Phase / transition state ===
+  bossPhase: 1 | 2 | 3 = 1;
+  /** Active when a 1→2 or 2→3 cinematic is playing. While set,
+   *  the boss is invulnerable, frozen, every attack timer is
+   *  paused, and rooms-game's HP bar gets its phase marker flash
+   *  via `phaseMarkerFlashTimer`. */
+  phaseTransition: {
+    elapsedMs: number;
+    fromPhase: 1 | 2;
+    toPhase: 2 | 3;
+    /** True after the climax beat fires bossPhase++ + the boss
+     *  roar so the cinematic ticker doesn't double-pop them. */
+    climaxFired: boolean;
+    /** Spawn-pacing accumulator so we drop one ring every
+     *  PHASE_TRANSITION_RING_INTERVAL_MS through the build window. */
+    ringEmitTimer: number;
+  } | null = null;
+  /** Counts down through PHASE_TRANSITION_HP_MARKER_FLASH_SEC after
+   *  the climax beat fires. rooms-game polls + clears each frame
+   *  to flash the corresponding HP-bar tick. -1 means the threshold
+   *  hasn't fired yet, otherwise the seconds remaining. */
+  phaseMarkerFlashTimer1to2 = -1;
+  phaseMarkerFlashTimer2to3 = -1;
+
+  // === Sweep Laser sub-state machine (phase 2+) ===
+  private sweepLaserPhase: AttackPhase = "idle";
+  private sweepLaserTimer = 0;
+  private sweepLaserIdleTimer = 0;
+  private sweepLaserStartAngle = 0;
+  private sweepLaserDirection: 1 | -1 = 1;
+  private sweepLaserDashOffset = 0;
+  private sweepLaserBeamParticleTimer = 0;
   // Set true on a successful eye dash-through; tickRingBurst drains
   // it next frame so triggerEyeHitFeedback can fire with ctxRoom in
   // hand (tryDashDamage doesn't get ctxRoom in its signature).
@@ -752,7 +887,9 @@ export class Sentinel implements Enemy {
   takeDamage(amount: number): void {
     // Damage only lands during active combat. Intro and dying phases
     // are invulnerable cinematic windows; defeated is a no-op.
+    // Phase-transition cinematic also gates incoming damage.
     if (this.state !== "idle" && this.state !== "attacking") return;
+    if (this.phaseTransition) return;
     this.hp = Math.max(0, this.hp - amount);
     if (this.hp <= 0) {
       this.enterDying();
@@ -853,6 +990,18 @@ export class Sentinel implements Enemy {
   // -------- combat (idle / attacking) --------
 
   private updateCombat(ctxRoom: EnemyContext, dt: number): void {
+    // Marker flash timers always decay — they're transient HUD
+    // visuals, independent of attack state.
+    this.tickPhaseMarkerTimers(dt);
+    // Phase-transition cinematic preempts everything: sim freezes,
+    // movement freezes, damage rejected, attacks paused. The
+    // cinematic ticker drives the visuals + climax fire + end and
+    // leaves `this.phaseTransition === null` once the 2 s window
+    // closes.
+    if (this.phaseTransition) {
+      this.tickPhaseTransitionCinematic(ctxRoom, dt);
+      return;
+    }
     // Cache player position so renderAimedTelegraph can place the
     // diamond at the player's distance projection along the tracked
     // angle. draw() has no ctxRoom, so we stash it.
@@ -945,6 +1094,7 @@ export class Sentinel implements Enemy {
       this.timeScale = 1;
     }
     const ringBurstActive = this.ringBurstPhase !== "idle";
+    const sweepActive = this.sweepLaserPhase !== "idle";
 
     // Aimed-shot snap-confirm flash decays unconditionally — it's a
     // transient visual, lives 80 ms after the telegraph locks.
@@ -952,15 +1102,22 @@ export class Sentinel implements Enemy {
       this.aimedSnapTimer = Math.max(0, this.aimedSnapTimer - dt);
     }
 
+    // Sweep laser sub-machine — phase 2+ only. Ticks before the
+    // dual-attack scheduler so its non-idle phases freeze radial /
+    // aimed taimers (same rule as Ring Burst).
+    this.tickSweepLaser(ctxRoom, dt);
+
     // === Attack scheduling — dual sub-state machines ===
     // Only one attack runs at a time. Whichever attack is in a
     // non-idle phase blocks the other one's cooldown from ticking,
     // so the boss reads as "doing one thing." When both are idle
     // and at least one is ready, the one that's been ready longer
-    // wins (overshoot comparison). Ring Burst pre-empts both — its
-    // active phases freeze every other timer.
-    const radialBlocked = this.aimedPhase !== "idle" || ringBurstActive;
-    const aimedBlocked = this.radialPhase !== "idle" || ringBurstActive;
+    // wins (overshoot comparison). Ring Burst + Sweep Laser pre-empt
+    // both — their active phases freeze every other timer.
+    const radialBlocked =
+      this.aimedPhase !== "idle" || ringBurstActive || sweepActive;
+    const aimedBlocked =
+      this.radialPhase !== "idle" || ringBurstActive || sweepActive;
 
     // ---- Radial sub-machine ----
     if (!radialBlocked) {
@@ -1044,12 +1201,18 @@ export class Sentinel implements Enemy {
     }
 
     // ---- Decide whether to start an attack now ----
+    // Cadence multiplier per phase — phase 2 fires 25% faster, phase
+    // 3 ~54% faster. Inner attack timings (telegraph / fire /
+    // recovery) stay readable; only the gaps between attacks shrink.
+    const cadence = PHASE_CADENCE[this.bossPhase];
     if (this.radialPhase === "idle" && this.aimedPhase === "idle") {
-      const radialReady = this.radialIdleTimer >= RADIAL_IDLE_GAP_SEC;
-      const aimedReady = this.aimedIdleTimer >= AIMED_COOLDOWN_SEC;
+      const radialReadyAt = RADIAL_IDLE_GAP_SEC * cadence;
+      const aimedReadyAt = AIMED_COOLDOWN_SEC * cadence;
+      const radialReady = this.radialIdleTimer >= radialReadyAt;
+      const aimedReady = this.aimedIdleTimer >= aimedReadyAt;
       if (radialReady || aimedReady) {
-        const radialOver = this.radialIdleTimer - RADIAL_IDLE_GAP_SEC;
-        const aimedOver = this.aimedIdleTimer - AIMED_COOLDOWN_SEC;
+        const radialOver = this.radialIdleTimer - radialReadyAt;
+        const aimedOver = this.aimedIdleTimer - aimedReadyAt;
         if (radialReady && (!aimedReady || radialOver >= aimedOver)) {
           this.radialPhase = "telegraph";
           this.radialTimer = 0;
@@ -1062,9 +1225,18 @@ export class Sentinel implements Enemy {
     // Reflect activity back into the public state field — rooms-game
     // reads this for HP-bar visibility / kill-credit transitions.
     this.state =
-      this.radialPhase !== "idle" || this.aimedPhase !== "idle"
+      this.radialPhase !== "idle" ||
+      this.aimedPhase !== "idle" ||
+      this.sweepLaserPhase !== "idle"
         ? "attacking"
         : "idle";
+
+    // Phase-transition trigger — checked AFTER attack state is
+    // settled. Only fires when every sub-machine is idle (no attack
+    // in flight) AND HP has crossed the matching threshold AND no
+    // transition is already running. Stays out of the way if the
+    // boss is mid-recovery; the next-frame check picks it up.
+    this.maybeStartPhaseTransition();
 
     // Contact damage. Two paths:
     //   - body contact only fires when the boss is "solid" — RB
@@ -1103,6 +1275,54 @@ export class Sentinel implements Enemy {
 
   /** Body takes / deals contact damage during RB-idle, telegraph,
    *  recovery (and trivially when no RB is active). */
+  /** Active accent colour for the body / outer ring / hex frame.
+   *  Pinned to `ACCENT_PER_PHASE[bossPhase]` in normal play; during
+   *  the settle window of a phase transition it lerps from the
+   *  previous phase's accent to the new one over 500 ms so the
+   *  hue shift reads as a slow morph rather than a snap. */
+  private accentColor(): string {
+    if (this.phaseTransition) {
+      const t = this.phaseTransition;
+      if (t.elapsedMs < PHASE_TRANSITION_CLIMAX_END_MS) {
+        return ACCENT_PER_PHASE[t.fromPhase];
+      }
+      const span =
+        PHASE_TRANSITION_SETTLE_END_MS - PHASE_TRANSITION_CLIMAX_END_MS;
+      const u = Math.min(
+        1,
+        (t.elapsedMs - PHASE_TRANSITION_CLIMAX_END_MS) / span,
+      );
+      return lerpHex(
+        ACCENT_PER_PHASE[t.fromPhase],
+        ACCENT_PER_PHASE[t.toPhase],
+        u,
+      );
+    }
+    return ACCENT_PER_PHASE[this.bossPhase];
+  }
+
+  /** Mid-ring colour. Same lerp model as `accentColor()`. */
+  private midRingColor(): string {
+    if (this.phaseTransition) {
+      const t = this.phaseTransition;
+      if (t.elapsedMs < PHASE_TRANSITION_CLIMAX_END_MS) {
+        return MID_RING_COLOR_PER_PHASE[t.fromPhase];
+      }
+      const span =
+        PHASE_TRANSITION_SETTLE_END_MS - PHASE_TRANSITION_CLIMAX_END_MS;
+      const u = Math.min(
+        1,
+        (t.elapsedMs - PHASE_TRANSITION_CLIMAX_END_MS) / span,
+      );
+      return lerpHex(
+        MID_RING_COLOR_PER_PHASE[t.fromPhase],
+        MID_RING_COLOR_PER_PHASE[t.toPhase],
+        u,
+      );
+    }
+    return MID_RING_COLOR_PER_PHASE[this.bossPhase];
+  }
+
   private bodyDamageActive(): boolean {
     return (
       this.ringBurstPhase === "idle" ||
@@ -1365,7 +1585,8 @@ export class Sentinel implements Enemy {
         if (this.rbTimer >= RB_RECOVERY_SEC) {
           this.ringBurstPhase = "idle";
           this.rbTimer = 0;
-          this.rbCooldownTimer = RB_COOLDOWN_SEC;
+          this.rbCooldownTimer =
+            RB_COOLDOWN_SEC * PHASE_CADENCE[this.bossPhase];
           // Smooth re-entry to figure-8: snapshot the frozen
           // position so the movement update can blend to the
           // live curve point. Skipped if the boss died during RB
@@ -1495,6 +1716,290 @@ export class Sentinel implements Enemy {
     audio.play.alert();
   }
 
+  // === Phase transitions ===
+  private tickPhaseMarkerTimers(dt: number): void {
+    if (this.phaseMarkerFlashTimer1to2 > 0) {
+      this.phaseMarkerFlashTimer1to2 = Math.max(
+        0,
+        this.phaseMarkerFlashTimer1to2 - dt,
+      );
+    }
+    if (this.phaseMarkerFlashTimer2to3 > 0) {
+      this.phaseMarkerFlashTimer2to3 = Math.max(
+        0,
+        this.phaseMarkerFlashTimer2to3 - dt,
+      );
+    }
+  }
+
+  private allAttacksIdle(): boolean {
+    return (
+      this.radialPhase === "idle" &&
+      this.aimedPhase === "idle" &&
+      this.sweepLaserPhase === "idle" &&
+      this.ringBurstPhase === "idle"
+    );
+  }
+
+  private maybeStartPhaseTransition(): void {
+    if (this.phaseTransition) return;
+    if (!this.allAttacksIdle()) return;
+    if (this.bossPhase === 1 && this.hp <= PHASE_HP_BOUNDARY_1_TO_2) {
+      this.phaseTransition = {
+        elapsedMs: 0,
+        fromPhase: 1,
+        toPhase: 2,
+        climaxFired: false,
+        ringEmitTimer: 0,
+      };
+    } else if (this.bossPhase === 2 && this.hp <= PHASE_HP_BOUNDARY_2_TO_3) {
+      this.phaseTransition = {
+        elapsedMs: 0,
+        fromPhase: 2,
+        toPhase: 3,
+        climaxFired: false,
+        ringEmitTimer: 0,
+      };
+    }
+  }
+
+  /** Drives the 2 s cinematic. Called every frame while
+   *  `this.phaseTransition !== null`; takes ctxRoom for ring +
+   *  particle spawns. Body / ring rotation + breath continue to
+   *  tick in `update()` above this so the boss visibly slows but
+   *  doesn't freeze graphically. */
+  private tickPhaseTransitionCinematic(
+    ctxRoom: EnemyContext,
+    dt: number,
+  ): void {
+    const t = this.phaseTransition;
+    if (!t) return;
+    const wasZero = t.elapsedMs === 0;
+    t.elapsedMs += dt * 1000;
+
+    // ---- timeScale ----
+    if (t.elapsedMs < 100) {
+      // Hitstop entry — fast 1 → 0.15 ramp.
+      this.timeScale =
+        1 + (PHASE_TRANSITION_HITSTOP_TIMESCALE - 1) * (t.elapsedMs / 100);
+    } else if (t.elapsedMs < PHASE_TRANSITION_HITSTOP_END_MS) {
+      this.timeScale = PHASE_TRANSITION_HITSTOP_TIMESCALE;
+    } else if (t.elapsedMs < PHASE_TRANSITION_BUILD_END_MS) {
+      const u =
+        (t.elapsedMs - PHASE_TRANSITION_HITSTOP_END_MS) /
+        (PHASE_TRANSITION_BUILD_END_MS - PHASE_TRANSITION_HITSTOP_END_MS);
+      this.timeScale =
+        PHASE_TRANSITION_HITSTOP_TIMESCALE +
+        (PHASE_TRANSITION_BUILD_TIMESCALE -
+          PHASE_TRANSITION_HITSTOP_TIMESCALE) *
+          u;
+    } else if (t.elapsedMs < PHASE_TRANSITION_CLIMAX_END_MS) {
+      const u =
+        (t.elapsedMs - PHASE_TRANSITION_BUILD_END_MS) /
+        (PHASE_TRANSITION_CLIMAX_END_MS - PHASE_TRANSITION_BUILD_END_MS);
+      this.timeScale =
+        PHASE_TRANSITION_BUILD_TIMESCALE +
+        (1 - PHASE_TRANSITION_BUILD_TIMESCALE) * u;
+    } else {
+      this.timeScale = 1;
+    }
+
+    // ---- Hitstop entry: single shake, on the first frame only ----
+    if (wasZero) {
+      this.pendingShakePx = PHASE_TRANSITION_HITSTOP_SHAKE_PX;
+      this.pendingShakeSec = PHASE_TRANSITION_HITSTOP_SHAKE_SEC;
+    }
+
+    // ---- Build phase: emit a ring every interval + ramp shake ----
+    if (
+      t.elapsedMs >= PHASE_TRANSITION_HITSTOP_END_MS &&
+      t.elapsedMs < PHASE_TRANSITION_BUILD_END_MS
+    ) {
+      t.ringEmitTimer += dt * 1000;
+      if (t.ringEmitTimer >= PHASE_TRANSITION_RING_INTERVAL_MS) {
+        t.ringEmitTimer -= PHASE_TRANSITION_RING_INTERVAL_MS;
+        ctxRoom.rings.push({
+          x: this.x,
+          y: this.y,
+          age: 0,
+          lifetime: PHASE_TRANSITION_RING_LIFETIME_SEC,
+          startR: PHASE_TRANSITION_RING_R0,
+          endR: PHASE_TRANSITION_RING_R1,
+          color: ACCENT_PER_PHASE[t.fromPhase],
+          startLineWidth: 4,
+          endLineWidth: 0.5,
+          glowBlur: 14,
+        });
+      }
+      const u =
+        (t.elapsedMs - PHASE_TRANSITION_HITSTOP_END_MS) /
+        (PHASE_TRANSITION_BUILD_END_MS - PHASE_TRANSITION_HITSTOP_END_MS);
+      this.pendingShakePx =
+        PHASE_TRANSITION_BUILD_SHAKE_MIN_PX +
+        (PHASE_TRANSITION_BUILD_SHAKE_MAX_PX -
+          PHASE_TRANSITION_BUILD_SHAKE_MIN_PX) *
+          u;
+      this.pendingShakeSec = dt;
+    }
+
+    // ---- Climax (1200 ms): bossPhase increment + heavy spawn ----
+    if (!t.climaxFired && t.elapsedMs >= PHASE_TRANSITION_BUILD_END_MS) {
+      t.climaxFired = true;
+      this.bossPhase = t.toPhase;
+      this.pendingShakePx = PHASE_TRANSITION_CLIMAX_SHAKE_PX;
+      this.pendingShakeSec = PHASE_TRANSITION_CLIMAX_SHAKE_SEC;
+      const half = PHASE_TRANSITION_CLIMAX_PARTICLE_COUNT / 2;
+      const newAccent = ACCENT_PER_PHASE[t.toPhase];
+      for (let i = 0; i < PHASE_TRANSITION_CLIMAX_PARTICLE_COUNT; i++) {
+        const a =
+          (i / PHASE_TRANSITION_CLIMAX_PARTICLE_COUNT) * Math.PI * 2;
+        const speed =
+          PHASE_TRANSITION_CLIMAX_PARTICLE_SPEED_MIN +
+          Math.random() *
+            (PHASE_TRANSITION_CLIMAX_PARTICLE_SPEED_MAX -
+              PHASE_TRANSITION_CLIMAX_PARTICLE_SPEED_MIN);
+        ctxRoom.particles.push({
+          x: this.x,
+          y: this.y,
+          vx: Math.cos(a) * speed,
+          vy: Math.sin(a) * speed,
+          initialSize: 4,
+          color: i < half ? "#ffffff" : newAccent,
+          age: 0,
+          lifetime: PHASE_TRANSITION_CLIMAX_PARTICLE_LIFETIME_SEC,
+          glowStrong: 14,
+          glowSoft: 5,
+          drag: 0.94,
+        });
+      }
+      audio.play.hitHeavy();
+      audio.play.alert();
+      if (t.toPhase === 2) {
+        this.phaseMarkerFlashTimer1to2 = PHASE_TRANSITION_HP_MARKER_FLASH_SEC;
+      } else {
+        this.phaseMarkerFlashTimer2to3 = PHASE_TRANSITION_HP_MARKER_FLASH_SEC;
+      }
+    }
+
+    // ---- End of cinematic — clear flag, reset timeScale ----
+    if (t.elapsedMs >= PHASE_TRANSITION_TOTAL_MS) {
+      this.phaseTransition = null;
+      this.timeScale = 1;
+    }
+  }
+
+  // === Sweep Laser ===
+  private tickSweepLaser(ctxRoom: EnemyContext, dt: number): void {
+    // Phase 1: sub-machine completely paused. Cooldown timer stays
+    // frozen at zero, attack never starts.
+    if (this.bossPhase < 2) return;
+    // Ring Burst pre-empts everything else.
+    if (this.ringBurstPhase !== "idle") return;
+
+    const cadence = PHASE_CADENCE[this.bossPhase];
+    if (this.sweepLaserPhase === "idle") {
+      this.sweepLaserIdleTimer += dt;
+      const readyAt = SWEEP_LASER_BASE_COOLDOWN_SEC * cadence;
+      const otherIdle =
+        this.radialPhase === "idle" && this.aimedPhase === "idle";
+      if (this.sweepLaserIdleTimer >= readyAt && otherIdle) {
+        this.beginSweepLaserTelegraph(ctxRoom);
+      }
+      return;
+    }
+
+    this.sweepLaserTimer += dt;
+    if (this.sweepLaserPhase === "telegraph") {
+      const span =
+        SWEEP_LASER_TELEGRAPH_DASH_PATTERN[0] +
+        SWEEP_LASER_TELEGRAPH_DASH_PATTERN[1];
+      this.sweepLaserDashOffset =
+        (this.sweepLaserDashOffset + SWEEP_LASER_TELEGRAPH_DASH_RATE * dt) %
+        span;
+      if (this.sweepLaserTimer >= SWEEP_LASER_TELEGRAPH_SEC) {
+        this.sweepLaserPhase = "firing";
+        this.sweepLaserTimer = 0;
+        this.sweepLaserBeamParticleTimer = 0;
+      }
+      return;
+    }
+    if (this.sweepLaserPhase === "firing") {
+      // Damage check — angle from boss to player vs current beam
+      // angle. ±SWEEP_LASER_BEAM_HIT_HALF_ANGLE around the line.
+      const player = ctxRoom.player;
+      if (player.dashIframeTime <= 0) {
+        const currentAngle = this.currentSweepBeamAngle();
+        const dx = player.x - this.x;
+        const dy = player.y - this.y;
+        const playerAngle = Math.atan2(dy, dx);
+        const diff = Math.abs(shortestAngleDiff(playerAngle, currentAngle));
+        if (diff < SWEEP_LASER_BEAM_HIT_HALF_ANGLE) {
+          this.requestPlayerHit = true;
+        }
+      }
+      // Beam particle emission — short streaks travelling outward
+      // along the live beam direction so the energy reads as
+      // streaming through the line.
+      this.sweepLaserBeamParticleTimer += dt;
+      while (
+        this.sweepLaserBeamParticleTimer >=
+        SWEEP_LASER_BEAM_PARTICLE_INTERVAL_SEC
+      ) {
+        this.sweepLaserBeamParticleTimer -=
+          SWEEP_LASER_BEAM_PARTICLE_INTERVAL_SEC;
+        const a = this.currentSweepBeamAngle();
+        ctxRoom.particles.push({
+          x: this.x,
+          y: this.y,
+          vx: Math.cos(a) * SWEEP_LASER_BEAM_PARTICLE_SPEED,
+          vy: Math.sin(a) * SWEEP_LASER_BEAM_PARTICLE_SPEED,
+          initialSize: 3,
+          color: "#ffffff",
+          age: 0,
+          lifetime: SWEEP_LASER_BEAM_PARTICLE_LIFETIME_SEC,
+          glowStrong: 10,
+          glowSoft: 4,
+          drag: 0.97,
+        });
+      }
+      if (this.sweepLaserTimer >= SWEEP_LASER_FIRING_SEC) {
+        this.sweepLaserPhase = "recovery";
+        this.sweepLaserTimer = 0;
+      }
+      return;
+    }
+    if (this.sweepLaserPhase === "recovery") {
+      if (this.sweepLaserTimer >= SWEEP_LASER_RECOVERY_SEC) {
+        this.sweepLaserPhase = "idle";
+        this.sweepLaserTimer = 0;
+        this.sweepLaserIdleTimer = 0;
+      }
+      return;
+    }
+  }
+
+  private beginSweepLaserTelegraph(ctxRoom: EnemyContext): void {
+    const player = ctxRoom.player;
+    const playerAngle = Math.atan2(player.y - this.y, player.x - this.x);
+    this.sweepLaserDirection = Math.random() < 0.5 ? 1 : -1;
+    // Start 90° "before" the player along the rotation direction so
+    // the 180° sweep crosses the player's quadrant.
+    this.sweepLaserStartAngle =
+      playerAngle - this.sweepLaserDirection * (Math.PI / 2);
+    this.sweepLaserPhase = "telegraph";
+    this.sweepLaserTimer = 0;
+    this.sweepLaserDashOffset = 0;
+    audio.play.alert();
+  }
+
+  /** Live beam angle during firing — start angle plus
+   *  `direction * π * (timer / SWEEP_LASER_FIRING_SEC)`. Read by both
+   *  the damage check and the render path. */
+  private currentSweepBeamAngle(): number {
+    const t = Math.min(1, this.sweepLaserTimer / SWEEP_LASER_FIRING_SEC);
+    return this.sweepLaserStartAngle + this.sweepLaserDirection * Math.PI * t;
+  }
+
   private fireAimedBullet(ctxRoom: EnemyContext): void {
     const speed = AIMED_BULLET_SPEED;
     const cos = Math.cos(this.aimedAngle);
@@ -1563,6 +2068,13 @@ export class Sentinel implements Enemy {
     // owns the boss's position without a phantom lerp toward the
     // live curve point.
     this.movementTransition = null;
+    // Cancel sweep laser too — beam wouldn't make sense post-death.
+    this.sweepLaserPhase = "idle";
+    this.sweepLaserTimer = 0;
+    this.sweepLaserIdleTimer = 0;
+    this.phaseTransition = null;
+    this.phaseMarkerFlashTimer1to2 = -1;
+    this.phaseMarkerFlashTimer2to3 = -1;
   }
 
   private updateDying(_ctxRoom: EnemyContext, dt: number): void {
@@ -1678,17 +2190,150 @@ export class Sentinel implements Enemy {
     }
     // idle / attacking — aim-line first (so the body draws on top
     // of it), then the body, then the streamers (drawn last so they
-    // sit on top of the boss silhouette).
+    // sit on top of the boss silhouette). Sweep laser telegraph
+    // sits underneath the body too; the firing beam goes ON TOP
+    // (drawn after the body) so the bright core reads.
     if (this.aimedPhase === "telegraph") {
       this.renderAimedTelegraph(ctx);
     }
     if (this.aimedSnapTimer > 0) {
       this.renderAimedSnapFlash(ctx);
     }
+    if (this.sweepLaserPhase === "telegraph") {
+      this.renderSweepLaserTelegraph(ctx);
+    }
     this.renderBody(ctx, 1);
+    if (
+      this.sweepLaserPhase === "firing" ||
+      this.sweepLaserPhase === "recovery"
+    ) {
+      this.renderSweepLaserBeam(ctx);
+    }
     if (this.streamers.length > 0) {
       this.renderStreamers(ctx);
     }
+  }
+
+  private renderSweepLaserTelegraph(ctx: CanvasRenderingContext2D): void {
+    const accent = this.accentColor();
+    const startA = this.sweepLaserStartAngle;
+    const direction = this.sweepLaserDirection;
+    const endA = startA + direction * Math.PI;
+    const reach = Math.hypot(this.arenaW, this.arenaH);
+    // Sector preview — pulsing low-alpha fill so the player sees the
+    // 180° quadrant the beam will sweep through. Drawn first so the
+    // line + triangle render on top.
+    const sectorPulse =
+      SWEEP_LASER_ARC_ALPHA_MIN +
+      ((Math.sin(
+        (this.sweepLaserTimer * Math.PI * 2) /
+          SWEEP_LASER_ARC_PULSE_PERIOD_SEC,
+      ) +
+        1) /
+        2) *
+        (SWEEP_LASER_ARC_ALPHA_MAX - SWEEP_LASER_ARC_ALPHA_MIN);
+    ctx.save();
+    ctx.fillStyle = accent;
+    ctx.globalAlpha = sectorPulse;
+    ctx.beginPath();
+    ctx.moveTo(this.x, this.y);
+    // arc() with anticlockwise depending on rotation direction so
+    // the filled sector matches the actual sweep arc.
+    ctx.arc(this.x, this.y, reach, startA, endA, direction < 0);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+
+    // Start-angle dashed line — same colour family as aimed shot's
+    // line but tracks the start of the sweep, not the player.
+    const lineEndX = this.x + Math.cos(startA) * reach;
+    const lineEndY = this.y + Math.sin(startA) * reach;
+    ctx.save();
+    ctx.strokeStyle = accent;
+    ctx.lineWidth = 2;
+    ctx.setLineDash(SWEEP_LASER_TELEGRAPH_DASH_PATTERN);
+    ctx.lineDashOffset = -this.sweepLaserDashOffset;
+    ctx.shadowColor = accent;
+    ctx.shadowBlur = 8;
+    ctx.globalAlpha = 0.8;
+    ctx.beginPath();
+    ctx.moveTo(this.x, this.y);
+    ctx.lineTo(lineEndX, lineEndY);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.restore();
+
+    // Direction triangle — points along the rotation direction at a
+    // fixed offset from the boss, gives the player a quick read of
+    // CW vs CCW before the beam fires.
+    const triBaseX = this.x + Math.cos(startA) * SWEEP_LASER_DIR_TRIANGLE_OFFSET;
+    const triBaseY = this.y + Math.sin(startA) * SWEEP_LASER_DIR_TRIANGLE_OFFSET;
+    // Tangent: rotate startA by direction*90° to get the apex direction.
+    const tangentA = startA + direction * (Math.PI / 2);
+    const apexX =
+      triBaseX + Math.cos(tangentA) * SWEEP_LASER_DIR_TRIANGLE_SIZE * 1.2;
+    const apexY =
+      triBaseY + Math.sin(tangentA) * SWEEP_LASER_DIR_TRIANGLE_SIZE * 1.2;
+    const sideA = startA + direction * (Math.PI / 2 + 0.6);
+    const sideB = startA + direction * (Math.PI / 2 - 0.6);
+    ctx.save();
+    ctx.fillStyle = accent;
+    ctx.beginPath();
+    ctx.moveTo(apexX, apexY);
+    ctx.lineTo(
+      triBaseX + Math.cos(sideA) * SWEEP_LASER_DIR_TRIANGLE_SIZE * 0.5,
+      triBaseY + Math.sin(sideA) * SWEEP_LASER_DIR_TRIANGLE_SIZE * 0.5,
+    );
+    ctx.lineTo(
+      triBaseX + Math.cos(sideB) * SWEEP_LASER_DIR_TRIANGLE_SIZE * 0.5,
+      triBaseY + Math.sin(sideB) * SWEEP_LASER_DIR_TRIANGLE_SIZE * 0.5,
+    );
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+
+  private renderSweepLaserBeam(ctx: CanvasRenderingContext2D): void {
+    const accent = this.accentColor();
+    const a = this.currentSweepBeamAngle();
+    const reach = Math.hypot(this.arenaW, this.arenaH);
+    const endX = this.x + Math.cos(a) * reach;
+    const endY = this.y + Math.sin(a) * reach;
+    // Recovery fade — beam alpha eases to zero over the first
+    // SWEEP_LASER_RECOVERY_FADE_SEC of recovery.
+    let alpha = 1;
+    if (this.sweepLaserPhase === "recovery") {
+      alpha = Math.max(
+        0,
+        1 - this.sweepLaserTimer / SWEEP_LASER_RECOVERY_FADE_SEC,
+      );
+    }
+    if (alpha <= 0) return;
+    ctx.save();
+    // Outer glow layer
+    ctx.strokeStyle = accent;
+    ctx.lineWidth = 24;
+    ctx.globalAlpha = 0.15 * alpha;
+    ctx.beginPath();
+    ctx.moveTo(this.x, this.y);
+    ctx.lineTo(endX, endY);
+    ctx.stroke();
+    // Mid layer
+    ctx.lineWidth = 14;
+    ctx.globalAlpha = 0.4 * alpha;
+    ctx.beginPath();
+    ctx.moveTo(this.x, this.y);
+    ctx.lineTo(endX, endY);
+    ctx.stroke();
+    // Hot core
+    ctx.strokeStyle = "#ffffff";
+    ctx.lineWidth = 6;
+    ctx.globalAlpha = 1 * alpha;
+    ctx.beginPath();
+    ctx.moveTo(this.x, this.y);
+    ctx.lineTo(endX, endY);
+    ctx.stroke();
+    ctx.restore();
   }
 
   private renderStreamers(ctx: CanvasRenderingContext2D): void {
@@ -2146,6 +2791,8 @@ export class Sentinel implements Enemy {
     // Outer ring with a glow halo — alpha tracks bodyGlowAlpha for
     // the breath sync. Whole hex stack is wrapped in bodyOpacity so
     // it ghosts during Ring Burst detach / vulnerable / reassemble.
+    // The hex frame strokes track the active phase accent.
+    const hexAccent = this.accentColor();
     ctx.save();
     ctx.rotate(this.rotation);
     ctx.globalAlpha = this.bodyOpacity;
@@ -2154,25 +2801,25 @@ export class Sentinel implements Enemy {
       () => {
         ctx.globalAlpha = bodyGlowAlpha * this.bodyOpacity;
         strokeHexagon(ctx, OUTER_VERTS, pulseScale);
-        ctx.strokeStyle = SENTINEL_COLOR;
+        ctx.strokeStyle = hexAccent;
         ctx.lineWidth = 3;
         ctx.stroke();
         ctx.globalAlpha = this.bodyOpacity;
       },
-      SENTINEL_COLOR,
+      hexAccent,
       this.radialPhase === "telegraph" ? 40 : 22,
       10,
     );
 
     ctx.globalAlpha = 0.7 * this.bodyOpacity;
     strokeHexagon(ctx, MIDDLE_VERTS, pulseScale);
-    ctx.strokeStyle = SENTINEL_COLOR;
+    ctx.strokeStyle = hexAccent;
     ctx.lineWidth = 2;
     ctx.stroke();
 
     ctx.globalAlpha = 0.5 * this.bodyOpacity;
     strokeHexagon(ctx, INNER_VERTS, pulseScale);
-    ctx.strokeStyle = SENTINEL_COLOR;
+    ctx.strokeStyle = hexAccent;
     ctx.lineWidth = 1.5;
     ctx.stroke();
     ctx.globalAlpha = 1;
@@ -2218,7 +2865,15 @@ export class Sentinel implements Enemy {
         1) /
         2) *
         (RB_OUTER_PULSE_ALPHA_MAX - RB_OUTER_PULSE_ALPHA_MIN);
-    const outerDepth = inRingBurst ? OUTER_RING_DEPTH_RB : OUTER_RING_DEPTH;
+    const accent = this.accentColor();
+    const outerDepthBase = inRingBurst ? OUTER_RING_DEPTH_RB : OUTER_RING_DEPTH;
+    // Spread the per-phase accent over the outer-ring depth config
+    // so the bright + bloom strokes shift hue with the phase. Markers
+    // in RB stay white for legibility; outside RB markers track
+    // accent so the colour doesn't fight the shell.
+    const outerDepth: RingDepth = inRingBurst
+      ? { ...outerDepthBase, brightColor: accent, bloomColor: accent }
+      : { ...outerDepthBase, brightColor: accent, markerColor: accent };
     this.renderDepthRing(
       ctx,
       this.ringRadiusOuter,
@@ -2230,13 +2885,14 @@ export class Sentinel implements Enemy {
     // Mid + inner: blend bright config with dimmed config based on
     // dimRamp. Color snaps to dim at start of detach (alpha is
     // also low at that point so the snap isn't loud); alpha
-    // additionally cross-fades via two renderDepthRing passes.
+    // additionally cross-fades via two renderDepthRing passes. Mid
+    // ring's bright colour shifts per phase via midRingColor().
     if (dimRamp < 1) {
       this.renderDepthRing(
         ctx,
         this.ringRadiusMid,
         this.ringStates[1],
-        MID_RING_DEPTH,
+        { ...MID_RING_DEPTH, brightColor: this.midRingColor() },
         1 - dimRamp,
       );
     }

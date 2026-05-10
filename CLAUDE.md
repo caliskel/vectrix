@@ -646,12 +646,44 @@ transitions for score + Game Complete.
   hitbox + 60 px so the lemniscate can't kiss the walls, and a
   hard `[hitbox, arena − hitbox]` clamp backs it up. Movement
   only ticks in these two combat states (intro and dying both
-  hold the boss still). The boss runs **three parallel attack
-  sub-machines**. Radial Burst and Aimed Shot Trio share a
+  hold the boss still).
+
+  **Phases.** `bossPhase` (1 / 2 / 3) tracks the active "act" of
+  the fight. Boundaries: phase 1 covers HP 30→20, phase 2 covers
+  HP 20→10, phase 3 covers HP 10→0. `PHASE_CADENCE` (1.0 / 0.80 /
+  0.65) multiplies every attack cooldown so phase 2 fires ~25 %
+  faster, phase 3 ~54 % faster — internal telegraph / fire /
+  recovery beats stay readable, only the gaps shrink. Each phase
+  also shifts the body / outer-ring / hex-stroke accent
+  (`#ff3344` → `#ff5511` → `#ff2266`) and the mid-ring colour
+  (`#ff5577` → `#ff7733` → `#ff5588`). The eye keeps `#ffaa22`
+  in every phase — it's the "opportunity" cue, untouched.
+
+  **Phase transition** (2 s, invulnerable, frozen). Triggers when
+  HP crosses a boundary AND every attack sub-machine is idle (so
+  in-flight attacks finish first). Cinematic beats:
+  - 0–300 ms hitstop: timeScale 1 → 0.15, 6 px shake, white body
+    flash.
+  - 300–1200 ms build: timeScale eases 0.15 → 0.4, accent-coloured
+    rings emit every 100 ms (r 30 → 200), shake ramps 2 → 8 px.
+  - 1200–1500 ms climax: timeScale 0.4 → 1, 12 px shake,
+    32-particle radial spray (16 white + 16 new accent),
+    `bossPhase` increments here, HP-bar marker for the crossed
+    threshold flashes for 300 ms, audio fires `hitHeavy + alert`.
+  - 1500–2000 ms settle: accent + mid-ring colour lerp from old
+    palette to new over 500 ms via `lerpHex`.
+  At 2000 ms `phaseTransition === null`; combat resumes with the
+  new phase's cadence. `takeDamage` rejects all input while
+  `phaseTransition !== null` so the boss is invulnerable through
+  the cinematic.
+
+  The boss runs **three parallel attack sub-machines** in phase
+  1, four in phase 2+. Radial Burst and Aimed Shot Trio share a
   non-overlap rule (whichever is non-idle freezes the other's
   cooldown; ready-longer wins when both are idle). **Ring Burst
-  pre-empts both** — its non-idle phases freeze the radial /
-  aimed timers entirely:
+  + Sweep Laser pre-empt both** — their non-idle phases freeze
+  the radial / aimed timers entirely. Ring Burst pre-empts Sweep
+  Laser as well (RB is highest priority).
   - **Radial Burst** — 1.4 s total cycle: 0.4 s telegraph +
     single firing frame (12 bullets fanned at 350 px/s) +
     0.3 s recovery + 0.65 s idle gap. Spawns from the live
@@ -673,6 +705,18 @@ transitions for score + Game Complete.
     the lock moment a 80 ms solid-line snap-flash confirms "angle
     locked, bullets coming." Each fired bullet pops an 8-particle
     muzzle flash at the boss centre.
+  - **Sweep Laser** — phase 2+ only. 800 ms telegraph (full-arena
+    sector preview at 0.10 ↔ 0.20 alpha pulse + dashed start-line
+    + small direction triangle marking CW vs CCW), 1500 ms firing
+    (single 6 px white-core + 14 px / 24 px outer-glow beam,
+    rotates a full 180° from the captured start angle in the
+    chosen direction; ±0.04 rad collision band, 1 HP on contact,
+    dash i-frames pass through), 400 ms recovery (200 ms beam
+    fade + 200 ms tail). Cooldown `SWEEP_LASER_BASE_COOLDOWN_SEC
+    = 5 s × PHASE_CADENCE`. Beam emits one short white particle
+    every 50 ms travelling outward at 600 px/s so the energy
+    reads as streaming. Ring Burst pre-empts the sweep timer; the
+    sweep's own non-idle phases freeze radial / aimed.
   - **Ring Burst** — phase 1's defining mechanic. The three
     shells detach + expand, the body goes ghosted, and the eye
     becomes the only damage path. Sub-state machine
@@ -754,7 +798,11 @@ transitions for score + Game Complete.
   pipeline. The same flag is reused by RB ring contact during
   detach / vulnerable / reassemble. The HP bar sits below the
   HUD block (HUD_BOTTOM_Y + 24 px pad) so the ROOM/HP/SCORE row
-  never overlaps the boss bar.
+  never overlaps the boss bar. The bar carries two thin vertical
+  ticks at HP 20 and HP 10 — phase boundaries — that flash from
+  alpha 0.4 → 1.0 → 0.4 over 300 ms when the matching transition
+  fires. Sentinel exposes `phaseMarkerFlashTimer1to2` and
+  `phaseMarkerFlashTimer2to3` for rooms-game to read.
 - **dying** (6050 ms): triggered by `takeDamage` driving HP to
   0. `shouldFreezeWorld()` is true again — the death cinematic
   is the focus. `Sentinel.timeScale` ramps `1.0 → 0.3` over the
@@ -1141,14 +1189,15 @@ settings overlay on Esc / Tab.
 
 ### TODO (rooms direction)
 
-- **Sentinel boss** — Phase 1 now has three attacks: radial
-  burst, aimed shot trio, and Ring Burst (the defining
-  mechanic — body ghosts, rings detach, eye opens). Intro and
-  dying cinematics are wired end-to-end. Next iterations layer
-  phase 2 / phase 3 (sweep laser, charge, minion spawns),
-  inter-attack pacing tweaks, and proper layered audio for the
-  Ring Burst telegraph + eye-hit cue (currently reusing
-  `alert` / `hitHeavy`).
+- **Sentinel boss** — Phases 1 + 2 ship: phase 1 has three attacks
+  (radial / aimed / Ring Burst), phase 2 adds Sweep Laser, the
+  cadence multiplier ramp + the 2 s phase-transition cinematic
+  are wired across both boundaries. Phase 3 (HP 10→0) is
+  reachable and runs at 0.65× cadence, but its dedicated attacks
+  (charge + minion spawn) land in the next iteration. Boss audio
+  for sweep laser / phase transition / Ring Burst telegraph still
+  reuses `alert` / `hitHeavy` placeholders — proper layered
+  synths are next-up.
 - **Key icon visual polish** — the `drawKey` glyph is a diamond
   + stem; readable but a bit primitive. A more iconic key shape
   (or a proper sprite) would improve the HUD slot too.
