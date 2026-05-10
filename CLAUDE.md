@@ -713,6 +713,34 @@ transitions for score + Game Complete.
     `sentinel.timeScale = 0.15` for 80 ms — so the world freezes
     a beat around each successful eye dash. Audio reuses
     `hitHeavy` + `alert` for layered shimmer.
+
+    **Visual hierarchy during vulnerable / reassemble:**
+    - **Eye** is the brightest element. Vulnerable adds a wide
+      `#ffaa22` halo (r 44, lw 14) pulsing alpha 0.20 ↔ 0.45
+      synced to the breath, beefier ext glow, a soft white pupil
+      glow, neutral-white pupil fill, and an asymmetric breath
+      cycle 0.90 ↔ 1.18 (mid 1.04). On detach → vulnerable a
+      one-shot golden attention pulse expands r 24 → 110 over
+      600 ms.
+    - **Outer ring** triple-stack (`#ff3344` bloom 14 px alpha
+      0.12 + `#660022` shadow 10 px + `#ff4455` bright 5 px)
+      with `#ffffff` 6 px markers spanning 40°, plus a slow
+      bright-stroke alpha sub-pulse (period 1.1 s, range
+      0.85 ↔ 1.0) so the only damaging shell visually shouts
+      "danger here."
+    - **Mid + inner** desaturate to `#8a2030` / `#5a1020` at
+      0.40 / 0.30 alpha (markers correspondingly dim) so they
+      read as background decoration. The cross-fade is driven
+      by `dimRamp` 0..1 driven by `easeInOutCubic` across detach
+      + reassemble — bright depth + dim depth are rendered with
+      complementary alphas so the transition is smooth.
+    - **Body** opacity drops to 0.12 in vulnerable (lerps to /
+      from across detach + reassemble). Almost-ghost silhouette
+      stays just visible enough for orientation.
+    - **Reticle**: four N/E/S/W triangles around the eye centre.
+      Idle params (red, alpha 0.4, base size) outside the burst;
+      vulnerable bumps them to gold (`#ffaa22`), full alpha,
+      ×1.4 scale — reads as "target acquired" brackets.
   **Contact damage** outside RB: touching the boss body (radius
   110, the outer shell) deals 1 HP, gated by player i-frames
   and dash i-frames — Sentinel.update sets a `requestPlayerHit`

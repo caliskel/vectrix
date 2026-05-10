@@ -170,6 +170,18 @@ type RingDepth = {
   brightAlpha: number;
   markerColor: string;
   markerLineWidth: number;
+  /** Optional alpha multiplier on the markers (used to dim mid /
+   *  inner ring markers during vulnerable). 1 if omitted. */
+  markerAlpha?: number;
+  /** Optional outermost bloom layer drawn first — wider line, low
+   *  alpha. Currently used by the outer ring during Ring Burst to
+   *  read as the only damaging shell. */
+  bloomColor?: string;
+  bloomLineWidth?: number;
+  bloomAlpha?: number;
+  /** Marker arc width in radians. Defaults to RING_MARKER_ARC_RAD
+   *  (30°). Outer ring during RB widens to 40° for emphasis. */
+  markerArcRad?: number;
   maxAngularVel: number; // rad/s — the random target sample range
 };
 const OUTER_RING_DEPTH: RingDepth = {
@@ -182,6 +194,52 @@ const OUTER_RING_DEPTH: RingDepth = {
   markerColor: "#ff7788",
   markerLineWidth: 4,
   maxAngularVel: 0.8,
+};
+// Outer ring during Ring Burst — triple-stack with an outermost
+// bloom + brighter `#ff4455` core + bigger `#ffffff` markers so the
+// only damaging shell visually shouts "danger here."
+const OUTER_RING_DEPTH_RB: RingDepth = {
+  shadowColor: "#660022",
+  shadowLineWidth: 10,
+  shadowAlpha: 0.3,
+  brightColor: "#ff4455",
+  brightLineWidth: 5,
+  brightAlpha: 1.0,
+  markerColor: "#ffffff",
+  markerLineWidth: 6,
+  markerArcRad: (Math.PI * 40) / 180,
+  bloomColor: "#ff3344",
+  bloomLineWidth: 14,
+  bloomAlpha: 0.12,
+  maxAngularVel: 0.8,
+};
+// Mid + inner during vulnerable / reassemble — desaturated and
+// faded so they read as visual decoration, not threats. Body of
+// rendering uses these instead of the default depth configs while
+// `dimMidInner` is true.
+const MID_RING_DEPTH_DIM: RingDepth = {
+  shadowColor: "#1a0810",
+  shadowLineWidth: 4,
+  shadowAlpha: 0.6,
+  brightColor: "#8a2030",
+  brightLineWidth: 2,
+  brightAlpha: 0.4,
+  markerColor: "#8a2030",
+  markerLineWidth: 2.5,
+  markerAlpha: 0.5,
+  maxAngularVel: 1.2,
+};
+const INNER_RING_DEPTH_DIM: RingDepth = {
+  shadowColor: "#100008",
+  shadowLineWidth: 3,
+  shadowAlpha: 0.5,
+  brightColor: "#5a1020",
+  brightLineWidth: 1.5,
+  brightAlpha: 0.3,
+  markerColor: "#5a1020",
+  markerLineWidth: 1.5,
+  markerAlpha: 0.4,
+  maxAngularVel: 1.6,
 };
 const MID_RING_DEPTH: RingDepth = {
   shadowColor: "#4a0319",
@@ -249,15 +307,58 @@ const RB_RING_EXPANDED_OUTER = 180;
 const RB_RING_EXPANDED_MID = 130;
 const RB_RING_EXPANDED_INNER = 95;
 
-const RB_BODY_OPACITY_GHOSTED = 0.25;
+// Body almost vanishes in the vulnerable window so it can't compete
+// with the eye for attention — the silhouette is still readable
+// for orientation but barely.
+const RB_BODY_OPACITY_GHOSTED = 0.12;
 const RB_TELEGRAPH_JITTER_PX = 3;
 const RB_TELEGRAPH_GLOW_BOOST = 1.6;
 
 // Eye behaviour during vulnerable.
 const RB_EYE_HITBOX_RADIUS = 20;
 const RB_EYE_HIT_DAMAGE = 3;
-const RB_EYE_VULNERABLE_SCALE_AMPLITUDE = 0.09; // ≈ 0.91 ↔ 1.09
+// Eye breath in vulnerable: scale 0.90 ↔ 1.18 (±0.14 around 1.04).
+// Bigger amplitude than the idle eye breath so the open eye reads
+// as actively pulsing.
+const RB_EYE_VULNERABLE_SCALE_MID = 1.04;
+const RB_EYE_VULNERABLE_SCALE_AMPLITUDE = 0.14;
 const RB_EYE_VULNERABLE_SCALE_PERIOD_SEC = 0.7;
+// Outer halo painted around the eye in vulnerable — a third bloom
+// layer over the existing ext-glow stack, pulsing alpha so the
+// eye reads as a beacon.
+const RB_EYE_HALO_R = 44;
+const RB_EYE_HALO_LW = 14;
+const RB_EYE_HALO_ALPHA_MIN = 0.2;
+const RB_EYE_HALO_ALPHA_MAX = 0.45;
+// Pupil core soft glow drawn just behind the white core dots so the
+// pupil reads as a fuzzy hot point.
+const RB_EYE_PUPIL_GLOW_R = 14;
+const RB_EYE_PUPIL_GLOW_LW = 8;
+const RB_EYE_PUPIL_GLOW_ALPHA = 0.12;
+// Attention pulse — single ring spawned on detach → vulnerable so
+// the player's eye snaps to the boss centre at the moment the eye
+// opens.
+const RB_ATTENTION_PULSE_R0 = 24;
+const RB_ATTENTION_PULSE_R1 = 110;
+const RB_ATTENTION_PULSE_LW0 = 6;
+const RB_ATTENTION_PULSE_LW1 = 1;
+const RB_ATTENTION_PULSE_LIFETIME_SEC = 0.6;
+const RB_ATTENTION_PULSE_COLOR = "#ffaa22";
+// Slow alpha sub-pulse on the outer ring's bright stroke — different
+// period from the eye so the two don't beat in sync.
+const RB_OUTER_PULSE_PERIOD_SEC = 1.1;
+const RB_OUTER_PULSE_ALPHA_MIN = 0.85;
+const RB_OUTER_PULSE_ALPHA_MAX = 1.0;
+// Reticle: 4 triangles N/E/S/W around the eye. Always visible, but
+// idle (red, dim, small) vs vulnerable (gold, bright, +40% scale).
+const RETICLE_BASE_RADIUS = 30; // distance from eye centre to triangle base
+const RETICLE_HEIGHT = 8; // triangle height
+const RETICLE_HALF_WIDTH = 5; // base half-width
+const RETICLE_IDLE_COLOR = "#ff3344";
+const RETICLE_IDLE_ALPHA = 0.4;
+const RETICLE_VULNERABLE_COLOR = "#ffaa22";
+const RETICLE_VULNERABLE_ALPHA = 1.0;
+const RETICLE_VULNERABLE_SCALE = 1.4;
 const RB_EYE_HITSTOP_SEC = 0.08;
 const RB_EYE_HITSTOP_TIMESCALE = 0.15;
 
@@ -358,6 +459,44 @@ function nextRingRetargetMs(): number {
  *  [-π, π]. Used by the aimed-shot tracker so a chase across the
  *  ±π discontinuity goes the short way around (across the seam)
  *  instead of unwinding 2π through the far side. */
+/** Draws a small filled isoceles triangle whose apex points at the
+ *  eye centre. Used for the four reticle markers; `pointing`
+ *  describes which direction the apex faces. */
+function drawReticleTriangle(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  height: number,
+  halfBase: number,
+  pointing: "up" | "down" | "left" | "right",
+): void {
+  ctx.beginPath();
+  switch (pointing) {
+    case "down":
+      ctx.moveTo(cx, cy + height);
+      ctx.lineTo(cx - halfBase, cy);
+      ctx.lineTo(cx + halfBase, cy);
+      break;
+    case "up":
+      ctx.moveTo(cx, cy - height);
+      ctx.lineTo(cx - halfBase, cy);
+      ctx.lineTo(cx + halfBase, cy);
+      break;
+    case "left":
+      ctx.moveTo(cx - height, cy);
+      ctx.lineTo(cx, cy - halfBase);
+      ctx.lineTo(cx, cy + halfBase);
+      break;
+    case "right":
+      ctx.moveTo(cx + height, cy);
+      ctx.lineTo(cx, cy - halfBase);
+      ctx.lineTo(cx, cy + halfBase);
+      break;
+  }
+  ctx.closePath();
+  ctx.fill();
+}
+
 function shortestAngleDiff(target: number, current: number): number {
   const TWO_PI = Math.PI * 2;
   let d = (target - current) % TWO_PI;
@@ -1133,6 +1272,21 @@ export class Sentinel implements Enemy {
           this.bodyOpacity = RB_BODY_OPACITY_GHOSTED;
           this.ringBurstPhase = "vulnerable";
           this.rbTimer = 0;
+          // Attention pulse — single golden ring expanding from the
+          // eye outward, snaps the player's attention to the boss
+          // centre at the moment the eye becomes a target.
+          ctxRoom.rings.push({
+            x: this.x,
+            y: this.y,
+            age: 0,
+            lifetime: RB_ATTENTION_PULSE_LIFETIME_SEC,
+            startR: RB_ATTENTION_PULSE_R0,
+            endR: RB_ATTENTION_PULSE_R1,
+            color: RB_ATTENTION_PULSE_COLOR,
+            startLineWidth: RB_ATTENTION_PULSE_LW0,
+            endLineWidth: RB_ATTENTION_PULSE_LW1,
+            glowBlur: 18,
+          });
         }
         break;
       }
@@ -1684,32 +1838,57 @@ export class Sentinel implements Enemy {
     radius: number,
     rotState: { angle: number },
     depth: RingDepth,
+    /** Multiplier on every alpha in this depth (bloom / shadow /
+     *  bright / marker). Used by the Ring Burst transitions to
+     *  fade mid + inner rings smoothly across detach + reassemble
+     *  without snapping. 1 if omitted. */
+    alphaMul = 1,
+    /** Optional override of the bright-stroke alpha (after the
+     *  alphaMul multiplier). Outer ring uses this for its slow
+     *  sub-pulse so the depth config can stay declarative. */
+    brightAlphaOverride?: number,
   ): void {
     ctx.save();
     ctx.rotate(rotState.angle);
-    // Shadow stroke first — gives the ring perceived thickness.
+    // Optional outermost bloom — a wider, dimmer halo painted before
+    // the shadow so it reads as a soft glow around the ring.
+    if (
+      depth.bloomColor !== undefined &&
+      depth.bloomLineWidth !== undefined &&
+      depth.bloomAlpha !== undefined
+    ) {
+      ctx.beginPath();
+      ctx.arc(0, 0, radius, 0, Math.PI * 2);
+      ctx.strokeStyle = depth.bloomColor;
+      ctx.lineWidth = depth.bloomLineWidth;
+      ctx.globalAlpha = depth.bloomAlpha * alphaMul;
+      ctx.stroke();
+    }
+    // Shadow stroke — gives the ring perceived thickness.
     ctx.beginPath();
     ctx.arc(0, 0, radius, 0, Math.PI * 2);
     ctx.strokeStyle = depth.shadowColor;
     ctx.lineWidth = depth.shadowLineWidth;
-    ctx.globalAlpha = depth.shadowAlpha;
+    ctx.globalAlpha = depth.shadowAlpha * alphaMul;
     ctx.stroke();
     // Bright stroke on top.
     ctx.beginPath();
     ctx.arc(0, 0, radius, 0, Math.PI * 2);
     ctx.strokeStyle = depth.brightColor;
     ctx.lineWidth = depth.brightLineWidth;
-    ctx.globalAlpha = depth.brightAlpha;
+    const brightBase = brightAlphaOverride ?? depth.brightAlpha;
+    ctx.globalAlpha = brightBase * alphaMul;
     ctx.stroke();
     // Three rotation-tracking arc markers — without them a perfect
     // circle reads as static even when angle is changing.
     ctx.strokeStyle = depth.markerColor;
     ctx.lineWidth = depth.markerLineWidth;
-    ctx.globalAlpha = 1;
+    ctx.globalAlpha = (depth.markerAlpha ?? 1) * alphaMul;
+    const markerArc = depth.markerArcRad ?? RING_MARKER_ARC_RAD;
     for (let i = 0; i < RING_MARKER_COUNT; i++) {
       const start = (i / RING_MARKER_COUNT) * Math.PI * 2;
       ctx.beginPath();
-      ctx.arc(0, 0, radius, start, start + RING_MARKER_ARC_RAD);
+      ctx.arc(0, 0, radius, start, start + markerArc);
       ctx.stroke();
     }
     ctx.globalAlpha = 1;
@@ -1723,10 +1902,11 @@ export class Sentinel implements Enemy {
     let breathScale: number;
     let extGlowAlpha: number;
     if (vulnerable) {
-      // Vulnerable amplification — bigger pulse on a faster phase
-      // and a fully-on amber rim to read as "shoot here."
+      // Vulnerable amplification — bigger asymmetric pulse around
+      // RB_EYE_VULNERABLE_SCALE_MID = 1.04 (so the eye sits a bit
+      // larger than rest), full amber rim alpha.
       breathScale =
-        1 +
+        RB_EYE_VULNERABLE_SCALE_MID +
         Math.sin(this.eyeVulnerablePulsePhase) *
           RB_EYE_VULNERABLE_SCALE_AMPLITUDE;
       extGlowAlpha = 1;
@@ -1744,22 +1924,67 @@ export class Sentinel implements Enemy {
     ctx.save();
     ctx.scale(breathScale, breathScale);
 
+    // === Vulnerable-only outermost halo (bloom) ===
+    // Drawn FIRST (outermost-first) so the rest of the eye stack
+    // paints over it. Pulses alpha 0.20 ↔ 0.45 in lockstep with
+    // the breath cycle.
+    if (vulnerable) {
+      const haloAlpha =
+        RB_EYE_HALO_ALPHA_MIN +
+        ((Math.sin(this.eyeVulnerablePulsePhase) + 1) / 2) *
+          (RB_EYE_HALO_ALPHA_MAX - RB_EYE_HALO_ALPHA_MIN);
+      ctx.beginPath();
+      ctx.arc(0, 0, RB_EYE_HALO_R, 0, Math.PI * 2);
+      ctx.strokeStyle = "#ffaa22";
+      ctx.lineWidth = RB_EYE_HALO_LW;
+      ctx.globalAlpha = haloAlpha;
+      ctx.stroke();
+    }
+
     for (let i = 0; i < EYE_LAYERS.length; i++) {
       const layer = EYE_LAYERS[i];
+      // Vulnerable per-layer overrides — boost ext glow + amber rim
+      // and switch the warm pupil to neutral white so the contrast
+      // against the gold rim reads cleanly.
+      let stroke = layer.stroke;
+      let fill = layer.fill;
+      let lineWidth = layer.lineWidth;
+      let alpha = i === 0 ? extGlowAlpha : (layer.alpha ?? 1);
+      if (vulnerable) {
+        if (i === 0) {
+          // ext glow — wider lineWidth + breath-driven brighter alpha
+          lineWidth = 9;
+          alpha = 0.1 + 0.15 * ((Math.sin(this.eyeVulnerablePulsePhase) + 1) / 2);
+        } else if (i === 1) {
+          // amber rim — thicker + more saturated colour
+          lineWidth = 2.5;
+          stroke = "#ffbb33";
+        } else if (i === 7) {
+          // pupil fill — pure white, no warm cream
+          fill = "#ffffff";
+        }
+      }
       ctx.beginPath();
       ctx.arc(0, 0, layer.r, 0, Math.PI * 2);
-      // First (outermost) layer's alpha is driven by breath so the
-      // glow brightens with the inhale.
-      const alpha =
-        i === 0 ? extGlowAlpha : (layer.alpha ?? 1);
       ctx.globalAlpha = alpha;
-      if (layer.fill) {
-        ctx.fillStyle = layer.fill;
+      if (fill) {
+        ctx.fillStyle = fill;
         ctx.fill();
       }
-      if (layer.stroke && layer.lineWidth) {
-        ctx.strokeStyle = layer.stroke;
-        ctx.lineWidth = layer.lineWidth;
+      if (stroke && lineWidth) {
+        ctx.strokeStyle = stroke;
+        ctx.lineWidth = lineWidth;
+        ctx.stroke();
+      }
+      // After the inner-ring layer (index 4) but before the white
+      // hot cores (5+), paint a soft fuzzy pupil glow so the
+      // pupil-vicinity reads as a hot point in vulnerable.
+      if (vulnerable && i === 4) {
+        ctx.beginPath();
+        ctx.arc(0, 0, RB_EYE_PUPIL_GLOW_R, 0, Math.PI * 2);
+        ctx.strokeStyle = "#ffffff";
+        ctx.lineWidth = RB_EYE_PUPIL_GLOW_LW;
+        ctx.globalAlpha = RB_EYE_PUPIL_GLOW_ALPHA;
         ctx.stroke();
       }
     }
@@ -1779,6 +2004,37 @@ export class Sentinel implements Enemy {
       ctx.stroke();
     }
 
+    ctx.globalAlpha = 1;
+    ctx.restore();
+
+    // Reticle — four triangles N/E/S/W around the eye (un-scaled by
+    // breath; they tag the boss centre, not the eye geometry).
+    this.renderReticle(ctx);
+  }
+
+  /** Four-triangle reticle around the eye centre. Idle: red, dim,
+   *  small. Vulnerable: gold, full alpha, +40% scale — reads as
+   *  "target acquired" brackets. Drawn outside the breath-scaled
+   *  ctx so size doesn't pump with the eye. */
+  private renderReticle(ctx: CanvasRenderingContext2D): void {
+    const vulnerable = this.ringBurstPhase === "vulnerable";
+    const color = vulnerable ? RETICLE_VULNERABLE_COLOR : RETICLE_IDLE_COLOR;
+    const alpha = vulnerable ? RETICLE_VULNERABLE_ALPHA : RETICLE_IDLE_ALPHA;
+    const scale = vulnerable ? RETICLE_VULNERABLE_SCALE : 1;
+    const r = RETICLE_BASE_RADIUS * scale;
+    const h = RETICLE_HEIGHT * scale;
+    const hw = RETICLE_HALF_WIDTH * scale;
+    ctx.save();
+    ctx.fillStyle = color;
+    ctx.globalAlpha = alpha;
+    // N (apex inward, toward eye centre)
+    drawReticleTriangle(ctx, 0, -r, h, hw, "down");
+    // S
+    drawReticleTriangle(ctx, 0, r, h, hw, "up");
+    // E
+    drawReticleTriangle(ctx, r, 0, h, hw, "left");
+    // W
+    drawReticleTriangle(ctx, -r, 0, h, hw, "right");
     ctx.globalAlpha = 1;
     ctx.restore();
   }
@@ -1869,24 +2125,94 @@ export class Sentinel implements Enemy {
     ctx.restore();
 
     // === Three independently-rotating depth rings ===
+    //
+    // Visual hierarchy in Ring Burst (detach / vulnerable /
+    // reassemble): outer ring switches to a triple-stack with a
+    // bloom + brighter `#ff4455` core (the only damaging shell);
+    // mid + inner cross-fade to a desaturated `#8a2030` /
+    // `#5a1020` palette at 0.40 / 0.30 alpha so they don't
+    // compete for attention. The fade is driven by `dimRamp`
+    // 0..1: 0 in idle / attacking / telegraph / recovery, ramps
+    // 0→1 across detach, holds 1 in vulnerable, ramps 1→0 across
+    // reassemble. Using a multiplicative alpha factor instead of
+    // a hard switch makes the cross-fade smooth.
+    const rbPhase = this.ringBurstPhase;
+    const inRingBurst =
+      rbPhase === "detach" ||
+      rbPhase === "vulnerable" ||
+      rbPhase === "reassemble";
+    let dimRamp = 0;
+    if (rbPhase === "detach") {
+      dimRamp = easeInOutCubic(
+        Math.min(1, this.rbTimer / RB_DETACH_SEC),
+      );
+    } else if (rbPhase === "vulnerable") {
+      dimRamp = 1;
+    } else if (rbPhase === "reassemble") {
+      dimRamp =
+        1 -
+        easeInOutCubic(Math.min(1, this.rbTimer / RB_REASSEMBLE_SEC));
+    }
+    // Outer slow pulse — different period from the eye breath so
+    // they don't beat in lockstep.
+    const outerPulseAlpha =
+      RB_OUTER_PULSE_ALPHA_MIN +
+      ((Math.sin(
+        (this.combatElapsedSec * Math.PI * 2) /
+          RB_OUTER_PULSE_PERIOD_SEC,
+      ) +
+        1) /
+        2) *
+        (RB_OUTER_PULSE_ALPHA_MAX - RB_OUTER_PULSE_ALPHA_MIN);
+    const outerDepth = inRingBurst ? OUTER_RING_DEPTH_RB : OUTER_RING_DEPTH;
     this.renderDepthRing(
       ctx,
       this.ringRadiusOuter,
       this.ringStates[0],
-      OUTER_RING_DEPTH,
+      outerDepth,
+      1,
+      outerPulseAlpha,
     );
-    this.renderDepthRing(
-      ctx,
-      this.ringRadiusMid,
-      this.ringStates[1],
-      MID_RING_DEPTH,
-    );
-    this.renderDepthRing(
-      ctx,
-      this.ringRadiusInner,
-      this.ringStates[2],
-      INNER_RING_DEPTH,
-    );
+    // Mid + inner: blend bright config with dimmed config based on
+    // dimRamp. Color snaps to dim at start of detach (alpha is
+    // also low at that point so the snap isn't loud); alpha
+    // additionally cross-fades via two renderDepthRing passes.
+    if (dimRamp < 1) {
+      this.renderDepthRing(
+        ctx,
+        this.ringRadiusMid,
+        this.ringStates[1],
+        MID_RING_DEPTH,
+        1 - dimRamp,
+      );
+    }
+    if (dimRamp > 0) {
+      this.renderDepthRing(
+        ctx,
+        this.ringRadiusMid,
+        this.ringStates[1],
+        MID_RING_DEPTH_DIM,
+        dimRamp,
+      );
+    }
+    if (dimRamp < 1) {
+      this.renderDepthRing(
+        ctx,
+        this.ringRadiusInner,
+        this.ringStates[2],
+        INNER_RING_DEPTH,
+        1 - dimRamp,
+      );
+    }
+    if (dimRamp > 0) {
+      this.renderDepthRing(
+        ctx,
+        this.ringRadiusInner,
+        this.ringStates[2],
+        INNER_RING_DEPTH_DIM,
+        dimRamp,
+      );
+    }
 
     // Fragments orbiting the outer vertices — counter-rotation.
     // Same body-opacity gate as the shells so they vanish together
