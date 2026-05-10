@@ -31,17 +31,24 @@ import {
   type Pickup,
 } from "../lib/pickups";
 import {
+  type PlayerProfile,
   createPlayer,
   drawPlayerEye,
   eyeOnHit,
   eyeStartClosing,
   findNearestThreat,
+  loadPlayerProfile,
   resetEyeState,
   triggerPlayerSmash,
   updateEye,
 } from "../lib/player";
 
 const settings: Settings = loadSettings();
+// Player profile (skin) — separate from in-mode settings, lives in
+// localStorage and is shared with tutorial / rooms so the player's
+// chosen colours follow them between modes. Loaded once at start;
+// the editor lives on the landing page.
+const profile: PlayerProfile = loadPlayerProfile();
 const save = () => saveSettings(settings);
 
 // volumes are applied lazily — audio.init() runs on the first user gesture,
@@ -147,16 +154,6 @@ window.addEventListener("keydown", (e) => {
   // init() is idempotent — only the first call costs anything.
   audio.init();
   const code = normalizeCode(e.code);
-  // TEMP DEBUG — walk-binding bug diagnosis (sandbox)
-  // eslint-disable-next-line no-console
-  console.log(
-    "[input keydown sandbox]",
-    "raw=", e.code,
-    "normalized=", code,
-    "walkBinding=", settings.bindings.walk,
-    "match=", code === settings.bindings.walk,
-    "repeat=", e.repeat,
-  );
 
   if (menu.isCapturing()) {
     e.preventDefault();
@@ -710,10 +707,12 @@ function spawnTrailParticles(speed: number, isDash: boolean) {
   const perpX = -dirY;
   const perpY = dirX;
 
-  // current player render color
+  // Dash sparks pull from the player's profile so the customisation
+  // survives between modes. Idle / walk colours stay on settings —
+  // those are sandbox tunables, not part of the cross-mode skin.
   let color: string;
   if (player.dashTime > 0 || player.dashIframeTime > 0) {
-    color = settings.player.colorDash;
+    color = profile.dashParticles;
   } else if (keys.has(settings.bindings.walk)) {
     color = settings.player.colorWalk;
   } else {
@@ -1020,25 +1019,9 @@ function frame(now: number) {
     player.vx *= damp;
     player.vy *= damp;
     const maxSpeed = settings.player.maxSpeed;
-    const walking = keys.has(settings.bindings.walk);
-    const cap = walking
+    const cap = keys.has(settings.bindings.walk)
       ? maxSpeed * settings.player.walkFactor
       : maxSpeed;
-    // TEMP DEBUG — walk cap diagnosis (sandbox). Once per ~30 frames.
-    if (Math.random() < 0.033) {
-      // eslint-disable-next-line no-console
-      console.log(
-        "[walk cap sandbox]",
-        "walking=", walking,
-        "walkBinding=", settings.bindings.walk,
-        "keysHasShift=", keys.has("Shift"),
-        "keysHasShiftLeft=", keys.has("ShiftLeft"),
-        "keys=", Array.from(keys),
-        "walkFactor=", settings.player.walkFactor,
-        "cap=", cap.toFixed(1),
-        "vx=", player.vx.toFixed(1),
-      );
-    }
     const sp = Math.hypot(player.vx, player.vy);
     if (sp > cap) {
       const k = cap / sp;
@@ -1471,6 +1454,7 @@ function render() {
       pupilColor,
       ghostColor: settings.player.colorDash,
       dashDurationSec: settings.dash.durationMs / 1000,
+      profile,
     });
   }
 

@@ -903,25 +903,9 @@ export function start(canvas: HTMLCanvasElement): void {
       const damp = Math.exp(-FRICTION * dt);
       player.vx *= damp;
       player.vy *= damp;
-      const walking = keys.has(settings.bindings.walk);
-      const cap = walking
+      const cap = keys.has(settings.bindings.walk)
         ? settings.player.maxSpeed * settings.player.walkFactor
         : settings.player.maxSpeed;
-      // TEMP DEBUG — walk cap diagnosis (rooms). Once per ~30 frames.
-      if (Math.random() < 0.033) {
-        // eslint-disable-next-line no-console
-        console.log(
-          "[walk cap rooms]",
-          "walking=", walking,
-          "walkBinding=", settings.bindings.walk,
-          "keysHasShift=", keys.has("Shift"),
-          "keysHasShiftLeft=", keys.has("ShiftLeft"),
-          "keys=", Array.from(keys),
-          "walkFactor=", settings.player.walkFactor,
-          "cap=", cap.toFixed(1),
-          "vx=", player.vx.toFixed(1),
-        );
-      }
       const sp = Math.hypot(player.vx, player.vy);
       if (sp > cap) {
         const k = cap / sp;
