@@ -2,7 +2,6 @@ import { audio } from "../audio";
 import { makeBullet } from "../bullets";
 import { drawNeon } from "../neon";
 import { initAwareness } from "./awareness";
-import { Turret } from "./turret";
 import type {
   AwarenessState,
   Enemy,
@@ -674,42 +673,6 @@ const CHARGE_RECOVERY_FLASH_LW0 = 5;
 const CHARGE_RECOVERY_FLASH_LW1 = 0.5;
 const CHARGE_RECOVERY_FLASH_LIFETIME_SEC = 0.5;
 
-// === Phase 3 corner turrets ===
-// 4 stationary turrets spawned one-per-corner shortly after phase-3
-// entry, sequenced so the player reads "the corners are sealing
-// off" — domino effect rather than four-at-once. Killable, no
-// respawn; allied to the boss so its own bullets / sweep / radial
-// can't damage them.
-const CORNER_TURRET_INSET_PX = 100;
-// Delays (sec) from phase-3 entry — the dramatic hunter fires at
-// 0 s and each corner follows on a 400 ms cadence starting at
-// 200 ms (so the hunter has time to register visually before the
-// corners start sealing in).
-const CORNER_TURRET_SPAWN_DELAYS_SEC: [number, number, number, number] = [
-  0.2, 0.6, 1.0, 1.4,
-];
-const CORNER_TURRET_FIRE_INTERVAL_SEC = 1.5;
-const CORNER_TURRET_BULLET_SPEED = 200;
-// Bigger than the arena diagonal so the turret is permanently aggro
-// the moment its spawn-invuln window expires.
-const CORNER_TURRET_DETECTION_RADIUS = 2500;
-const CORNER_TURRET_SPAWN_INVULN_SEC = 0.7;
-const CORNER_TURRET_SPAWN_COLOR = "#ff6688";
-const CORNER_TURRET_SPAWN_RING_R0 = 15;
-const CORNER_TURRET_SPAWN_RING_R1 = 80;
-const CORNER_TURRET_SPAWN_RING_LW0 = 6;
-const CORNER_TURRET_SPAWN_RING_LW1 = 0.5;
-const CORNER_TURRET_SPAWN_PARTICLE_COUNT = 8;
-const CORNER_TURRET_SPAWN_PARTICLE_LIFETIME_SEC = 0.4;
-const CORNER_TURRET_SPAWN_PARTICLE_SPEED_MIN = 180;
-const CORNER_TURRET_SPAWN_PARTICLE_SPEED_MAX = 260;
-
-// === Cascade death cleanup ===
-// On `enterDying`, all alive corner turrets are scheduled for forced
-// kill so the Game Complete overlay doesn't open with leftover
-// enemies. 50 ms between each turret death.
-const CASCADE_KILL_TURRET_GAP_SEC = 0.05;
-
 // Energy burst — fired on the radial-burst telegraph → firing
 // transition. Two shockwave rings, a brief boss flash, and a
 // streamer puff out the boss centre.
@@ -873,11 +836,6 @@ function pointSegmentDistance(
   const projY = ay + dy * t;
   return Math.hypot(px - projX, py - projY);
 }
-
-// Reusable empty-list sentinels so the happy path (no work this
-// frame) doesn't allocate.
-const EMPTY_TURRET_LIST: Turret[] = [];
-const EMPTY_ENEMY_LIST: Enemy[] = [];
 
 export type SentinelState =
   | "intro"
@@ -1153,27 +1111,6 @@ export class Sentinel implements Enemy {
    *  enterChargeTelegraph; ticked down in tickCharge. */
   private chargeAppearFlashTimer = 0;
 
-  // === Phase 3 corner turrets ===
-  /** Latched true once the four corner-turret spawn requests are
-   *  queued at phase-3 entry. Guards against re-queueing if the
-   *  transition logic somehow ran twice. */
-  private cornerTurretsQueued = false;
-  private spawnedTurrets: Turret[] = [];
-  private pendingSpawnedTurrets: Turret[] = [];
-  /** Sequenced corner-turret spawn queue. Each entry counts down
-   *  in `tickCornerTurretSpawnQueue` and fires its spawn FX +
-   *  Turret instantiation when the delay hits zero. */
-  private cornerTurretSpawnQueue: { delay: number; x: number; y: number }[] =
-    [];
-
-  // === Cascade death cleanup ===
-  /** Forced kills queued at `enterDying` — alive corner turrets
-   *  get scheduled so the cascade plays through the start of the
-   *  death cinematic and leaves nothing alive on Game Complete.
-   *  Ticked from `update()` so the queue keeps draining through
-   *  the dying state (when updateCombat doesn't run). */
-  private cascadeKillQueue: { enemy: Enemy; delay: number }[] = [];
-  private pendingCascadeKills: Enemy[] = [];
   // Set true on a successful eye dash-through; tickRingBurst drains
   // it next frame so triggerEyeHitFeedback can fire with ctxRoom in
   // hand (tryDashDamage doesn't get ctxRoom in its signature).
@@ -1293,11 +1230,6 @@ export class Sentinel implements Enemy {
         // no-op; rooms-game shows Game Complete overlay
         break;
     }
-
-    // Cascade kill queue ticks regardless of state — populated only
-    // by enterDying, so it sits idle until the boss dies and then
-    // drains during the dying cinematic.
-    this.tickCascadeKills(realDt);
   }
 
   // -------- intro --------
@@ -1515,13 +1447,6 @@ export class Sentinel implements Enemy {
     this.tryStartSweepLaser(ctxRoom);
     this.tryStartAimedShot(ctxRoom);
     this.tryStartRadialBurst();
-
-    // === 4. Corner turret spawn — phase-3 entry domino.
-    // Cinematic-locked via the early return above; each entry
-    // counts down its own delay and fires spawn FX + turret
-    // instantiation when it hits zero. Runs in parallel with
-    // attacks (NOT mutual-exclusion-gated).
-    this.tickCornerTurretSpawnQueue(ctxRoom, dt);
 
     // Reflect activity back into the public state field — rooms-game
     // reads this for HP-bar visibility / kill-credit transitions.
@@ -2338,12 +2263,6 @@ export class Sentinel implements Enemy {
         this.phaseMarkerFlashTimer1to2 = PHASE_TRANSITION_HP_MARKER_FLASH_SEC;
       } else {
         this.phaseMarkerFlashTimer2to3 = PHASE_TRANSITION_HP_MARKER_FLASH_SEC;
-        // Queue the four corner turrets — their delays start
-        // counting only after the cinematic ends (the queue is
-        // ticked from updateCombat, which early-returns while
-        // phaseTransition is non-null). Latched via
-        // cornerTurretsQueued so a re-entry can't re-queue.
-        this.queueCornerTurretSpawns();
       }
     }
 
@@ -2927,173 +2846,6 @@ export class Sentinel implements Enemy {
     audio.play.alert();
   }
 
-  /** Drained by rooms-game after the boss tick. Returns any
-   *  corner turrets that just materialised this frame so they can
-   *  join `currentRoom.enemies`. */
-  consumeSpawnedTurrets(): Turret[] {
-    if (this.pendingSpawnedTurrets.length === 0) return EMPTY_TURRET_LIST;
-    const out = this.pendingSpawnedTurrets;
-    this.pendingSpawnedTurrets = [];
-    return out;
-  }
-
-  /** Drained by rooms-game during the boss-death cascade. Returns
-   *  the alive corner turrets whose forced-kill timer just fired
-   *  this frame so rooms-game can run the standard emitEnemyKill +
-   *  destroyEnemy pipeline (impact FX + score + removal). */
-  consumeCascadeKills(): Enemy[] {
-    if (this.pendingCascadeKills.length === 0) return EMPTY_ENEMY_LIST;
-    const out = this.pendingCascadeKills;
-    this.pendingCascadeKills = [];
-    return out;
-  }
-
-  /** Schedule the four corner-turret spawn requests with a
-   *  staggered domino-effect delay. Called from the phase-2 → 3
-   *  transition climax; the actual tick happens once the cinematic
-   *  releases its grip on updateCombat. */
-  private queueCornerTurretSpawns(): void {
-    if (this.cornerTurretsQueued) return;
-    this.cornerTurretsQueued = true;
-    const inset = CORNER_TURRET_INSET_PX;
-    const corners: [number, number][] = [
-      [inset, inset],
-      [this.arenaW - inset, inset],
-      [inset, this.arenaH - inset],
-      [this.arenaW - inset, this.arenaH - inset],
-    ];
-    for (let i = 0; i < 4; i++) {
-      const [x, y] = corners[i];
-      this.cornerTurretSpawnQueue.push({
-        x,
-        y,
-        delay: CORNER_TURRET_SPAWN_DELAYS_SEC[i],
-      });
-    }
-  }
-
-  /** Tick the corner-turret spawn queue. Runs from updateCombat
-   *  (so phase-transition cinematic gates it the same way it
-   *  gates the mob spawn timer). */
-  private tickCornerTurretSpawnQueue(
-    ctxRoom: EnemyContext,
-    dt: number,
-  ): void {
-    if (this.cornerTurretSpawnQueue.length === 0) return;
-    const stillPending: typeof this.cornerTurretSpawnQueue = [];
-    for (const req of this.cornerTurretSpawnQueue) {
-      req.delay -= dt;
-      if (req.delay <= 0) {
-        this.spawnCornerTurret(ctxRoom, req.x, req.y);
-      } else {
-        stillPending.push(req);
-      }
-    }
-    this.cornerTurretSpawnQueue = stillPending;
-  }
-
-  /** Spawn a single corner turret — push FX immediately and
-   *  instantiate the Turret with its spawn-invuln window so the
-   *  ring/particles animate against a fading-in body. The Turret
-   *  is registered for rooms-game consumption right away (no
-   *  Hunter-style deferred instantiation); the spawn invuln
-   *  handles the "not yet a threat" window. */
-  private spawnCornerTurret(
-    ctxRoom: EnemyContext,
-    x: number,
-    y: number,
-  ): void {
-    ctxRoom.rings.push({
-      x,
-      y,
-      age: 0,
-      lifetime: CORNER_TURRET_SPAWN_INVULN_SEC,
-      startR: CORNER_TURRET_SPAWN_RING_R0,
-      endR: CORNER_TURRET_SPAWN_RING_R1,
-      color: CORNER_TURRET_SPAWN_COLOR,
-      startLineWidth: CORNER_TURRET_SPAWN_RING_LW0,
-      endLineWidth: CORNER_TURRET_SPAWN_RING_LW1,
-      glowBlur: 14,
-    });
-    for (let i = 0; i < CORNER_TURRET_SPAWN_PARTICLE_COUNT; i++) {
-      const a =
-        (i / CORNER_TURRET_SPAWN_PARTICLE_COUNT) * Math.PI * 2 +
-        Math.random() * 0.15;
-      const ps =
-        CORNER_TURRET_SPAWN_PARTICLE_SPEED_MIN +
-        Math.random() *
-          (CORNER_TURRET_SPAWN_PARTICLE_SPEED_MAX -
-            CORNER_TURRET_SPAWN_PARTICLE_SPEED_MIN);
-      ctxRoom.particles.push({
-        x,
-        y,
-        vx: Math.cos(a) * ps,
-        vy: Math.sin(a) * ps,
-        initialSize: 3,
-        color: CORNER_TURRET_SPAWN_COLOR,
-        age: 0,
-        lifetime: CORNER_TURRET_SPAWN_PARTICLE_LIFETIME_SEC,
-        glowStrong: 8,
-        glowSoft: 4,
-        drag: 0.92,
-      });
-    }
-    audio.play.alert();
-    const t = new Turret(x, y, {
-      startsAggressive: true,
-      fireIntervalSec: CORNER_TURRET_FIRE_INTERVAL_SEC,
-      bulletSpeed: CORNER_TURRET_BULLET_SPEED,
-      spawnInvulnerableSec: CORNER_TURRET_SPAWN_INVULN_SEC,
-    });
-    // Detection radius bigger than the arena diagonal so the turret
-    // is effectively always-aggro the moment its spawn-invuln
-    // window closes — it never falls back into idle drift.
-    t.detectionRadius = CORNER_TURRET_DETECTION_RADIUS;
-    this.spawnedTurrets.push(t);
-    this.pendingSpawnedTurrets.push(t);
-  }
-
-  /** Tick the cascade kill queue. Fires forced kills on schedule;
-   *  rooms-game drains pendingCascadeKills next frame and runs the
-   *  standard impact FX + score / removal pipeline. Runs from
-   *  update() so it keeps draining through the dying state. */
-  private tickCascadeKills(dt: number): void {
-    if (this.cascadeKillQueue.length === 0) return;
-    const stillPending: typeof this.cascadeKillQueue = [];
-    for (const req of this.cascadeKillQueue) {
-      req.delay -= dt;
-      if (req.delay <= 0) {
-        // Force kill — takeDamage(hp) drops it to 0 immediately
-        // even on enemies whose normal damage path is gated. Skip
-        // anything already dead (player got the kill before us).
-        if (!req.enemy.isDead()) {
-          // Force past any spawn-invuln window so corner turrets
-          // mid-materialisation still get cleaned up.
-          if ("spawnInvulnerableTime" in req.enemy) {
-            (req.enemy as { spawnInvulnerableTime: number })
-              .spawnInvulnerableTime = 0;
-          }
-          req.enemy.takeDamage(req.enemy.hp);
-          this.pendingCascadeKills.push(req.enemy);
-        }
-      } else {
-        stillPending.push(req);
-      }
-    }
-    this.cascadeKillQueue = stillPending;
-  }
-
-  /** Populate the cascade kill queue with the alive corner
-   *  turrets (50 ms between). Called once from `enterDying`. */
-  private populateCascadeKillQueue(): void {
-    const aliveTurrets = this.spawnedTurrets.filter((t) => !t.isDead());
-    let cursor = 0;
-    for (const t of aliveTurrets) {
-      this.cascadeKillQueue.push({ enemy: t, delay: cursor });
-      cursor += CASCADE_KILL_TURRET_GAP_SEC;
-    }
-  }
-
   private fireAimedBullet(ctxRoom: EnemyContext): void {
     const speed = AIMED_BULLET_SPEED;
     const cos = Math.cos(this.aimedAngle);
@@ -3177,14 +2929,6 @@ export class Sentinel implements Enemy {
     this.chargeImplosionFired = false;
     this.chargeRushingShakeFired = false;
     this.chargeHitLanded = false;
-    // Corner turret spawn queue stops — anything not yet spawned
-    // is dropped (the bay door is closed). Already-spawned turrets
-    // are caught by the cascade kill below.
-    this.cornerTurretSpawnQueue = [];
-    // Cascade-kill the alive corner turrets so Game Complete opens
-    // on a clean field. Hunters first (50 ms between), 100 ms gap,
-    // then turrets (50 ms between).
-    this.populateCascadeKillQueue();
     this.phaseTransition = null;
     this.phaseMarkerFlashTimer1to2 = -1;
     this.phaseMarkerFlashTimer2to3 = -1;
