@@ -1,5 +1,25 @@
 import {
   ENEMY_HUNTER_DETECTION,
+  HUNTER_IDLE_DART_ARRIVAL_DIST,
+  HUNTER_IDLE_DART_DURATION_MAX_MS,
+  HUNTER_IDLE_DART_DURATION_MIN_MS,
+  HUNTER_IDLE_FAR_CHANCE,
+  HUNTER_IDLE_FAR_DART_MAX,
+  HUNTER_IDLE_FAR_DART_MIN,
+  HUNTER_IDLE_GLOW_BLUR,
+  HUNTER_IDLE_HOME_RETURN_THRESHOLD,
+  HUNTER_IDLE_MAX_SPEED_FACTOR,
+  HUNTER_IDLE_MICRO_DRIFT_AMPLITUDE,
+  HUNTER_IDLE_MID_CHANCE,
+  HUNTER_IDLE_MID_DART_MAX,
+  HUNTER_IDLE_MID_DART_MIN,
+  HUNTER_IDLE_NEAR_CHANCE,
+  HUNTER_IDLE_NEAR_DART_MAX,
+  HUNTER_IDLE_NEAR_DART_MIN,
+  HUNTER_IDLE_PAUSE_DURATION_MAX_MS,
+  HUNTER_IDLE_PAUSE_DURATION_MIN_MS,
+  HUNTER_IDLE_PAUSE_VELOCITY_DAMPING,
+  HUNTER_IDLE_SPEED_LINE_THRESHOLD,
   HUNTER_TRAIL_BUFFER_SIZE,
   HUNTER_TRAIL_GLOW_BLUR,
   HUNTER_TRAIL_INTERVAL_MS,
@@ -76,6 +96,10 @@ type TrailSample = {
   age: number;
 };
 
+type IdlePhase = "darting" | "pausing";
+
+const HUNTER_IDLE_PAUSE_VELOCITY_SQ_THRESHOLD = 20 * 20;
+
 export class Hunter implements Enemy {
   readonly type: EnemyType = "hunter";
   readonly color = HUNTER_COLOR;
@@ -93,6 +117,20 @@ export class Hunter implements Enemy {
   awarenessState: AwarenessState = "idle";
   detectionRadius = ENEMY_HUNTER_DETECTION;
   alertTimer = 0;
+  // Idle behavior — playful darts around a home position. Latched on
+  // first construction; on idle → alerting transition we re-anchor to
+  // the current spot so a future de-aggro returns home to the alerted
+  // location, not the spawn.
+  private idleHomeX: number;
+  private idleHomeY: number;
+  private idleTargetX: number;
+  private idleTargetY: number;
+  private idlePhase: IdlePhase = "darting";
+  private idleTimer: number;
+  private idleMicroPhase = 0;
+  private pauseAnchorX = 0;
+  private pauseAnchorY = 0;
+  private prevAwarenessState: AwarenessState = "idle";
   private destroyed = false;
   vx = 0;
   vy = 0;
@@ -107,6 +145,11 @@ export class Hunter implements Enemy {
     this.x = x;
     this.y = y;
     this.hp = HUNTER_HP_MAX;
+    this.idleHomeX = x;
+    this.idleHomeY = y;
+    this.idleTargetX = x;
+    this.idleTargetY = y;
+    this.idleTimer = randomDartDuration();
     initAwareness(this, ENEMY_HUNTER_DETECTION);
   }
 
@@ -125,15 +168,33 @@ export class Hunter implements Enemy {
 
   update(ctxRoom: EnemyContext): void {
     if (this.destroyed) return;
-    if (this.awarenessState !== "aggro") {
-      // Sleeping / alerting — no chase, no trail. Velocity decays so
-      // a Hunter that was already moving when something resets it
-      // glides to a stop instead of teleporting.
+    const { dt, player } = ctxRoom;
+
+    // Latch idle home on idle → non-idle transition so a future
+    // de-aggro returns the Hunter to wherever it was alerted, not
+    // its original spawn.
+    if (
+      this.prevAwarenessState === "idle" &&
+      this.awarenessState !== "idle"
+    ) {
+      this.idleHomeX = this.x;
+      this.idleHomeY = this.y;
+    }
+    this.prevAwarenessState = this.awarenessState;
+
+    if (this.awarenessState === "alerting") {
+      // Telegraph window — Hunter holds position with a quick velocity
+      // decay so it gives the player a clear "I see you" beat before
+      // the pounce.
       this.vx *= 0.85;
       this.vy *= 0.85;
       return;
     }
-    const { dt, player } = ctxRoom;
+    if (this.awarenessState === "idle") {
+      this.tickIdle(ctxRoom);
+      return;
+    }
+
     this.maxSpeed = ctxRoom.playerMaxSpeed * HUNTER_SPEED_FACTOR;
 
     // Steer: accelerate toward the player. Inertia keeps the Hunter
@@ -201,14 +262,18 @@ export class Hunter implements Enemy {
       return;
     }
     // Trail draws under the body. Suppressed during the contact
-    // window so the bounce squash isn't competing with motion ghosts.
-    if (this.contactSquashTime <= 0) this.drawTrail(ctx);
+    // window so the bounce squash isn't competing with motion ghosts,
+    // and during idle so the calm darting reads visually distinct
+    // from the engaged chase.
+    const isAggro = this.awarenessState === "aggro";
+    if (isAggro && this.contactSquashTime <= 0) this.drawTrail(ctx);
     const speed = Math.hypot(this.vx, this.vy);
     const angle = speed > 0.01 ? Math.atan2(this.vy, this.vx) : 0;
     const speedNorm =
       this.maxSpeed > 0 ? Math.min(1, speed / this.maxSpeed) : 0;
-    const glowBlur =
-      GLOW_BLUR_MIN + (GLOW_BLUR_MAX - GLOW_BLUR_MIN) * speedNorm;
+    const glowBlur = isAggro
+      ? GLOW_BLUR_MIN + (GLOW_BLUR_MAX - GLOW_BLUR_MIN) * speedNorm
+      : HUNTER_IDLE_GLOW_BLUR;
 
     ctx.save();
     applyAwarenessJitter(ctx, this);
@@ -227,21 +292,26 @@ export class Hunter implements Enemy {
     }
 
     // Speed lines — drawn first so the body overlays them. Anchored
-    // behind the polygon (negative X in local space).
-    const lines = speed > SPEED_LINE_THRESHOLD ? SPEED_LINES_HIGH : SPEED_LINES_LOW;
-    ctx.save();
-    ctx.strokeStyle = HUNTER_COLOR;
-    ctx.lineWidth = 2;
-    ctx.shadowColor = HUNTER_COLOR;
-    ctx.shadowBlur = 6;
-    ctx.globalAlpha = 0.55;
-    for (const [yOff, len] of lines) {
-      ctx.beginPath();
-      ctx.moveTo(-22, yOff);
-      ctx.lineTo(-22 - len, yOff);
-      ctx.stroke();
+    // behind the polygon (negative X in local space). Hidden when
+    // the body is barely moving (e.g., idle pausing) so a stationary
+    // Hunter doesn't sport visible streaks.
+    if (speed > HUNTER_IDLE_SPEED_LINE_THRESHOLD) {
+      const lines =
+        speed > SPEED_LINE_THRESHOLD ? SPEED_LINES_HIGH : SPEED_LINES_LOW;
+      ctx.save();
+      ctx.strokeStyle = HUNTER_COLOR;
+      ctx.lineWidth = 2;
+      ctx.shadowColor = HUNTER_COLOR;
+      ctx.shadowBlur = 6;
+      ctx.globalAlpha = 0.55;
+      for (const [yOff, len] of lines) {
+        ctx.beginPath();
+        ctx.moveTo(-22, yOff);
+        ctx.lineTo(-22 - len, yOff);
+        ctx.stroke();
+      }
+      ctx.restore();
     }
-    ctx.restore();
 
     // Inner translucent fill
     ctx.save();
@@ -289,6 +359,128 @@ export class Hunter implements Enemy {
     this.dashIdAlreadyDamaged = dashId;
     this.takeDamage(1);
     return true;
+  }
+
+  /**
+   * Idle dart-and-pause cycle. Hunter accelerates toward an
+   * `idleTarget` for a randomized window, then damps to a stop and
+   * sits with a tiny micro-drift before picking a new target. Uses
+   * the same inertia model as combat but at HUNTER_IDLE_MAX_SPEED_FACTOR
+   * (35 %) of full speed and emits no trail.
+   */
+  private tickIdle(ctxRoom: EnemyContext): void {
+    const { dt } = ctxRoom;
+    this.idleTimer -= dt;
+    const idleMaxSpeed =
+      ctxRoom.playerMaxSpeed * HUNTER_SPEED_FACTOR * HUNTER_IDLE_MAX_SPEED_FACTOR;
+
+    if (this.idlePhase === "darting") {
+      const dx = this.idleTargetX - this.x;
+      const dy = this.idleTargetY - this.y;
+      const dist = Math.hypot(dx, dy);
+      if (dist > 1e-3) {
+        const inv = 1 / dist;
+        this.vx += dx * inv * HUNTER_ACCEL * dt;
+        this.vy += dy * inv * HUNTER_ACCEL * dt;
+      }
+      const sp = Math.hypot(this.vx, this.vy);
+      if (sp > idleMaxSpeed) {
+        const k = idleMaxSpeed / sp;
+        this.vx *= k;
+        this.vy *= k;
+      }
+      if (dist < HUNTER_IDLE_DART_ARRIVAL_DIST || this.idleTimer <= 0) {
+        this.idlePhase = "pausing";
+        this.idleTimer = randomPauseDuration();
+        this.pauseAnchorX = this.x;
+        this.pauseAnchorY = this.y;
+      }
+    } else {
+      // pausing — damp + micro-drift around the anchor
+      const damping = Math.pow(
+        HUNTER_IDLE_PAUSE_VELOCITY_DAMPING,
+        dt * 60,
+      );
+      this.vx *= damping;
+      this.vy *= damping;
+      this.idleMicroPhase += dt;
+      if (
+        this.vx * this.vx + this.vy * this.vy <
+        HUNTER_IDLE_PAUSE_VELOCITY_SQ_THRESHOLD
+      ) {
+        // re-anchor lerp toward an oscillating target so the body
+        // looks like it's hovering, not frozen
+        const mx =
+          Math.sin(this.idleMicroPhase * 1.3) *
+          HUNTER_IDLE_MICRO_DRIFT_AMPLITUDE;
+        const my =
+          Math.cos(this.idleMicroPhase * 1.7) *
+          HUNTER_IDLE_MICRO_DRIFT_AMPLITUDE;
+        const target = { x: this.pauseAnchorX + mx, y: this.pauseAnchorY + my };
+        const k = 1 - Math.exp(-3 * dt);
+        this.x += (target.x - this.x) * k;
+        this.y += (target.y - this.y) * k;
+        this.vx = 0;
+        this.vy = 0;
+      }
+      if (this.idleTimer <= 0) {
+        this.idlePhase = "darting";
+        this.idleTimer = randomDartDuration();
+        // If the Hunter has wandered far from home, return there
+        // instead of picking a random target — keeps it from
+        // drifting across the room.
+        const hdx = this.x - this.idleHomeX;
+        const hdy = this.y - this.idleHomeY;
+        if (
+          hdx * hdx + hdy * hdy >
+          HUNTER_IDLE_HOME_RETURN_THRESHOLD * HUNTER_IDLE_HOME_RETURN_THRESHOLD
+        ) {
+          this.idleTargetX = this.idleHomeX;
+          this.idleTargetY = this.idleHomeY;
+        } else {
+          this.pickIdleTarget(ctxRoom.walls);
+        }
+      }
+    }
+    this.x += this.vx * dt;
+    this.y += this.vy * dt;
+    resolveEntityWallCollisions(this, ctxRoom.walls, HUNTER_HITBOX_RADIUS);
+  }
+
+  /**
+   * Pick a tier-weighted random angle/distance from idleHome. Up to
+   * four attempts to land on a target that doesn't bury the Hunter
+   * in a wall AABB; on failure, fall back to home.
+   */
+  private pickIdleTarget(walls: import("../walls").Wall[]): void {
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const angle = Math.random() * Math.PI * 2;
+      const tier = Math.random();
+      let dMin: number;
+      let dMax: number;
+      if (tier < HUNTER_IDLE_NEAR_CHANCE) {
+        dMin = HUNTER_IDLE_NEAR_DART_MIN;
+        dMax = HUNTER_IDLE_NEAR_DART_MAX;
+      } else if (tier < HUNTER_IDLE_NEAR_CHANCE + HUNTER_IDLE_MID_CHANCE) {
+        dMin = HUNTER_IDLE_MID_DART_MIN;
+        dMax = HUNTER_IDLE_MID_DART_MAX;
+      } else {
+        dMin = HUNTER_IDLE_FAR_DART_MIN;
+        dMax = HUNTER_IDLE_FAR_DART_MAX;
+      }
+      // small assertion for the tier compile-time check
+      void HUNTER_IDLE_FAR_CHANCE;
+      const dist = dMin + Math.random() * (dMax - dMin);
+      const tx = this.idleHomeX + Math.cos(angle) * dist;
+      const ty = this.idleHomeY + Math.sin(angle) * dist;
+      if (!pointTouchesWall(tx, ty, walls, HUNTER_HITBOX_RADIUS)) {
+        this.idleTargetX = tx;
+        this.idleTargetY = ty;
+        return;
+      }
+    }
+    this.idleTargetX = this.idleHomeX;
+    this.idleTargetY = this.idleHomeY;
   }
 
   onContactDamage(): void {
@@ -339,4 +531,35 @@ function polyPath(ctx: CanvasRenderingContext2D): void {
     ctx.lineTo(POLY[i][0], POLY[i][1]);
   }
   ctx.closePath();
+}
+
+function randomDartDuration(): number {
+  const min = HUNTER_IDLE_DART_DURATION_MIN_MS / 1000;
+  const max = HUNTER_IDLE_DART_DURATION_MAX_MS / 1000;
+  return min + Math.random() * (max - min);
+}
+
+function randomPauseDuration(): number {
+  const min = HUNTER_IDLE_PAUSE_DURATION_MIN_MS / 1000;
+  const max = HUNTER_IDLE_PAUSE_DURATION_MAX_MS / 1000;
+  return min + Math.random() * (max - min);
+}
+
+function pointTouchesWall(
+  x: number,
+  y: number,
+  walls: import("../walls").Wall[],
+  r: number,
+): boolean {
+  for (const w of walls) {
+    if (
+      x + r > w.x &&
+      x - r < w.x + w.w &&
+      y + r > w.y &&
+      y - r < w.y + w.h
+    ) {
+      return true;
+    }
+  }
+  return false;
 }

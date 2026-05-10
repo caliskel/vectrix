@@ -614,6 +614,26 @@ Inertial chaser — fast, fragile, can't turn instantly.
   right after `takeHit()` in the contact loop.
 - Death: orange ring, 16 orange particles 300–450 px/s,
   `bulletBreak` cue, `console.log("Hunter destroyed")`.
+- **Idle behavior** — while `awarenessState === "idle"` the Hunter
+  cycles a dart-and-pause pattern around a latched
+  `idleHomeX/Y`. Phase A (`darting`, 400–700 ms) accelerates
+  toward `idleTarget` using the regular inertia model but capped
+  at `HUNTER_IDLE_MAX_SPEED_FACTOR = 0.35` of full chase speed;
+  Phase B (`pausing`, 300–900 ms) damps via
+  `HUNTER_IDLE_PAUSE_VELOCITY_DAMPING = 0.92` per 60 fps frame
+  and once nearly stopped runs a tiny ±8 px micro-drift around
+  the pause anchor so the body looks like it's hovering, not
+  frozen. Each new dart picks a tier-weighted distance from home
+  (50 % near 60–150 px, 35 % mid 150–280 px, 15 % far 280–400
+  px) at a random angle, retrying up to four times if the target
+  buries inside a wall AABB. If the Hunter ever drifts more
+  than 350 px from home it forces the next target back to home.
+  Visually: trail emission is gated to aggro only, glow drops to
+  `HUNTER_IDLE_GLOW_BLUR = 10`, and speed lines are hidden under
+  60 px/s — the chase visuals stay reserved for engagement.
+  `idleHome` re-anchors on idle → alerting transition so a
+  future de-aggro returns to wherever it was alerted, not the
+  spawn. Constants live in `config.ts` under `HUNTER_IDLE_*`.
 
 ### Lasers (`lib/enemies/types.ts`)
 
