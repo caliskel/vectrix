@@ -51,7 +51,7 @@ export function buildRoom3(): Room {
       "closed",
       true, // requiresKey
     ),
-    nextRoomId: "room4",
+    nextRoomId: "room2",
     spawnX: 150,
     spawnY: 400,
     width: ROOM_W,

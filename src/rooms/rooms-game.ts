@@ -1704,15 +1704,17 @@ export function start(canvas: HTMLCanvasElement): void {
 
     ctx.font = "600 22px ui-monospace, SFMono-Regular, Menlo, monospace";
     ctx.fillStyle = "#ffffff";
-    // Campaign rooms: room1 → "1 / 3", room2 → "2 / 3", room3 →
-    // "3 / 3". The room4 placeholder is past the campaign so the
+    // Campaign progression: corridor → trap → arena. File ids stay
+    // as built (room1 / room3 / room2) but their slot in the
+    // campaign maps to: room1 → 1, room3 (trap) → 2, room2 (arena)
+    // → 3. The room4 placeholder is past the campaign so the
     // counter holds at 3 / 3.
     const roomNum =
       currentRoom.id === "room1"
         ? 1
-        : currentRoom.id === "room2"
+        : currentRoom.id === "room3"
           ? 2
-          : currentRoom.id === "room3"
+          : currentRoom.id === "room2"
             ? 3
             : ROOM_TOTAL;
     ctx.fillText(`${roomNum} / ${ROOM_TOTAL}`, colA, y0 + 14);

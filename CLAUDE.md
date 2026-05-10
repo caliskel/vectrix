@@ -54,8 +54,11 @@ src/
     main.ts           — entry; locates #app and calls start()
     rooms-game.ts     — campaign engine; locks behind the tutorial and
                         currently runs Room 1 (corridor) + Room 2
-                        (arena) + Room 3 (narrow trap) + Room 4
-                        placeholder
+                        (narrow trap) + Room 3 (arena) + Room 4
+                        placeholder. Build files are room1.ts /
+                        room2.ts (arena content) / room3.ts (trap
+                        content) / room4.ts; the campaign order
+                        chains room1 → room3 → room2 → room4.
     room1.ts / room2.ts / room3.ts / room4.ts
   tutorial/
     main.ts           — entry for /tutorial.html
@@ -503,10 +506,40 @@ Long horizontal corridor — first room that needs the follow camera.
   whether the surviving turrets / Watcher are still alive (the
   carrier kill is the gate, stragglers don't block the exit).
   On unlock: door switches to "open" arrow, +5 mult-up sting,
-  → Room 2.
+  → Room 2 (the trap, file `room3.ts`).
 
-### Room 2 — arena with circular defence
+### Room 2 — narrow trap
 
+Built in `room3.ts` (file id `"room3"`) but scheduled second in
+the campaign for difficulty pacing. 1200×800 with a Hunter that's
+hostile from the first frame and two crossfire turrets. The
+encounter teaches constant motion: the turret pair on (600, 150)
+/ (600, 650) carves the central horizontal so standing on the
+door's y-line catches both streams, and the Hunter's inertia
+punishes idle holds.
+
+- **Turret #1** at (600, 150), **Turret #2** at (600, 650) —
+  vanilla Turrets (HP 2). Their bullets cross at the spawn line
+  (y = 400) so the player has to weave instead of strafing
+  along the centre.
+- **Hunter** at (900, 400) constructed with `{ startsAggressive:
+  true }`. The flag is a Hunter-ctor option that initialises
+  `awarenessState = "aggro"` and `prevAwarenessState = "aggro"`,
+  skipping the idle / alerting telegraph entirely so the chase
+  starts on entry. Hunter carries the key (`dropsKey = true`,
+  HP 1).
+- Door at (1185, 400) is `requiresKey: true`. Per the global
+  rule, it opens on the key alone — so a clean dash through
+  the Hunter (kill, pickup, exit) finishes the room without
+  ever firing on the turrets. Slower play kills turrets first
+  to open the centre, then deals with the Hunter.
+- `useCamera = true`, spawn at (150, 400). `nextRoomId =
+  "room2"` (the arena file).
+
+### Room 3 — arena with circular defence
+
+Built in `room2.ts` (file id `"room2"`) but scheduled third in
+the campaign — last real encounter before the Room 4 placeholder.
 1400×900 fully open arena. No internal cover; the player has to
 manage distance and angles instead of peeking around a column.
 
@@ -526,38 +559,12 @@ manage distance and angles instead of peeking around a column.
   centre. Door at (1385, 450) is `requiresKey: true` and opens
   on the key alone (the corner turrets can stay alive — the
   Watcher kill is the gate). `useCamera = true` (1400×900 ≥
-  1200×800 viewport letterbox). Spawn at (200, 450). On unlock
-  → Room 3 placeholder.
+  1200×800 viewport letterbox). Spawn at (200, 450). `nextRoomId
+  = "room4"` (placeholder).
 - If the open layout reads as too punishing later, dropping one
   or two 50×200 columns back near the centre is the cheapest
   next step; the bullet/laser clipping was tested with columns
   in place and works regardless.
-
-### Room 3 — narrow trap
-
-1200×800 with a Hunter that's hostile from the first frame and
-two crossfire turrets. The encounter teaches constant motion:
-the turret pair on (600, 150) / (600, 650) carves the central
-horizontal so standing on the door's y-line catches both
-streams, and the Hunter's inertia punishes idle holds.
-
-- **Turret #1** at (600, 150), **Turret #2** at (600, 650) —
-  vanilla Turrets (HP 2). Their bullets cross at the spawn line
-  (y = 400) so the player has to weave instead of strafing
-  along the centre.
-- **Hunter** at (900, 400) constructed with `{ startsAggressive:
-  true }`. The flag is a Hunter-ctor option that initialises
-  `awarenessState = "aggro"` and `prevAwarenessState = "aggro"`,
-  skipping the idle / alerting telegraph entirely so the chase
-  starts on entry. Hunter carries the key (`dropsKey = true`,
-  HP 1).
-- Door at (1185, 400) is `requiresKey: true`. Per the global
-  rule, it opens on the key alone — so a clean dash through
-  the Hunter (kill, pickup, exit) finishes the room without
-  ever firing on the turrets. Slower play kills turrets first
-  to open the centre, then deals with the Hunter.
-- `useCamera = true`, spawn at (150, 400).
-  `nextRoomId = "room4"`.
 
 ### Room 4 (placeholder)
 
