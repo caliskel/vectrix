@@ -4,3 +4,4 @@ dist
 *.local
 .vite
 .claude/settings.local.json
+.compound-engineering/*.local.yaml
