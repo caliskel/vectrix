@@ -101,6 +101,14 @@ const FLINCH_SQUASH_SEC = 0.06;
 const FLINCH_SQUASH_Y = 0.94;
 const DASH_GHOST_INTERVAL_SEC = DASH_GHOST_INTERVAL_MS / 1000;
 const DASH_GHOST_LIFETIME_SEC = DASH_GHOST_LIFETIME_MS / 1000;
+// Recharge indicator — partial arc visible while the cooldown is
+// ticking. The "READY" flash is a single short ring expanding outward
+// the frame the cooldown hits zero.
+const COOLDOWN_RING_RADIUS_FACTOR = 0.9;
+const COOLDOWN_RING_LINEWIDTH = 2;
+const COOLDOWN_RING_ALPHA = 0.6;
+const COOLDOWN_READY_FLASH_SEC = 0.2;
+const COOLDOWN_READY_FLASH_END_RADIUS_FACTOR = 1.4;
 const DASH_PEAK_SEC = DASH_STRETCH_PEAK_PHASE_MS / 1000;
 const DASH_END_SEC = DASH_STRETCH_END_PHASE_MS / 1000;
 const IDLE_CALM_DOWN_SEC = IDLE_LOOK_CALM_DOWN_MS / 1000;
@@ -239,6 +247,14 @@ export type Player = {
   dashTime: number;
   dashIframeTime: number;
   cooldown: number;
+  /** Last frame's `cooldown` value, used to detect the cooldown→0
+   *  transition that fires the "READY" flash on the recharge ring. */
+  prevCooldown: number;
+  /** Countdown for the "dash ready" flash ring. Set to a small
+   *  positive duration (≈0.2 s) on the moment cooldown hits zero;
+   *  decays per frame. The recharge-indicator helper reads this to
+   *  draw an expanding alpha-fading ring as a clean "go" signal. */
+  cooldownReadyFlash: number;
   dashDirX: number;
   dashDirY: number;
   // ----- eye state -----
@@ -299,6 +315,8 @@ export function createPlayer(): Player {
     dashTime: 0,
     dashIframeTime: 0,
     cooldown: 0,
+    prevCooldown: 0,
+    cooldownReadyFlash: 0,
     dashDirX: 0,
     dashDirY: 0,
     pupilOffsetX: 0,
@@ -365,6 +383,8 @@ export function resetEyeState(p: Player): void {
   p.smashNormalX = 1;
   p.smashNormalY = 0;
   p.smashCooldown = 0;
+  p.prevCooldown = 0;
+  p.cooldownReadyFlash = 0;
   p.breathPhase = Math.random() * Math.PI * 2;
   p.pupilDilation = PUPIL_DILATION_MAX;
   p.doubleBlinkPending = false;
@@ -558,6 +578,18 @@ export function updateEye(
     hitIframe?: number;
   },
 ): void {
+  // Dash cooldown → "READY" flash. Triggered exactly on the frame
+  // the cooldown drops to zero so the recharge ring puffs out a quick
+  // visual cue. The flash itself decays here regardless of whether a
+  // new cooldown started in the meantime — it's a one-shot.
+  if (p.prevCooldown > 0 && p.cooldown === 0) {
+    p.cooldownReadyFlash = COOLDOWN_READY_FLASH_SEC;
+  }
+  if (p.cooldownReadyFlash > 0) {
+    p.cooldownReadyFlash = Math.max(0, p.cooldownReadyFlash - dt);
+  }
+  p.prevCooldown = p.cooldown;
+
   // movement animations: lean, bob, squash + brake. Skipped when dashing
   // (dash owns its own deformation) — tilt eases back to 0 in that case.
   const speed = Math.hypot(p.vx, p.vy);
@@ -856,6 +888,10 @@ export type EyeRenderOpts = {
   pupilColor: string;
   ghostColor: string;
   dashDurationSec: number;
+  /** Total dash cooldown in seconds — drives the recharge ring +
+   *  "READY" flash drawn around the player. Omit to skip the
+   *  indicator entirely (used by the landing-page preview). */
+  dashCooldownSec?: number;
   /** Defaults to PALETTE.bg when neither this nor profile.iris is set. */
   irisColor?: string;
   /** Halo (neon shadow) override around the outer ring. When omitted,
@@ -1178,6 +1214,22 @@ export function drawPlayerEye(
   }
 
   ctx.restore();
+
+  // Dash recharge indicator — drawn at world coords (outside the
+  // per-eye transform stack) so the ring stays axis-aligned and
+  // doesn't lean / squash with the body. Pulls the ring colour from
+  // profile.dashParticles when a profile is provided so the cue
+  // matches the trail / ghost colour family.
+  if (opts.dashCooldownSec !== undefined) {
+    const indicatorColor = opts.profile?.dashParticles ?? "#9ca3af";
+    drawDashCooldownIndicator(
+      ctx,
+      p,
+      size,
+      opts.dashCooldownSec,
+      indicatorColor,
+    );
+  }
 }
 
 function drawDashGhosts(
@@ -1258,6 +1310,58 @@ function drawDashGhosts(
       ctx.restore();
     }
 
+    ctx.restore();
+  }
+}
+
+/**
+ * Recharge indicator drawn around the player at world coords. Two
+ * components: a partial arc that fills clockwise from 12 o'clock as
+ * the cooldown ticks down, and a single 200 ms ring that expands
+ * outward + fades to nothing the moment the dash becomes available
+ * again. Skipped while the player is mid-dash (the dash visuals own
+ * that beat). Caller passes total cooldown so the helper doesn't
+ * need to know about Settings.
+ */
+function drawDashCooldownIndicator(
+  ctx: CanvasRenderingContext2D,
+  p: Player,
+  size: number,
+  cooldownTotalSec: number,
+  ringColor: string,
+): void {
+  if (p.dashTime > 0) return;
+  const baseR = (size / 2) * (COOLDOWN_RING_RADIUS_FACTOR * 2);
+  // Recharge arc — visible while a cooldown is active.
+  if (p.cooldown > 0 && cooldownTotalSec > 0) {
+    const t = Math.max(0, Math.min(1, 1 - p.cooldown / cooldownTotalSec));
+    ctx.save();
+    ctx.globalAlpha = COOLDOWN_RING_ALPHA;
+    ctx.strokeStyle = ringColor;
+    ctx.lineWidth = COOLDOWN_RING_LINEWIDTH;
+    ctx.beginPath();
+    ctx.arc(
+      p.x,
+      p.y,
+      baseR,
+      -Math.PI / 2,
+      -Math.PI / 2 + Math.PI * 2 * t,
+    );
+    ctx.stroke();
+    ctx.restore();
+  }
+  // Ready flash — single shot, expands and fades.
+  if (p.cooldownReadyFlash > 0) {
+    const t = 1 - p.cooldownReadyFlash / COOLDOWN_READY_FLASH_SEC;
+    const r =
+      baseR + (baseR * (COOLDOWN_READY_FLASH_END_RADIUS_FACTOR - 1)) * t;
+    ctx.save();
+    ctx.globalAlpha = (1 - t) * 0.85;
+    ctx.strokeStyle = ringColor;
+    ctx.lineWidth = COOLDOWN_RING_LINEWIDTH;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+    ctx.stroke();
     ctx.restore();
   }
 }

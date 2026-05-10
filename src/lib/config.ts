@@ -378,7 +378,7 @@ export const DEFAULT_SETTINGS: Settings = {
     distance: 120,
     durationMs: 120,
     iframesMs: 150,
-    cooldownMs: 400,
+    cooldownMs: 800,
   },
   run: {
     durationSec: 0,

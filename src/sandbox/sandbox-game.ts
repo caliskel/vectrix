@@ -1461,8 +1461,6 @@ function render() {
 
   // player — eye-orb with pupil tracking the nearest bullet
   const pSize = settings.player.size;
-  const dashing = player.dashTime > 0;
-  const cooling = player.cooldown > 0;
 
   let drawPlayer = true;
   if (state.hitIframeTime > 0) {
@@ -1480,22 +1478,12 @@ function render() {
       pupilColor: profile.pupil,
       ghostColor: profile.outerRing,
       dashDurationSec: settings.dash.durationMs / 1000,
+      dashCooldownSec: settings.dash.cooldownMs / 1000,
       profile,
       ...(state.effects.breaker
         ? { glowColor: PALETTE.pickupBreaker }
         : {}),
     });
-  }
-
-  if (cooling && !dashing) {
-    const r = pSize * 0.9;
-    const total = settings.dash.cooldownMs / 1000;
-    const t = total > 0 ? 1 - player.cooldown / total : 1;
-    ctx.strokeStyle = "rgba(170,170,170,0.85)";
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.arc(player.x, player.y, r, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * t);
-    ctx.stroke();
   }
 
   // shield ring around the player; cracks (gaps) reflect remaining charges

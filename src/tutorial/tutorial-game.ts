@@ -1971,6 +1971,7 @@ export function start(canvas: HTMLCanvasElement): void {
         pupilColor: profile.pupil,
         ghostColor: profile.outerRing,
         dashDurationSec: settings.dash.durationMs / 1000,
+        dashCooldownSec: settings.dash.cooldownMs / 1000,
         profile,
       });
     }
