@@ -678,12 +678,15 @@ transitions for score + Game Complete.
   the cinematic.
 
   The boss runs **three parallel attack sub-machines** in phase
-  1, four in phase 2+. Radial Burst and Aimed Shot Trio share a
-  non-overlap rule (whichever is non-idle freezes the other's
-  cooldown; ready-longer wins when both are idle). **Ring Burst
-  + Sweep Laser pre-empt both** — their non-idle phases freeze
-  the radial / aimed timers entirely. Ring Burst pre-empts Sweep
-  Laser as well (RB is highest priority).
+  1, four in phase 2+. **Mutual exclusion**: only one attack
+  sub-state machine can be in a non-idle phase at any moment.
+  While any attack is active, all other cooldown timers are
+  paused (so a long-running attack never lets others pile up
+  readiness mid-flight, which would fire the next attack
+  instantly on recovery end). Tie-break priority on simultaneous
+  cooldown expiry: **ring burst > sweep > aimed > radial** —
+  RB is the defining mechanic, sweep is the phase-2+ signature,
+  aimed is point threat, radial is filler.
   - **Radial Burst** — 1.4 s total cycle: 0.4 s telegraph +
     single firing frame (12 bullets fanned at 350 px/s) +
     0.3 s recovery + 0.65 s idle gap. Spawns from the live
@@ -715,8 +718,8 @@ transitions for score + Game Complete.
     fade + 200 ms tail). Cooldown `SWEEP_LASER_BASE_COOLDOWN_SEC
     = 5 s × PHASE_CADENCE`. Beam emits one short white particle
     every 50 ms travelling outward at 600 px/s so the energy
-    reads as streaming. Ring Burst pre-empts the sweep timer; the
-    sweep's own non-idle phases freeze radial / aimed.
+    reads as streaming. (Conflict resolution with the other three
+    attacks runs through the universal mutual-exclusion gate.)
   - **Ring Burst** — phase 1's defining mechanic. The three
     shells detach + expand, the body goes ghosted, and the eye
     becomes the only damage path. Sub-state machine

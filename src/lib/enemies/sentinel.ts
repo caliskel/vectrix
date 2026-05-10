@@ -1081,10 +1081,8 @@ export class Sentinel implements Enemy {
     // Track combat-state elapsed time so the first Ring Burst has
     // a grace period from the moment the player enters fight.
     this.combatElapsedSec += dt;
-    // Ring Burst takes priority over the other two attacks. Tick
-    // its phase machine first; while it's non-idle, radial / aimed
-    // sub-machines and their idle timers freeze.
-    this.tickRingBurst(ctxRoom, dt);
+
+    // Eye-hitstop timer (Ring Burst eye-hit feedback). Always decays.
     if (this.eyeHitstopTimer > 0) {
       this.eyeHitstopTimer = Math.max(0, this.eyeHitstopTimer - dt);
       this.timeScale =
@@ -1093,8 +1091,6 @@ export class Sentinel implements Enemy {
       // Restore default in combat states (dying owns its own ramp).
       this.timeScale = 1;
     }
-    const ringBurstActive = this.ringBurstPhase !== "idle";
-    const sweepActive = this.sweepLaserPhase !== "idle";
 
     // Aimed-shot snap-confirm flash decays unconditionally — it's a
     // transient visual, lives 80 ms after the telegraph locks.
@@ -1102,134 +1098,48 @@ export class Sentinel implements Enemy {
       this.aimedSnapTimer = Math.max(0, this.aimedSnapTimer - dt);
     }
 
-    // Sweep laser sub-machine — phase 2+ only. Ticks before the
-    // dual-attack scheduler so its non-idle phases freeze radial /
-    // aimed taimers (same rule as Ring Burst).
+    // === 1. Progress whichever attack is currently in flight ===
+    // Mutual exclusion guarantees at most one of these is non-idle,
+    // so the call order is irrelevant. Each tick* short-circuits on
+    // its own idle state — the cost of all four calls is a single
+    // branch when nothing is firing.
+    this.tickRingBurst(ctxRoom, dt);
     this.tickSweepLaser(ctxRoom, dt);
+    this.tickRadialBurst(ctxRoom, dt);
+    this.tickAimedShot(ctxRoom, dt);
 
-    // === Attack scheduling — dual sub-state machines ===
-    // Only one attack runs at a time. Whichever attack is in a
-    // non-idle phase blocks the other one's cooldown from ticking,
-    // so the boss reads as "doing one thing." When both are idle
-    // and at least one is ready, the one that's been ready longer
-    // wins (overshoot comparison). Ring Burst + Sweep Laser pre-empt
-    // both — their active phases freeze every other timer.
-    const radialBlocked =
-      this.aimedPhase !== "idle" || ringBurstActive || sweepActive;
-    const aimedBlocked =
-      this.radialPhase !== "idle" || ringBurstActive || sweepActive;
-
-    // ---- Radial sub-machine ----
-    if (!radialBlocked) {
-      if (this.radialPhase === "idle") {
-        this.radialIdleTimer += dt;
-      } else {
-        this.radialTimer += dt;
-        if (this.radialPhase === "telegraph" && this.radialTimer >= RADIAL_TELEGRAPH_SEC) {
-          this.radialPhase = "firing";
-          this.radialTimer = 0;
-          this.fireRadialBurst(ctxRoom);
-        } else if (this.radialPhase === "firing" && this.radialTimer >= RADIAL_FIRING_SEC) {
-          this.radialPhase = "recovery";
-          this.radialTimer = 0;
-        } else if (this.radialPhase === "recovery" && this.radialTimer >= RADIAL_RECOVERY_SEC) {
-          this.radialPhase = "idle";
-          this.radialTimer = 0;
-          this.radialIdleTimer = 0;
-        }
+    // === 2. Tick idle / cooldown timers — globally gated ===
+    // While ANY attack is active, every other attack's cooldown
+    // freezes. Symmetric replacement of the old "RB freezes radial
+    // + aimed" rule — applies uniformly to all four attacks so a
+    // long-running attack never lets others pile up readiness while
+    // it's mid-flight (otherwise the next attack would fire instantly
+    // on recovery end).
+    if (!this.isAnyAttackActive()) {
+      if (this.radialPhase === "idle") this.radialIdleTimer += dt;
+      if (this.aimedPhase === "idle") this.aimedIdleTimer += dt;
+      if (this.sweepLaserPhase === "idle") this.sweepLaserIdleTimer += dt;
+      if (this.ringBurstPhase === "idle" && this.rbCooldownTimer > 0) {
+        this.rbCooldownTimer = Math.max(0, this.rbCooldownTimer - dt);
       }
     }
 
-    // ---- Aimed sub-machine ----
-    if (!aimedBlocked) {
-      if (this.aimedPhase === "idle") {
-        this.aimedIdleTimer += dt;
-      } else {
-        this.aimedTimer += dt;
-        if (this.aimedPhase === "telegraph") {
-          // crawl the dashed-line offset so the line reads "live"
-          const span = AIMED_DASH_PATTERN[0] + AIMED_DASH_PATTERN[1];
-          this.aimedDashOffset =
-            (this.aimedDashOffset + AIMED_DASH_RATE * dt) % span;
-          // Track the player at a capped angular velocity.
-          const desired = Math.atan2(
-            ctxRoom.player.y - this.y,
-            ctxRoom.player.x - this.x,
-          );
-          const delta = shortestAngleDiff(
-            desired,
-            this.aimedTrackedAngle,
-          );
-          const maxStep = AIMED_MAX_ANGULAR_VEL * dt;
-          if (Math.abs(delta) > maxStep) {
-            this.aimedTrackedAngle += Math.sign(delta) * maxStep;
-          } else {
-            this.aimedTrackedAngle = desired;
-          }
-          if (this.aimedTimer >= AIMED_TELEGRAPH_SEC) {
-            // Lock the angle now — bullets all fire along this.
-            // Fire the snap-confirm flash so the player reads
-            // "the angle just locked."
-            this.aimedAngle = this.aimedTrackedAngle;
-            this.aimedSnapTimer = AIMED_SNAP_DURATION_SEC;
-            this.aimedPhase = "firing";
-            this.aimedTimer = 0;
-            this.aimedShotsFired = 0;
-          }
-        } else if (this.aimedPhase === "firing") {
-          // Spawn each bullet as its scheduled offset is crossed.
-          while (
-            this.aimedShotsFired < AIMED_BULLET_COUNT &&
-            this.aimedTimer >=
-              this.aimedShotsFired * AIMED_BULLET_INTERVAL_SEC
-          ) {
-            this.fireAimedBullet(ctxRoom);
-            this.aimedShotsFired += 1;
-          }
-          if (this.aimedTimer >= AIMED_FIRING_SEC) {
-            this.aimedPhase = "recovery";
-            this.aimedTimer = 0;
-          }
-        } else if (this.aimedPhase === "recovery") {
-          if (this.aimedTimer >= AIMED_RECOVERY_SEC) {
-            this.aimedPhase = "idle";
-            this.aimedTimer = 0;
-            this.aimedIdleTimer = 0;
-          }
-        }
-      }
-    }
-
-    // ---- Decide whether to start an attack now ----
-    // Cadence multiplier per phase — phase 2 fires 25% faster, phase
-    // 3 ~54% faster. Inner attack timings (telegraph / fire /
-    // recovery) stay readable; only the gaps between attacks shrink.
-    const cadence = PHASE_CADENCE[this.bossPhase];
-    if (this.radialPhase === "idle" && this.aimedPhase === "idle") {
-      const radialReadyAt = RADIAL_IDLE_GAP_SEC * cadence;
-      const aimedReadyAt = AIMED_COOLDOWN_SEC * cadence;
-      const radialReady = this.radialIdleTimer >= radialReadyAt;
-      const aimedReady = this.aimedIdleTimer >= aimedReadyAt;
-      if (radialReady || aimedReady) {
-        const radialOver = this.radialIdleTimer - radialReadyAt;
-        const aimedOver = this.aimedIdleTimer - aimedReadyAt;
-        if (radialReady && (!aimedReady || radialOver >= aimedOver)) {
-          this.radialPhase = "telegraph";
-          this.radialTimer = 0;
-        } else if (aimedReady) {
-          this.beginAimedShot(ctxRoom);
-        }
-      }
-    }
+    // === 3. Try to start an attack — priority-ordered ===
+    // Each tryStart* short-circuits if any attack is already active
+    // (including one started earlier in this same call chain), so on
+    // a tied cooldown expiry the first one in this list wins.
+    // Priority: ring burst > sweep > aimed > radial. RB is the
+    // defining mechanic — never skipped. Sweep is the phase-2+
+    // signature — important for escalation feel. Aimed is point
+    // threat. Radial is filler.
+    this.tryStartRingBurst();
+    this.tryStartSweepLaser(ctxRoom);
+    this.tryStartAimedShot(ctxRoom);
+    this.tryStartRadialBurst();
 
     // Reflect activity back into the public state field — rooms-game
     // reads this for HP-bar visibility / kill-credit transitions.
-    this.state =
-      this.radialPhase !== "idle" ||
-      this.aimedPhase !== "idle" ||
-      this.sweepLaserPhase !== "idle"
-        ? "attacking"
-        : "idle";
+    this.state = this.isAnyAttackActive() ? "attacking" : "idle";
 
     // Phase-transition trigger — checked AFTER attack state is
     // settled. Only fires when every sub-machine is idle (no attack
@@ -1271,6 +1181,130 @@ export class Sentinel implements Enemy {
         }
       }
     }
+  }
+
+  // === Radial Burst — state-machine progression ===
+  // Cooldown ticking + start gating handled by the central scheduler
+  // in updateCombat (mutual exclusion across all four attacks).
+  private tickRadialBurst(ctxRoom: EnemyContext, dt: number): void {
+    if (this.radialPhase === "idle") return;
+    this.radialTimer += dt;
+    if (
+      this.radialPhase === "telegraph" &&
+      this.radialTimer >= RADIAL_TELEGRAPH_SEC
+    ) {
+      this.radialPhase = "firing";
+      this.radialTimer = 0;
+      this.fireRadialBurst(ctxRoom);
+    } else if (
+      this.radialPhase === "firing" &&
+      this.radialTimer >= RADIAL_FIRING_SEC
+    ) {
+      this.radialPhase = "recovery";
+      this.radialTimer = 0;
+    } else if (
+      this.radialPhase === "recovery" &&
+      this.radialTimer >= RADIAL_RECOVERY_SEC
+    ) {
+      this.radialPhase = "idle";
+      this.radialTimer = 0;
+      // Hard floor — explicit zero so a stray dt overshoot never lets
+      // the next attack fire on the very next frame.
+      this.radialIdleTimer = 0;
+    }
+  }
+
+  // === Aimed Shot — state-machine progression ===
+  private tickAimedShot(ctxRoom: EnemyContext, dt: number): void {
+    if (this.aimedPhase === "idle") return;
+    this.aimedTimer += dt;
+    if (this.aimedPhase === "telegraph") {
+      // Crawl the dashed-line offset so the line reads "live".
+      const span = AIMED_DASH_PATTERN[0] + AIMED_DASH_PATTERN[1];
+      this.aimedDashOffset =
+        (this.aimedDashOffset + AIMED_DASH_RATE * dt) % span;
+      // Track the player at a capped angular velocity.
+      const desired = Math.atan2(
+        ctxRoom.player.y - this.y,
+        ctxRoom.player.x - this.x,
+      );
+      const delta = shortestAngleDiff(desired, this.aimedTrackedAngle);
+      const maxStep = AIMED_MAX_ANGULAR_VEL * dt;
+      if (Math.abs(delta) > maxStep) {
+        this.aimedTrackedAngle += Math.sign(delta) * maxStep;
+      } else {
+        this.aimedTrackedAngle = desired;
+      }
+      if (this.aimedTimer >= AIMED_TELEGRAPH_SEC) {
+        // Lock the angle now — bullets all fire along this. The
+        // snap-confirm flash tells the player "the angle just locked."
+        this.aimedAngle = this.aimedTrackedAngle;
+        this.aimedSnapTimer = AIMED_SNAP_DURATION_SEC;
+        this.aimedPhase = "firing";
+        this.aimedTimer = 0;
+        this.aimedShotsFired = 0;
+      }
+    } else if (this.aimedPhase === "firing") {
+      // Spawn each bullet as its scheduled offset is crossed.
+      while (
+        this.aimedShotsFired < AIMED_BULLET_COUNT &&
+        this.aimedTimer >=
+          this.aimedShotsFired * AIMED_BULLET_INTERVAL_SEC
+      ) {
+        this.fireAimedBullet(ctxRoom);
+        this.aimedShotsFired += 1;
+      }
+      if (this.aimedTimer >= AIMED_FIRING_SEC) {
+        this.aimedPhase = "recovery";
+        this.aimedTimer = 0;
+      }
+    } else if (this.aimedPhase === "recovery") {
+      if (this.aimedTimer >= AIMED_RECOVERY_SEC) {
+        this.aimedPhase = "idle";
+        this.aimedTimer = 0;
+        this.aimedIdleTimer = 0;
+      }
+    }
+  }
+
+  // === Attack-start gates ===
+  // Each tryStart* runs the cooldown / readiness check for its own
+  // attack and short-circuits if any other attack is already active.
+  // Called in priority order from updateCombat: ring burst > sweep >
+  // aimed > radial. The first to fire wins on tied cooldown expiry,
+  // and every later call sees `isAnyAttackActive() === true` and bails.
+  private tryStartRingBurst(): void {
+    if (this.isAnyAttackActive()) return;
+    if (this.combatElapsedSec < RB_FIRST_GRACE_SEC) return;
+    if (this.rbCooldownTimer > 0) return;
+    this.beginRingBurstTelegraph();
+  }
+
+  private tryStartSweepLaser(ctxRoom: EnemyContext): void {
+    if (this.isAnyAttackActive()) return;
+    if (this.bossPhase < 2) return;
+    const cadence = PHASE_CADENCE[this.bossPhase];
+    if (
+      this.sweepLaserIdleTimer < SWEEP_LASER_BASE_COOLDOWN_SEC * cadence
+    ) {
+      return;
+    }
+    this.beginSweepLaserTelegraph(ctxRoom);
+  }
+
+  private tryStartAimedShot(ctxRoom: EnemyContext): void {
+    if (this.isAnyAttackActive()) return;
+    const cadence = PHASE_CADENCE[this.bossPhase];
+    if (this.aimedIdleTimer < AIMED_COOLDOWN_SEC * cadence) return;
+    this.beginAimedShot(ctxRoom);
+  }
+
+  private tryStartRadialBurst(): void {
+    if (this.isAnyAttackActive()) return;
+    const cadence = PHASE_CADENCE[this.bossPhase];
+    if (this.radialIdleTimer < RADIAL_IDLE_GAP_SEC * cadence) return;
+    this.radialPhase = "telegraph";
+    this.radialTimer = 0;
   }
 
   /** Body takes / deals contact damage during RB-idle, telegraph,
@@ -1478,28 +1512,19 @@ export class Sentinel implements Enemy {
   }
 
   // === Ring Burst ===
+  // State-machine progression only. Cooldown ticking + start gating
+  // are handled by the central scheduler in updateCombat (mutual
+  // exclusion across all four attacks).
   private tickRingBurst(ctxRoom: EnemyContext, dt: number): void {
     // Eye-hit feedback is deferred from tryDashDamage to here so we
-    // have ctxRoom (rings + particles + audio).
+    // have ctxRoom (rings + particles + audio). Drains regardless of
+    // phase so a hit landing on the same frame as a transition still
+    // resolves visually.
     if (this.pendingEyeHit) {
       this.pendingEyeHit = false;
       this.triggerEyeHitFeedback(ctxRoom);
     }
-    if (this.ringBurstPhase === "idle") {
-      // Tick cooldown only while idle so the rest of the timer
-      // semantics — "8 s after recovery" — match the spec.
-      if (this.rbCooldownTimer > 0) {
-        this.rbCooldownTimer = Math.max(0, this.rbCooldownTimer - dt);
-      }
-      const cooldownReady = this.rbCooldownTimer <= 0;
-      const graceReady = this.combatElapsedSec >= RB_FIRST_GRACE_SEC;
-      const otherIdle =
-        this.radialPhase === "idle" && this.aimedPhase === "idle";
-      if (cooldownReady && graceReady && otherIdle) {
-        this.beginRingBurstTelegraph();
-      }
-      return;
-    }
+    if (this.ringBurstPhase === "idle") return;
 
     this.rbTimer += dt;
     switch (this.ringBurstPhase) {
@@ -1585,8 +1610,16 @@ export class Sentinel implements Enemy {
         if (this.rbTimer >= RB_RECOVERY_SEC) {
           this.ringBurstPhase = "idle";
           this.rbTimer = 0;
-          this.rbCooldownTimer =
+          // Hard floor — Math.max guards the (theoretical) edge case
+          // where the cooldown timer carried negative slack into the
+          // reset, ensuring a minimum full cooldown between two
+          // consecutive Ring Bursts.
+          const freshCooldown =
             RB_COOLDOWN_SEC * PHASE_CADENCE[this.bossPhase];
+          this.rbCooldownTimer = Math.max(
+            freshCooldown,
+            this.rbCooldownTimer,
+          );
           // Smooth re-entry to figure-8: snapshot the frozen
           // position so the movement update can blend to the
           // live curve point. Skipped if the boss died during RB
@@ -1732,13 +1765,22 @@ export class Sentinel implements Enemy {
     }
   }
 
-  private allAttacksIdle(): boolean {
+  /** Mutual exclusion gate. While any sub-state machine is in a
+   *  non-idle phase, every other attack's cooldown freezes and no
+   *  new attack can start (see tryStart* methods). The whole
+   *  conflict-resolution layer is built on this single predicate so
+   *  the rule is uniform across all four attacks. */
+  private isAnyAttackActive(): boolean {
     return (
-      this.radialPhase === "idle" &&
-      this.aimedPhase === "idle" &&
-      this.sweepLaserPhase === "idle" &&
-      this.ringBurstPhase === "idle"
+      this.radialPhase !== "idle" ||
+      this.aimedPhase !== "idle" ||
+      this.sweepLaserPhase !== "idle" ||
+      this.ringBurstPhase !== "idle"
     );
+  }
+
+  private allAttacksIdle(): boolean {
+    return !this.isAnyAttackActive();
   }
 
   private maybeStartPhaseTransition(): void {
@@ -1889,24 +1931,11 @@ export class Sentinel implements Enemy {
   }
 
   // === Sweep Laser ===
+  // State-machine progression only. Cooldown ticking + start gating
+  // are handled by the central scheduler in updateCombat (mutual
+  // exclusion across all four attacks).
   private tickSweepLaser(ctxRoom: EnemyContext, dt: number): void {
-    // Phase 1: sub-machine completely paused. Cooldown timer stays
-    // frozen at zero, attack never starts.
-    if (this.bossPhase < 2) return;
-    // Ring Burst pre-empts everything else.
-    if (this.ringBurstPhase !== "idle") return;
-
-    const cadence = PHASE_CADENCE[this.bossPhase];
-    if (this.sweepLaserPhase === "idle") {
-      this.sweepLaserIdleTimer += dt;
-      const readyAt = SWEEP_LASER_BASE_COOLDOWN_SEC * cadence;
-      const otherIdle =
-        this.radialPhase === "idle" && this.aimedPhase === "idle";
-      if (this.sweepLaserIdleTimer >= readyAt && otherIdle) {
-        this.beginSweepLaserTelegraph(ctxRoom);
-      }
-      return;
-    }
+    if (this.sweepLaserPhase === "idle") return;
 
     this.sweepLaserTimer += dt;
     if (this.sweepLaserPhase === "telegraph") {
