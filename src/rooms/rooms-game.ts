@@ -40,6 +40,7 @@ import {
   drawEnemyDetection,
   updateEnemyAwareness,
 } from "../lib/enemies/awareness";
+import { Sentinel } from "../lib/enemies/sentinel";
 import type { Enemy, Laser } from "../lib/enemies/types";
 import {
   emitBulletHit,
@@ -69,7 +70,10 @@ import {
   triggerPlayerSmash,
   updateEye,
 } from "../lib/player";
-import { createPauseMenu } from "../lib/pause-menu";
+import {
+  createGameCompleteMenu,
+  createPauseMenu,
+} from "../lib/pause-menu";
 import { type Bounds, hitBounds } from "../lib/types";
 import {
   bulletInsideWall,
@@ -96,6 +100,14 @@ const HIT_VIGNETTE = 0.2;
 const TURRET_KILL_SCORE = 500;
 const WATCHER_KILL_SCORE = 800;
 const HUNTER_KILL_SCORE = 600;
+const SENTINEL_KILL_SCORE = 5000;
+// Boss-room sequence timings (seconds)
+const BOSS_INTRO_SEC = 2.0;
+const BOSS_INTRO_SCALE_UP_SEC = 1.5;
+const BOSS_DEATH_FLASH_START_SEC = 1.0;
+const BOSS_DEATH_FLASH_END_SEC = 1.4;
+const BOSS_DEATH_VICTORY_FADE_IN_SEC = 1.7;
+const BOSS_DEATH_TOTAL_SEC = 3.0;
 const LASER_DODGE_SCORE = 50;
 const LASER_HIT_PADDING = 6; // px added to player half for laser collision
 const LASER_FRIENDLY_FIRE_HALF_WIDTH = 8; // matches firing-beam visual width
@@ -104,7 +116,7 @@ const SCREEN_SHAKE_DURATION_SEC = 0.2;
 const SCREEN_SHAKE_PX = 4;
 // Campaign currently has Room 4 (corridor) + Room 5 placeholder. The
 // HUD displays them as 1 / 2 since rooms 1–3 moved to the tutorial.
-const ROOM_TOTAL = 4;
+const ROOM_TOTAL = 5;
 const TUTORIAL_COMPLETED_KEY = "dash-proto:tutorial-completed";
 const ROOM_CLEAR_FLASH = 0.2;
 const ROOMS_BEST_KEY = "dash-proto:rooms-best";
@@ -303,7 +315,12 @@ function drawLaser(ctx: CanvasRenderingContext2D, l: Laser): void {
   ctx.restore();
 }
 
-type RunState = "playing" | "failed";
+type RunState = "playing" | "failed" | "completed";
+
+// Boss-room (Room 5) sequence state machine. The campaign loop only
+// touches this when the player is actually inside the boss room;
+// `phase: "none"` is the resting state for every other room.
+type BossPhase = "none" | "intro" | "fight" | "death" | "complete";
 
 type FailedSnapshot = {
   score: number;
@@ -332,6 +349,18 @@ type GameState = {
   screenFlashInitial: number;
   screenFlashOpacity: number;
   failedSnapshot: FailedSnapshot | null;
+  /** Cumulative time the campaign run has been "playing" — paused
+   *  during intro/death/complete phases and during pause-menu /
+   *  failed states. Used by the Game Complete overlay. */
+  elapsed: number;
+  /** Boss-room sequence state. `none` outside Room 5. */
+  bossPhase: BossPhase;
+  bossPhaseTimer: number;
+  /** Last position of the Sentinel — captured at death so the
+   *  layered explosion / VICTORY text anchor stays put even after
+   *  the enemy itself is removed. */
+  bossDeathX: number;
+  bossDeathY: number;
 };
 
 export function start(canvas: HTMLCanvasElement): void {
@@ -425,6 +454,11 @@ export function start(canvas: HTMLCanvasElement): void {
     screenFlashInitial: 0,
     screenFlashOpacity: 0,
     failedSnapshot: null,
+    elapsed: 0,
+    bossPhase: "none",
+    bossPhaseTimer: 0,
+    bossDeathX: 0,
+    bossDeathY: 0,
   };
 
   let currentRoom: Room = rooms.get("room1")!;
@@ -490,6 +524,9 @@ export function start(canvas: HTMLCanvasElement): void {
     state.screenFlashInitial = 0;
     state.screenFlashOpacity = 0;
     state.failedSnapshot = null;
+    state.elapsed = 0;
+    state.bossPhase = "none";
+    state.bossPhaseTimer = 0;
     bullets = [];
     particles = [];
     rings = [];
@@ -517,6 +554,15 @@ export function start(canvas: HTMLCanvasElement): void {
     spawnPlayerInCurrentRoom();
     applyInitialKey();
     snapCameraToRoom();
+    // Boss-room hook: entering Room 5 kicks off the intro sequence
+    // (player movement frozen, Sentinel scaling up, "SENTINEL" text).
+    // Other rooms reset bossPhase to none.
+    if (currentRoom.id === "room5") {
+      startBossIntro();
+    } else {
+      state.bossPhase = "none";
+      state.bossPhaseTimer = 0;
+    }
   }
 
   function roomBounds(): WorldBounds {
@@ -561,6 +607,19 @@ export function start(canvas: HTMLCanvasElement): void {
       lastTime = performance.now();
     },
     onRestart: () => {
+      restartRun();
+      lastTime = performance.now();
+    },
+    onQuit: () => {
+      window.location.href = "/";
+    },
+  });
+
+  // Game-complete DOM overlay shown after the boss-death sequence
+  // finishes. The frame loop calls `completeMenu.show(...)` once with
+  // the final score + elapsed time when bossPhase flips to "complete".
+  const completeMenu = createGameCompleteMenu({
+    onPlayAgain: () => {
       restartRun();
       lastTime = performance.now();
     },
@@ -810,6 +869,10 @@ export function start(canvas: HTMLCanvasElement): void {
       scoreAmount = WATCHER_KILL_SCORE;
       textColor = PALETTE.bullet;
       textSize = 24;
+    } else if (enemy.type === "sentinel") {
+      scoreAmount = SENTINEL_KILL_SCORE;
+      textColor = PALETTE.bullet;
+      textSize = 32;
     } else {
       scoreAmount = TURRET_KILL_SCORE;
       textColor = PALETTE.playerDash;
@@ -838,6 +901,68 @@ export function start(canvas: HTMLCanvasElement): void {
 
   function aliveEnemies(): Enemy[] {
     return currentRoom.enemies.filter((e) => !e.isDead());
+  }
+
+  function findSentinel(): Sentinel | null {
+    for (const e of currentRoom.enemies) {
+      if (e instanceof Sentinel) return e;
+    }
+    return null;
+  }
+
+  function startBossIntro() {
+    state.bossPhase = "intro";
+    state.bossPhaseTimer = 0;
+    const sentinel = findSentinel();
+    if (sentinel) {
+      sentinel.spawnScale = 0.1;
+      sentinel.attacksEnabled = false;
+    }
+  }
+
+  function triggerBossDeath(sentinel: Sentinel) {
+    state.bossPhase = "death";
+    state.bossPhaseTimer = 0;
+    state.bossDeathX = sentinel.x;
+    state.bossDeathY = sentinel.y;
+    // Layered explosion — six fragments per shell flying outward, plus
+    // a wider red particle cloud. The hexagon vertex angles drive the
+    // fragment directions so the burst echoes the boss silhouette.
+    for (let i = 0; i < 6; i++) {
+      const a = -Math.PI / 2 + i * (Math.PI / 3);
+      const speed = 220 + Math.random() * 120;
+      particles.push({
+        x: sentinel.x,
+        y: sentinel.y,
+        vx: Math.cos(a) * speed,
+        vy: Math.sin(a) * speed,
+        initialSize: 8,
+        color: PALETTE.bullet,
+        age: 0,
+        lifetime: 0.9,
+        glowStrong: 14,
+        glowSoft: 6,
+        drag: 0.94,
+      });
+    }
+    for (let i = 0; i < 18; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const speed = 180 + Math.random() * 220;
+      particles.push({
+        x: sentinel.x,
+        y: sentinel.y,
+        vx: Math.cos(a) * speed,
+        vy: Math.sin(a) * speed,
+        initialSize: 4,
+        color: PALETTE.bullet,
+        age: 0,
+        lifetime: 0.7 + Math.random() * 0.4,
+        glowStrong: 8,
+        glowSoft: 4,
+        drag: 0.95,
+      });
+    }
+    triggerShake(12, 0.3);
   }
 
   function checkRoomCleared() {
@@ -904,11 +1029,74 @@ export function start(canvas: HTMLCanvasElement): void {
       currentRoom.door.pulse += dt;
     }
 
-    if (state.runState === "failed") {
+    // Run timer ticks while playing (and not paused mid-boss intro
+    // or death). Read by the Game Complete overlay.
+    if (
+      state.runState === "playing" &&
+      state.bossPhase !== "intro" &&
+      state.bossPhase !== "death" &&
+      state.bossPhase !== "complete"
+    ) {
+      state.elapsed += dt;
+    }
+
+    if (state.runState === "failed" || state.runState === "completed") {
       if (state.hitVignette > 0) {
         state.hitVignette = Math.max(0, state.hitVignette - dt);
       }
       // keep the eye animation alive (closing, blink decay) while overlay is up
+      updateEye(player, dt, {
+        threat: null,
+        size: settings.player.size,
+        dashDurationSec: settings.dash.durationMs / 1000,
+      });
+      render();
+      requestAnimationFrame(frame);
+      return;
+    }
+
+    // Boss intro / death — sim is paused; only the eye and the boss
+    // sequence visuals tick. Sentinel still ticks its own animation
+    // through `boss-phase`-aware update calls, but enemy combat and
+    // player input are gated.
+    if (state.bossPhase === "intro") {
+      state.bossPhaseTimer += dt;
+      const sentinel = findSentinel();
+      if (sentinel) {
+        const t = Math.min(
+          1,
+          state.bossPhaseTimer / BOSS_INTRO_SCALE_UP_SEC,
+        );
+        const eased = 1 - Math.pow(1 - t, 3);
+        sentinel.spawnScale = 0.1 + (1 - 0.1) * eased;
+      }
+      if (state.bossPhaseTimer >= BOSS_INTRO_SEC) {
+        state.bossPhase = "fight";
+        state.bossPhaseTimer = 0;
+        if (sentinel) {
+          sentinel.spawnScale = 1;
+          sentinel.attacksEnabled = true;
+        }
+      }
+      updateEye(player, dt, {
+        threat: null,
+        size: settings.player.size,
+        dashDurationSec: settings.dash.durationMs / 1000,
+      });
+      render();
+      requestAnimationFrame(frame);
+      return;
+    }
+    if (state.bossPhase === "death") {
+      state.bossPhaseTimer += dt;
+      if (state.bossPhaseTimer >= BOSS_DEATH_TOTAL_SEC) {
+        state.bossPhase = "complete";
+        state.runState = "completed";
+        completeMenu.show({
+          score: state.score,
+          time: state.elapsed,
+        });
+      }
       updateEye(player, dt, {
         threat: null,
         size: settings.player.size,
@@ -1373,6 +1561,13 @@ export function start(canvas: HTMLCanvasElement): void {
           if (e.isDead()) {
             emitEnemyKill(makeImpactCtx(), e);
             destroyEnemy(e);
+            // Sentinel kill kicks off the boss-death sequence —
+            // captures the boss position, spawns the layered
+            // explosion fragments, sets bossPhase = "death" so the
+            // frame loop short-circuits to the slowmo / VICTORY beat.
+            if (e instanceof Sentinel && state.bossPhase === "fight") {
+              triggerBossDeath(e);
+            }
           } else {
             emitEnemyDamage(makeImpactCtx(), e, player.x, player.y);
           }
@@ -1720,9 +1915,101 @@ export function start(canvas: HTMLCanvasElement): void {
     }
 
     drawHUD();
+    drawBossOverlay();
     drawGodModeBadge(ctx, viewW);
 
     if (state.runState === "failed") drawFailedOverlay();
+  }
+
+  function drawBossOverlay() {
+    if (state.bossPhase === "none") return;
+    const sentinel = findSentinel();
+    // HP bar — visible while the Sentinel is alive (intro + fight).
+    if (
+      sentinel &&
+      !sentinel.isDead() &&
+      (state.bossPhase === "fight" || state.bossPhase === "intro")
+    ) {
+      const sideMargin = 100;
+      const barH = 18;
+      const barW = viewW - sideMargin * 2;
+      const barX = sideMargin;
+      const barY = 78;
+      ctx.save();
+      ctx.font = "700 13px ui-monospace, SFMono-Regular, Menlo, monospace";
+      ctx.fillStyle = PALETTE.bullet;
+      ctx.textAlign = "left";
+      ctx.textBaseline = "middle";
+      ctx.fillText("SENTINEL", barX, barY - 12);
+
+      ctx.fillStyle = "rgba(255, 45, 85, 0.2)";
+      ctx.fillRect(barX, barY, barW, barH);
+      const t = Math.max(0, Math.min(1, sentinel.hp / 30));
+      ctx.fillStyle = PALETTE.bullet;
+      ctx.fillRect(barX, barY, barW * t, barH);
+      ctx.strokeStyle = PALETTE.bullet;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(barX + 0.5, barY + 0.5, barW - 1, barH - 1);
+
+      ctx.font = "500 11px ui-monospace, SFMono-Regular, Menlo, monospace";
+      ctx.fillStyle = "#ffffff";
+      ctx.textAlign = "right";
+      ctx.fillText(`${sentinel.hp} / 30`, barX + barW, barY - 12);
+      ctx.restore();
+    }
+    // Intro: "SENTINEL" title fades in / hold / fade out across the
+    // 2 s intro window. The text is centered on screen.
+    if (state.bossPhase === "intro") {
+      const t = state.bossPhaseTimer;
+      let alpha = 0;
+      if (t < 0.3) alpha = t / 0.3;
+      else if (t < 1.3) alpha = 1;
+      else if (t < 1.8) alpha = 1 - (t - 1.3) / 0.5;
+      if (alpha > 0) {
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.font = "700 60px ui-monospace, SFMono-Regular, Menlo, monospace";
+        ctx.fillStyle = PALETTE.bullet;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.shadowColor = PALETTE.bullet;
+        ctx.shadowBlur = 24;
+        ctx.fillText("SENTINEL", viewW / 2, viewH / 2);
+        ctx.restore();
+      }
+    }
+    // Death: white flash overlay around BOSS_DEATH_FLASH_*; "VICTORY"
+    // text fades in shortly after and stays on through the rest of the
+    // sequence so the player reads it before the Game Complete menu
+    // pops.
+    if (state.bossPhase === "death") {
+      const t = state.bossPhaseTimer;
+      // White flash
+      if (t >= BOSS_DEATH_FLASH_START_SEC && t < BOSS_DEATH_FLASH_END_SEC) {
+        const span = BOSS_DEATH_FLASH_END_SEC - BOSS_DEATH_FLASH_START_SEC;
+        const local = (t - BOSS_DEATH_FLASH_START_SEC) / span;
+        const flashAlpha = local < 0.25 ? local / 0.25 : 1 - (local - 0.25) / 0.75;
+        ctx.save();
+        ctx.fillStyle = "#ffffff";
+        ctx.globalAlpha = Math.max(0, Math.min(1, flashAlpha)) * 0.7;
+        ctx.fillRect(0, 0, viewW, viewH);
+        ctx.restore();
+      }
+      // VICTORY text
+      if (t >= BOSS_DEATH_VICTORY_FADE_IN_SEC) {
+        const fade = Math.min(1, (t - BOSS_DEATH_VICTORY_FADE_IN_SEC) / 0.5);
+        ctx.save();
+        ctx.globalAlpha = fade;
+        ctx.font = "700 60px ui-monospace, SFMono-Regular, Menlo, monospace";
+        ctx.fillStyle = PALETTE.pickupHP;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.shadowColor = PALETTE.pickupHP;
+        ctx.shadowBlur = 24;
+        ctx.fillText("VICTORY", viewW / 2, viewH / 2);
+        ctx.restore();
+      }
+    }
   }
 
   function drawHUD() {
@@ -1743,11 +2030,11 @@ export function start(canvas: HTMLCanvasElement): void {
 
     ctx.font = "600 22px ui-monospace, SFMono-Regular, Menlo, monospace";
     ctx.fillStyle = "#ffffff";
-    // Campaign chain: corridor → trap → arena → long corridor.
+    // Campaign chain: corridor → trap → arena → long corridor → boss.
     // File ids: room1 / room3 (trap) / room2 (arena) / room4 (long
-    // corridor) — slots map to player-visible numbers below. The
-    // room5 placeholder is past the campaign so the counter holds
-    // at 4 / 4.
+    // corridor) / room5 (boss) — slots map to player-visible numbers
+    // below.
+    const isBoss = currentRoom.id === "room5";
     const roomNum =
       currentRoom.id === "room1"
         ? 1
@@ -1757,8 +2044,16 @@ export function start(canvas: HTMLCanvasElement): void {
             ? 3
             : currentRoom.id === "room4"
               ? 4
-              : ROOM_TOTAL;
-    ctx.fillText(`${roomNum} / ${ROOM_TOTAL}`, colA, y0 + 14);
+              : isBoss
+                ? 5
+                : ROOM_TOTAL;
+    if (isBoss) {
+      ctx.fillStyle = PALETTE.bullet;
+      ctx.fillText(`${roomNum} / ${ROOM_TOTAL} — BOSS`, colA, y0 + 14);
+      ctx.fillStyle = "#ffffff";
+    } else {
+      ctx.fillText(`${roomNum} / ${ROOM_TOTAL}`, colA, y0 + 14);
+    }
 
     const alive = aliveEnemies().length;
     if (alive > 0) {

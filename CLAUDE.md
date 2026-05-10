@@ -55,12 +55,14 @@ src/
     rooms-game.ts     — campaign engine; locks behind the tutorial and
                         currently runs Room 1 (corridor) + Room 2
                         (narrow trap) + Room 3 (arena) + Room 4
-                        (long phase corridor) + Room 5 placeholder.
-                        Build files are room1.ts / room2.ts (arena
-                        content) / room3.ts (trap content) /
-                        room4.ts / room5.ts; the campaign order
-                        chains room1 → room3 → room2 → room4 →
-                        room5.
+                        (long phase corridor) + Room 5 (boss
+                        Sentinel). Build files are room1.ts /
+                        room2.ts (arena content) / room3.ts (trap
+                        content) / room4.ts / room5.ts; the
+                        campaign order chains room1 → room3 →
+                        room2 → room4 → room5. The boss-death
+                        sequence flips runState to "completed" and
+                        shows the Game Complete DOM overlay.
     room1.ts / room2.ts / room3.ts / room4.ts / room5.ts
   tutorial/
     main.ts           — entry for /tutorial.html
@@ -477,10 +479,11 @@ instead of advancing.
 
 ## Campaign rooms (`rooms.html`)
 
-The campaign now runs **Room 1 → Room 2 → Room 3 → Room 4** with
-a **Room 5 placeholder** past the end. HUD shows `ROOM N / 4`;
-the counter holds at `4 / 4` once the player steps into the
-placeholder. On launch the engine checks
+The campaign now runs **Room 1 → Room 2 → Room 3 → Room 4 →
+Room 5 (boss)**. HUD shows `ROOM N / 5`; the boss room's label
+flips to `5 / 5 — BOSS` in red. The Game Complete DOM overlay
+appears after the boss-death sequence; there's no further room
+to step into. On launch the engine checks
 `localStorage["dash-proto:tutorial-completed"]` — if absent,
 it renders a "STORY MODE LOCKED" full-page overlay with a CTA
 that links straight to `/tutorial.html`, and never starts the
@@ -607,11 +610,43 @@ kill.
   the exit. `useCamera = true`, spawn at (200, 350),
   `nextRoomId = "room5"`.
 
-### Room 5 (placeholder)
+### Room 5 — Sentinel (boss)
 
-- 1200×800 closed border, no enemies, no door,
-  `message: "Room 5 — coming soon"`. Confirms the Room 4 → Room
-  5 transition while real Room 5 content is in flight.
+1600×1200 open arena. Single enemy: a `Sentinel` at (800, 600).
+Door at (1585, 600) opens on Sentinel kill via the standard "all
+enemies dead" rule — the Game Complete overlay runs ~3 s after
+the kill, so the door rarely matters in practice. `useCamera =
+true`, spawn at (200, 600), `nextRoomId = null`.
+
+The boss-room sequence is owned by `rooms-game.ts` via a
+`bossPhase` state machine: `none → intro → fight → death →
+complete`.
+
+- **intro** (2.0 s): runs the moment the player enters Room 5.
+  Player input is frozen, enemy and bullet sim is paused, the
+  Sentinel scales up from 0.1 → 1.0 with an ease-out cubic
+  (`Sentinel.spawnScale` is set externally; `attacksEnabled = false`
+  during intro), and a 60 px red "SENTINEL" title fades in /
+  holds / fades out across the window.
+- **fight**: standard sim. Sentinel does its thing — slow
+  orbital pursuit, radial-burst attack on a 2.5 s cycle (0.4 s
+  telegraph + 12 bullets at 350 px/s + 0.3 s recovery). A red
+  HP bar (full width minus 100 px sides) sits beneath the HUD
+  header showing current/30 HP.
+- **death**: kicked off when a dash-through hit takes Sentinel
+  to 0 HP. `triggerBossDeath()` snapshots the boss position and
+  spawns a layered explosion (6 vertex-aligned fragments + 18
+  red particles) plus a 12 px / 300 ms screen shake. Across the
+  3 s window: 1.0 s of fragments flying, then a 400 ms white
+  flash, then a green "VICTORY" title fades in. Player and sim
+  are paused.
+- **complete**: at the end of the death window, runState flips
+  to `"completed"` and the `createGameCompleteMenu` DOM overlay
+  shows with the final score + elapsed time. PLAY AGAIN
+  restarts (new run, back to room1); MAIN MENU navigates to /.
+
+Restart and transitionToRoom both reset `bossPhase` to `"none"`
+so a re-entry plays the intro again from scratch.
 
 ## Enemy awareness system (`lib/enemies/awareness.ts`)
 
@@ -934,9 +969,11 @@ settings overlay on Esc / Tab.
 
 ### TODO (rooms direction)
 
-- **Room 5** — currently a "coming soon" placeholder past the
-  long phase corridor; next-up is probably either a layered
-  multi-mechanic encounter or the campaign's first boss.
+- **Sentinel boss** — current Room 5 ships only the skeleton:
+  one phase, one attack (radial burst), the intro / death
+  sequences and the Game Complete overlay. Next iterations will
+  layer phase 2 / phase 3 attacks (sweep laser, charge, minion
+  spawns), richer telegraphs, and tuned pacing.
 - **Key icon visual polish** — the `drawKey` glyph is a diamond
   + stem; readable but a bit primitive. A more iconic key shape
   (or a proper sprite) would improve the HUD slot too.

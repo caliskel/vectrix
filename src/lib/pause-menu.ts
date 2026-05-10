@@ -112,6 +112,29 @@ const STYLE = `
   opacity: 0.75;
   text-align: center;
 }
+.rp-stats {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  color: #cbd5e1;
+  align-items: center;
+}
+.rp-stats .label {
+  color: #7d8590;
+  letter-spacing: 0.16em;
+  font-size: 10px;
+  margin-right: 8px;
+}
+.rp-stats .value { color: #ffffff; font-size: 16px; }
+.rp-title--complete {
+  color: #4ade80;
+  text-shadow:
+    0 0 8px #4ade80,
+    0 0 24px rgba(74, 222, 128, 0.55),
+    0 0 56px rgba(74, 222, 128, 0.35);
+}
 `;
 
 function injectStyle() {
@@ -267,4 +290,84 @@ export function createSandboxPauseMenu(opts: {
       setOpen(!open);
     },
   };
+}
+
+export type GameCompleteHandle = {
+  isOpen(): boolean;
+  show(snapshot: { score: number; time: number }): void;
+};
+
+/**
+ * "GAME COMPLETE" overlay shown after the boss-death sequence
+ * finishes. Two CTAs (PLAY AGAIN, MAIN MENU); score + elapsed time
+ * arrive via `show()` so the caller doesn't have to know about DOM.
+ */
+export function createGameCompleteMenu(opts: {
+  onPlayAgain: () => void;
+  onQuit: () => void;
+}): GameCompleteHandle {
+  injectStyle();
+
+  const root = document.createElement("div");
+  root.className = "rp-overlay";
+  root.innerHTML = `
+    <div class="rp-frame">
+      <div class="rp-title rp-title--complete">GAME COMPLETE</div>
+      <div class="rp-stats">
+        <div><span class="label">SCORE</span><span class="value" data-stat="score">0</span></div>
+        <div><span class="label">TIME</span><span class="value" data-stat="time">0:00</span></div>
+      </div>
+      <div class="rp-buttons">
+        <button type="button" class="rp-btn" data-action="playAgain"><span class="glyph">▶</span>PLAY AGAIN</button>
+        <button type="button" class="rp-btn" data-action="quit"><span class="glyph">←</span>MAIN MENU</button>
+      </div>
+      <div class="rp-footer">You defeated the Sentinel.</div>
+    </div>
+  `;
+
+  const scoreEl = root.querySelector<HTMLElement>('[data-stat="score"]');
+  const timeEl = root.querySelector<HTMLElement>('[data-stat="time"]');
+
+  let open = false;
+  function setOpen(value: boolean) {
+    open = value;
+    root.classList.toggle("open", value);
+    if (value) {
+      const first =
+        root.querySelector<HTMLElement>('[data-action="playAgain"]');
+      first?.focus();
+    }
+  }
+
+  root
+    .querySelector<HTMLElement>('[data-action="playAgain"]')
+    ?.addEventListener("click", () => {
+      setOpen(false);
+      opts.onPlayAgain();
+    });
+  root
+    .querySelector<HTMLElement>('[data-action="quit"]')
+    ?.addEventListener("click", () => {
+      opts.onQuit();
+    });
+
+  document.body.appendChild(root);
+
+  return {
+    isOpen() {
+      return open;
+    },
+    show(snapshot) {
+      if (scoreEl) scoreEl.textContent = snapshot.score.toLocaleString("en-US");
+      if (timeEl) timeEl.textContent = formatTime(snapshot.time);
+      setOpen(true);
+    },
+  };
+}
+
+function formatTime(seconds: number): string {
+  const totalSec = Math.max(0, Math.floor(seconds));
+  const m = Math.floor(totalSec / 60);
+  const s = totalSec % 60;
+  return `${m}:${s.toString().padStart(2, "0")}`;
 }
