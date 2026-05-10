@@ -290,12 +290,20 @@ button. Static — no animation, no state.
 
 ### Player profile and where it applies
 
+The Player overlay on the landing page is the **only** place to
+customise the player's colours. Sandbox Settings used to mirror
+some of these (idle / walk / dash colour pickers) — those rows
+have been removed; Settings now keeps just sandbox-tunable
+mechanics (size, max speed, walk-speed factor). The corresponding
+`PlayerSettings.colorIdle / colorWalk / colorDash` fields are
+gone too.
+
 ```ts
 type PlayerProfile = {
   outerRing: string;     // default #ffffff
-  iris: string;          // default #0a0e1a (PALETTE.bg)
+  iris: string;          // default #ffffff
   pupil: string;         // default #ffffff
-  dashParticles: string; // default #00e5ff — color of sparks during dash
+  dashParticles: string; // default #9ca3af — neutral grey trail
 };
 ```
 
@@ -306,30 +314,24 @@ Helpers in `lib/player.ts`:
 - `savePlayerProfile(profile)` — writes the JSON, swallows quota /
   privacy errors.
 
-`drawPlayerEye` accepts an optional `profile` in its opts. When set
-it overrides `ringColor` / `pupilColor` / `irisColor` (default
-`PALETTE.bg`) with profile values **only outside of a dash**. While
-the player is dashing (or in the post-dash i-frame), the eye
-ring + pupil + glow + ghost trail stay on whatever the mode passes
-in opts (sandbox + rooms both pass `settings.player.colorDash`,
-defaulting to `PALETTE.playerDash`). The customizable "in dash"
-cue is the **particle trail** — see `dashParticles` below — not
-the orb itself.
+`drawPlayerEye` accepts an optional `profile` in its opts. When
+set, profile values override `ringColor` / `pupilColor` /
+`irisColor` **only outside of a dash**. While the player is
+dashing (or in the post-dash i-frame), the ring + pupil + glow +
+ghost trail stay on `PALETTE.playerDash` — the dash beat is
+design-locked so it always reads as the same cyan flash
+regardless of customisation.
 
-`profile.dashParticles` is read by the rooms `spawnTrailParticles`
-helper: while dashing, sparks emitted from the player are tinted
-with this color (and their neon glow follows). Sandbox keeps using
-`settings.player.colorDash` for its trail particles since the
-sandbox menu allows tuning that color directly. Saves still under
-`dash-proto:player-profile`; profiles written before this rename
-used `dashColor` and load with that as a fallback for
-`dashParticles`.
+All three modes (sandbox, tutorial, rooms) load the profile at
+`start()` and forward it to `drawPlayerEye` on every render, so
+the same Player-overlay pick lights up identically across modes.
+Trail particles also pull from the profile: dash sparks use
+`profile.dashParticles`, idle / walk trails follow
+`profile.outerRing` so a single colour pick drives the whole
+"your colour" feel.
 
-- **Rooms** loads the profile once at `start()` and forwards it on
-  every player render. So Rooms reflects the customization.
-- **Sandbox** does NOT pass `profile`; it keeps the existing
-  palette-driven dash/walk/idle color flips. Customization is a
-  Rooms-only feature for now.
+`PALETTE` itself is `as const` — never mutated. Defaults live
+there; profile is the cross-mode override layer.
 
 ## Rooms mode
 

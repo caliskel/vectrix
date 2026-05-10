@@ -149,11 +149,15 @@ export type PlayerProfile = {
   dashParticles: string;
 };
 
+// Default skin: monochrome white orb with a neutral grey dash trail.
+// Minimalist starting point — players opt into colour via the Player
+// overlay on the landing page; the sandbox / tutorial / rooms loops
+// don't fork their own player colours anymore.
 export const DEFAULT_PLAYER_PROFILE: PlayerProfile = {
   outerRing: "#ffffff",
-  iris: "#0a0e1a",
+  iris: "#ffffff",
   pupil: "#ffffff",
-  dashParticles: "#00e5ff",
+  dashParticles: "#9ca3af",
 };
 
 export const PLAYER_PROFILE_KEY = "dash-proto:player-profile";

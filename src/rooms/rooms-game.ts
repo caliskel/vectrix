@@ -657,15 +657,14 @@ export function start(canvas: HTMLCanvasElement): void {
     const perpX = -dirY;
     const perpY = dirX;
 
+    // Dash sparks → profile.dashParticles. Idle / walk trails follow
+    // the orb's ring colour from the profile so customisation drives
+    // the whole non-dash trail look.
     let color: string;
     if (player.dashTime > 0 || player.dashIframeTime > 0) {
-      // dash sparks pull from the player's profile (the only customization
-      // path that actually changes during dash); idle/walk stay on settings.
       color = profile.dashParticles;
-    } else if (keys.has(settings.bindings.walk)) {
-      color = settings.player.colorWalk;
     } else {
-      color = settings.player.colorIdle;
+      color = profile.outerRing;
     }
 
     const speedMul = isDash ? PARTICLE_DASH_SPEED_MULTIPLIER : 1;
@@ -1516,7 +1515,6 @@ export function start(canvas: HTMLCanvasElement): void {
     const pSize = settings.player.size;
     const dashing = player.dashTime > 0;
     const dashIframe = player.dashIframeTime > 0;
-    const walking = keys.has(settings.bindings.walk);
 
     let drawPlayer = true;
     if (state.hitIframe > 0) {
@@ -1524,17 +1522,18 @@ export function start(canvas: HTMLCanvasElement): void {
     }
 
     if (drawPlayer) {
-      let ringColor: string;
-      if (dashing || dashIframe) ringColor = settings.player.colorDash;
-      else if (walking) ringColor = settings.player.colorWalk;
-      else ringColor = settings.player.colorIdle;
+      // Dash colours are design-locked to PALETTE.playerDash; non-dash
+      // ring / iris / pupil come from the profile via drawPlayerEye.
+      const dashColor = PALETTE.playerDash;
+      const ringColor =
+        dashing || dashIframe ? dashColor : profile.outerRing;
       const pupilColor =
-        dashing || dashIframe ? settings.player.colorDash : "#ffffff";
+        dashing || dashIframe ? dashColor : profile.pupil;
       drawPlayerEye(ctx, player, pSize, {
         ringColor,
         glowColor: ringColor,
         pupilColor,
-        ghostColor: settings.player.colorDash,
+        ghostColor: dashColor,
         dashDurationSec: settings.dash.durationMs / 1000,
         profile,
       });

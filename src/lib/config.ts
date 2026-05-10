@@ -21,9 +21,6 @@ export type BulletsSettings = {
 export type PlayerSettings = {
   size: number;
   maxSpeed: number;
-  colorIdle: string;
-  colorWalk: string;
-  colorDash: string;
   walkFactor: number; // 0.2–0.8
 };
 
@@ -369,9 +366,6 @@ export const DEFAULT_SETTINGS: Settings = {
   player: {
     size: 32,
     maxSpeed: 440,
-    colorIdle: PALETTE.player,
-    colorWalk: PALETTE.playerWalk,
-    colorDash: PALETTE.playerDash,
     walkFactor: 0.4,
   },
   dash: {

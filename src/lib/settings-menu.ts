@@ -367,30 +367,9 @@ export function createMenu(
         }),
       ),
     );
-    s.appendChild(
-      makeRow(
-        "Idle color",
-        makeColor(p.colorIdle, (v) => {
-          p.colorIdle = v;
-        }),
-      ),
-    );
-    s.appendChild(
-      makeRow(
-        "Walk color",
-        makeColor(p.colorWalk, (v) => {
-          p.colorWalk = v;
-        }),
-      ),
-    );
-    s.appendChild(
-      makeRow(
-        "Dash color",
-        makeColor(p.colorDash, (v) => {
-          p.colorDash = v;
-        }),
-      ),
-    );
+    // Player visual customization moved to the Player overlay on the
+    // landing page. Settings keeps only sandbox-tunable mechanics
+    // (size / speed / walk factor) — no per-mode color forks.
     s.appendChild(
       makeRow(
         "Walk speed factor",

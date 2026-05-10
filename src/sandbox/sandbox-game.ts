@@ -707,16 +707,14 @@ function spawnTrailParticles(speed: number, isDash: boolean) {
   const perpX = -dirY;
   const perpY = dirX;
 
-  // Dash sparks pull from the player's profile so the customisation
-  // survives between modes. Idle / walk colours stay on settings —
-  // those are sandbox tunables, not part of the cross-mode skin.
+  // Dash sparks → profile.dashParticles. Idle / walk trails follow
+  // the orb's ring colour (also from profile) so a single pick in
+  // the Player overlay drives the whole "your colour" feel.
   let color: string;
   if (player.dashTime > 0 || player.dashIframeTime > 0) {
     color = profile.dashParticles;
-  } else if (keys.has(settings.bindings.walk)) {
-    color = settings.player.colorWalk;
   } else {
-    color = settings.player.colorIdle;
+    color = profile.outerRing;
   }
 
   const speedMul = isDash ? PARTICLE_DASH_SPEED_MULTIPLIER : 1;
@@ -1429,7 +1427,6 @@ function render() {
   const dashing = player.dashTime > 0;
   const dashIframe = player.dashIframeTime > 0;
   const cooling = player.cooldown > 0;
-  const walking = keys.has(settings.bindings.walk);
 
   let drawPlayer = true;
   if (state.hitIframeTime > 0) {
@@ -1437,22 +1434,21 @@ function render() {
   }
 
   if (drawPlayer) {
-    let ringColor: string;
-    if (dashing || dashIframe) ringColor = settings.player.colorDash;
-    else if (walking) ringColor = settings.player.colorWalk;
-    else ringColor = settings.player.colorIdle;
-
-    // breaker keeps its orange halo around the regular ring color
+    // Dash-state colours are design-locked to PALETTE.playerDash
+    // (cyan) so the dash always reads as the same beat. Non-dash
+    // ring / iris / pupil come from the player profile via
+    // drawPlayerEye's profile override.
+    const dashColor = PALETTE.playerDash;
+    const ringColor =
+      dashing || dashIframe ? dashColor : profile.outerRing;
     const glow = state.effects.breaker ? PALETTE.pickupBreaker : ringColor;
-    // pupil flips to the dash color during the dash so the eye reads
-    // as "locked on" while moving instead of tracking
     const pupilColor =
-      dashing || dashIframe ? settings.player.colorDash : "#ffffff";
+      dashing || dashIframe ? dashColor : profile.pupil;
     drawPlayerEye(ctx, player, pSize, {
       ringColor,
       glowColor: glow,
       pupilColor,
-      ghostColor: settings.player.colorDash,
+      ghostColor: dashColor,
       dashDurationSec: settings.dash.durationMs / 1000,
       profile,
     });
