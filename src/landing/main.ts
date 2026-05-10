@@ -53,6 +53,14 @@ function applyTutorialState(): void {
   }
 }
 applyTutorialState();
+// Re-read the flag whenever the user comes back to the tab — covers
+// returning from /tutorial.html via in-page navigation, the bfcache
+// pageshow event, and the cross-tab `storage` event when localStorage
+// is mutated elsewhere. Without this the menu would stay locked even
+// after the player completes the tutorial in another tab.
+window.addEventListener("focus", applyTutorialState);
+window.addEventListener("pageshow", applyTutorialState);
+window.addEventListener("storage", applyTutorialState);
 
 function setOverlay(name: "player" | "about" | null) {
   if (activeOverlay) {

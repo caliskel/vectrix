@@ -854,6 +854,13 @@ export function start(canvas: HTMLCanvasElement): void {
     audio.init();
     const code = normalizeCode(e.code);
 
+    // While the completion overlay is up, keystrokes shouldn't toggle
+    // the pause menu / restart / move the player. Mouse-only choice.
+    if (state.runState === "completed") {
+      e.preventDefault();
+      return;
+    }
+
     // Pause menu has no key-rebinding capture flow (settings live in
     // sandbox), so we go straight to the toggle test.
     if (
@@ -874,12 +881,6 @@ export function start(canvas: HTMLCanvasElement): void {
         e.preventDefault();
         restartRun();
       }
-      return;
-    }
-
-    if (state.runState === "completed") {
-      e.preventDefault();
-      window.location.href = "/";
       return;
     }
 
@@ -1068,6 +1069,7 @@ export function start(canvas: HTMLCanvasElement): void {
       // privacy / quota — completion still happens for the session,
       // we just can't remember it on next visit.
     }
+    showTutorialCompleteOverlay();
   }
 
   function destroyEnemy(enemy: Enemy) {
@@ -1988,50 +1990,95 @@ export function start(canvas: HTMLCanvasElement): void {
     drawTutorialHint();
 
     if (state.runState === "failed") drawFailedOverlay();
-    if (state.runState === "completed") drawCompletedOverlay();
+    // The "completed" runState is rendered by a DOM overlay
+    // (showTutorialCompleteOverlay) so the three CTAs can be real
+    // anchors / buttons; no canvas overlay needed here.
   }
 
-  function drawCompletedOverlay() {
-    const w = 460;
-    const h = 220;
-    const x = Math.round((viewW - w) / 2);
-    const y = Math.round((viewH - h) / 2 - 30);
+  function showTutorialCompleteOverlay(): void {
+    if (!document.getElementById("tut-complete-style")) {
+      const styleEl = document.createElement("style");
+      styleEl.id = "tut-complete-style";
+      styleEl.textContent = `
+.tc-overlay {
+  position: fixed; inset: 0;
+  background: rgba(10, 14, 26, 0.92);
+  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+  display: flex; flex-direction: column; align-items: center;
+  justify-content: center; gap: 18px; padding: 24px; z-index: 200;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+.tc-title {
+  font-size: clamp(40px, 7vw, 64px);
+  font-weight: 700; letter-spacing: 0.18em; margin: 0 0 4px;
+  color: #a855f7;
+  text-shadow: 0 0 12px #a855f7, 0 0 36px rgba(168, 85, 247, 0.55);
+}
+.tc-subtitle {
+  font-size: 13px; letter-spacing: 0.32em; text-transform: uppercase;
+  color: #94a3b8; margin: 0 0 24px;
+}
+.tc-actions {
+  display: flex; flex-direction: column; gap: 12px; width: 320px;
+}
+.tc-btn {
+  display: block; text-align: center; cursor: pointer;
+  text-decoration: none; font: 600 14px inherit;
+  letter-spacing: 0.18em; padding: 14px 20px;
+  background: rgba(20, 25, 43, 0.72);
+  border: 1px solid rgba(216, 180, 254, 0.18);
+  border-radius: 10px; color: #cbd5e1;
+  transition: transform 0.15s, border-color 0.15s,
+              background 0.15s, color 0.15s;
+}
+.tc-btn:hover { transform: translateY(-2px); }
+.tc-btn-primary {
+  color: #00e5ff;
+  border-color: rgba(0, 229, 255, 0.42);
+  background: rgba(0, 229, 255, 0.14);
+}
+.tc-btn-primary:hover { background: rgba(0, 229, 255, 0.24); }
+.tc-btn-replay { color: #4ade80; border-color: rgba(74, 222, 128, 0.35); }
+.tc-btn-replay:hover { background: rgba(74, 222, 128, 0.14); }
+.tc-btn-menu:hover {
+  color: #d8b4fe;
+  border-color: rgba(168, 85, 247, 0.5);
+}
+      `;
+      document.head.appendChild(styleEl);
+    }
+    if (document.getElementById("tut-complete-overlay")) return;
+    const root = document.createElement("div");
+    root.id = "tut-complete-overlay";
+    root.className = "tc-overlay";
+    root.innerHTML = `
+      <h2 class="tc-title">TUTORIAL COMPLETE</h2>
+      <div class="tc-subtitle">You're ready for the real thing.</div>
+      <div class="tc-actions">
+        <a class="tc-btn tc-btn-primary" href="/rooms.html">
+          ▶  PROCEED TO STORY
+        </a>
+        <button type="button" class="tc-btn tc-btn-replay"
+                data-action="replay">
+          ↺  REPLAY TUTORIAL
+        </button>
+        <a class="tc-btn tc-btn-menu" href="/">
+          ←  BACK TO MAIN MENU
+        </a>
+      </div>
+    `;
+    root
+      .querySelector('[data-action="replay"]')
+      ?.addEventListener("click", () => {
+        hideTutorialCompleteOverlay();
+        restartRun();
+      });
+    document.body.appendChild(root);
+  }
 
-    ctx.save();
-    ctx.fillStyle = "rgba(15,15,18,0.95)";
-    ctx.fillRect(x, y, w, h);
-    ctx.strokeStyle = "rgba(255,255,255,0.18)";
-    ctx.lineWidth = 1.5;
-    ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
-
-    ctx.textAlign = "center";
-    ctx.textBaseline = "top";
-
-    ctx.fillStyle = PALETTE.pickupHP;
-    ctx.font = "600 14px system-ui, -apple-system, sans-serif";
-    ctx.fillText("TUTORIAL COMPLETE", x + w / 2, y + 26);
-
-    ctx.fillStyle = "#cbd5e1";
-    ctx.font = "500 13px system-ui, -apple-system, sans-serif";
-    ctx.fillText(
-      "You've learned the basics.",
-      x + w / 2,
-      y + 60,
-    );
-    ctx.fillText(
-      "Story mode is now unlocked.",
-      x + w / 2,
-      y + 80,
-    );
-
-    ctx.fillStyle = PALETTE.playerDash;
-    ctx.font =
-      "600 13px ui-monospace, SFMono-Regular, Menlo, monospace";
-    ctx.fillText("← BACK TO MENU", x + w / 2, y + 140);
-    ctx.fillStyle = "#7d8590";
-    ctx.font = "500 11px system-ui, -apple-system, sans-serif";
-    ctx.fillText("(press any key)", x + w / 2, y + 162);
-    ctx.restore();
+  function hideTutorialCompleteOverlay(): void {
+    const root = document.getElementById("tut-complete-overlay");
+    if (root) root.remove();
   }
 
   function drawHUD() {

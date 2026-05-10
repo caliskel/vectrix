@@ -383,9 +383,25 @@ door of Room 3 (its `nextRoomId` is `null`),
 `completeTutorial()` writes
 `localStorage["dash-proto:tutorial-completed"] = "true"`, plays
 `audio.play.multUp(8)` as a victory sting, and shows a
-"TUTORIAL COMPLETE" overlay; any keypress takes the player to
-`/`. The flag unlocks the campaign and changes the landing
-copy on the tutorial card to "Replay tutorial".
+**DOM overlay** with three CTAs:
+
+  ▶  PROCEED TO STORY   → /rooms.html
+  ↺  REPLAY TUTORIAL    → restartRun() (back to Room 0 phase 1)
+  ←  BACK TO MAIN MENU  → /
+
+The overlay is built on demand in `showTutorialCompleteOverlay()`
+(injects styles + DOM into `document.body`). Buttons are real
+`<a>` / `<button>` elements so they're clickable / focusable.
+Keystrokes are absorbed in the keydown handler while
+`runState === "completed"` so Esc / Enter / WASD don't toggle
+the pause menu or restart input — completion is mouse-driven
+choice only.
+
+The landing menu reflects the unlocked state live:
+`applyTutorialState()` re-runs on `focus`, `pageshow`, and
+`storage` events, so coming back from the tutorial via in-page
+nav, bfcache restore, or another tab updates the ROOMS card
+without a manual reload.
 
 ### Tutorial Room 0 — Controls
 
