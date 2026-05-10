@@ -1,13 +1,7 @@
-export type Bindings = {
-  up: string;
-  down: string;
-  left: string;
-  right: string;
-  walk: string;
-  dash: string;
-  menu1: string;
-  menu2: string;
-};
+// Keybinds used to live here (`Settings.bindings`) but moved into a
+// dedicated module + storage key in v5 so the Controls overlay on
+// the landing page can configure them globally for sandbox / rooms
+// / tutorial. See `lib/keybinds.ts` for the new profile shape.
 
 export type BulletsSettings = {
   spawnIntervalMs: number;
@@ -62,7 +56,6 @@ export type PickupsSettings = {
 };
 
 export type Settings = {
-  bindings: Bindings;
   bullets: BulletsSettings;
   run: RunSettings;
   pickups: PickupsSettings;
@@ -70,9 +63,15 @@ export type Settings = {
 };
 
 import { PALETTE } from "./palette";
+import {
+  KEYBIND_STORAGE_KEY,
+  profileFromLegacyBindings,
+  saveKeybinds,
+} from "./keybinds";
 export { PALETTE };
 
-export const STORAGE_KEY = "dash-proto:settings:v4";
+export const STORAGE_KEY = "dash-proto:settings:v5";
+const STORAGE_KEY_LEGACY_V4 = "dash-proto:settings:v4";
 const STORAGE_KEY_LEGACY_V3 = "dash-proto:settings:v3";
 
 // Player + dash physics are intentionally NOT in Settings so all
@@ -347,20 +346,7 @@ export const IMPACT_ENEMY_KILL_SCREEN_FLASH_MS = 60;
 export const IMPACT_ENEMY_KILL_SHAKE_AMOUNT = 7;
 export const IMPACT_ENEMY_KILL_SHAKE_DURATION_MS = 180;
 
-// Bindings store KeyboardEvent.code values (layout-independent). Modifier
-// codes are normalized to drop the Left/Right side suffix (see normalizeCode
-// in main.ts) so either Shift key counts as "Shift", etc.
 export const DEFAULT_SETTINGS: Settings = {
-  bindings: {
-    up: "ArrowUp",
-    down: "ArrowDown",
-    left: "ArrowLeft",
-    right: "ArrowRight",
-    walk: "Shift",
-    dash: "KeyX",
-    menu1: "Escape",
-    menu2: "Tab",
-  },
   bullets: {
     spawnIntervalMs: 1200,
     speed: 250,
@@ -393,7 +379,6 @@ export const DEFAULT_SETTINGS: Settings = {
 
 export type Preset = {
   bullets?: Partial<BulletsSettings>;
-  bindings?: Partial<Bindings>;
   run?: Partial<RunSettings>;
   pickups?: Partial<PickupsSettings>;
   audio?: Partial<AudioSettings>;
@@ -441,6 +426,21 @@ function migrate(parsed: unknown): unknown {
   // the keys so the saved blob never carries stale physics.
   delete p.player;
   delete p.dash;
+  // v4 → v5: keybinds extracted to their own storage key + module.
+  // Lift the player's existing rebinds into the new profile (if no
+  // profile has been saved yet) so they don't lose their setup.
+  if (p.bindings && typeof p.bindings === "object") {
+    try {
+      const alreadyHasNew = localStorage.getItem(KEYBIND_STORAGE_KEY) !== null;
+      if (!alreadyHasNew) {
+        saveKeybinds(profileFromLegacyBindings(p.bindings));
+      }
+    } catch {
+      // quota / privacy-mode — the player keeps defaults until they
+      // open the Controls overlay and resave
+    }
+    delete p.bindings;
+  }
   // dashRush → breaker (effect was replaced with Bullet Breaker; keep
   // weights mapping but drop the old effect block so new defaults apply)
   if (p.pickups && typeof p.pickups === "object") {
@@ -464,12 +464,26 @@ export function loadSettings(): Settings {
       deepAssign(base, migrate(JSON.parse(raw)));
       return base;
     }
-    // First boot under v4 — migrate any v3 blob over so the player
-    // doesn't lose audio / run / pickups settings, then drop the old
-    // key so future loads skip this branch entirely.
-    const legacy = localStorage.getItem(STORAGE_KEY_LEGACY_V3);
-    if (legacy) {
-      deepAssign(base, migrate(JSON.parse(legacy)));
+    // First boot under v5 — try v4 then v3, in order. Each migrate()
+    // pass strips the now-irrelevant fields and lifts bindings into
+    // the dedicated keybinds module. After a successful migration we
+    // write the cleaned blob under v5 and drop the legacy keys so
+    // future loads skip the chain entirely.
+    const legacyV4 = localStorage.getItem(STORAGE_KEY_LEGACY_V4);
+    if (legacyV4) {
+      deepAssign(base, migrate(JSON.parse(legacyV4)));
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(base));
+        localStorage.removeItem(STORAGE_KEY_LEGACY_V4);
+        localStorage.removeItem(STORAGE_KEY_LEGACY_V3);
+      } catch {
+        // quota / privacy-mode — fall back to in-memory only
+      }
+      return base;
+    }
+    const legacyV3 = localStorage.getItem(STORAGE_KEY_LEGACY_V3);
+    if (legacyV3) {
+      deepAssign(base, migrate(JSON.parse(legacyV3)));
       try {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(base));
         localStorage.removeItem(STORAGE_KEY_LEGACY_V3);

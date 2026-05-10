@@ -45,6 +45,13 @@ import {
 } from "../lib/config";
 import { drawDoor, playerOverlapsDoor } from "../lib/door";
 import {
+  consumeAction,
+  isActionPressed,
+  isAnyBoundCode,
+  loadKeybinds,
+  type KeybindProfile,
+} from "../lib/keybinds";
+import {
   drawEnemyDetection,
   updateEnemyAwareness,
 } from "../lib/enemies/awareness";
@@ -387,6 +394,14 @@ export function start(canvas: HTMLCanvasElement): void {
   }
 
   const settings: Settings = loadSettings();
+  // Keybind profile lives in its own localStorage key (set via the
+  // Controls overlay on the landing page) and is shared across all
+  // three modes. Re-read on the `storage` event so a rebind in
+  // another tab propagates here without a reload.
+  let keybinds: KeybindProfile = loadKeybinds();
+  window.addEventListener("storage", () => {
+    keybinds = loadKeybinds();
+  });
 
   audio.setMasterVolume(settings.audio.master);
   audio.setSfxVolume(settings.audio.sfx);
@@ -651,44 +666,18 @@ export function start(canvas: HTMLCanvasElement): void {
     ],
   });
 
-  function normalizeCode(code: string): string {
-    switch (code) {
-      case "ShiftLeft":
-      case "ShiftRight":
-        return "Shift";
-      case "ControlLeft":
-      case "ControlRight":
-        return "Control";
-      case "AltLeft":
-      case "AltRight":
-        return "Alt";
-      case "MetaLeft":
-      case "MetaRight":
-        return "Meta";
-    }
-    return code;
-  }
-
-  function isBoundKey(k: string): boolean {
-    for (const v of Object.values(settings.bindings)) if (v === k) return true;
-    return false;
-  }
-
   window.addEventListener("keydown", (e) => {
     audio.init();
-    const code = normalizeCode(e.code);
+    const code = e.code;
 
     // Dev menu owns its own F1 / Esc handling. Short-circuit our
     // game-side keydown while it's open so Esc doesn't also pop the
     // pause overlay underneath, etc.
     if (devMenu.isOpen()) return;
 
-    // Pause menu has no key-rebinding capture flow (settings live in
-    // sandbox), so we go straight to the toggle test.
-    if (
-      code === settings.bindings.menu1 ||
-      code === settings.bindings.menu2
-    ) {
+    // Esc / Tab are SYSTEM keys — hardcoded pause toggle (not
+    // rebindable; the Controls overlay rejects them).
+    if (code === "Escape" || code === "Tab") {
       e.preventDefault();
       menu.toggle();
       if (!menu.isOpen()) lastTime = performance.now();
@@ -707,11 +696,11 @@ export function start(canvas: HTMLCanvasElement): void {
     }
 
     keys.add(code);
-    if (isBoundKey(code)) e.preventDefault();
+    if (isAnyBoundCode(code, keybinds)) e.preventDefault();
   });
 
   window.addEventListener("keyup", (e) => {
-    keys.delete(normalizeCode(e.code));
+    keys.delete(e.code);
   });
   window.addEventListener("blur", () => keys.clear());
 
@@ -731,7 +720,7 @@ export function start(canvas: HTMLCanvasElement): void {
 
   function tryStartDash() {
     if (player.dashTime > 0 || player.cooldown > 0) return;
-    const input = inputDirection(keys, settings.bindings);
+    const input = inputDirection(keys, keybinds);
     let dx: number;
     let dy: number;
     if (input.x !== 0 || input.y !== 0) {
@@ -1154,9 +1143,9 @@ export function start(canvas: HTMLCanvasElement): void {
 
     // -------- running --------
 
-    if (keys.has(settings.bindings.dash)) {
+    if (isActionPressed("dash", keys, keybinds)) {
       tryStartDash();
-      keys.delete(settings.bindings.dash);
+      consumeAction("dash", keys, keybinds);
     }
 
     if (player.dashTime > 0) {
@@ -1171,7 +1160,7 @@ export function start(canvas: HTMLCanvasElement): void {
         player.vy *= 0.35;
       }
     } else {
-      const input = inputDirection(keys, settings.bindings);
+      const input = inputDirection(keys, keybinds);
       if (input.x !== 0 || input.y !== 0) {
         player.facingX = input.x;
         player.facingY = input.y;
@@ -1182,7 +1171,7 @@ export function start(canvas: HTMLCanvasElement): void {
       const damp = Math.exp(-FRICTION * dt);
       player.vx *= damp;
       player.vy *= damp;
-      const cap = keys.has(settings.bindings.walk)
+      const cap = isActionPressed("walk", keys, keybinds)
         ? PLAYER_MAX_SPEED * PLAYER_WALK_FACTOR
         : PLAYER_MAX_SPEED;
       const sp = Math.hypot(player.vx, player.vy);

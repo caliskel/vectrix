@@ -3,34 +3,13 @@ import {
   DEFAULT_SETTINGS,
   PRESETS,
   deepAssign,
-  type Bindings,
   type Settings,
 } from "./config";
 
-const KEY_LABELS: Record<string, string> = {
-  Space: "Space",
-  Shift: "Shift",
-  Control: "Ctrl",
-  Alt: "Alt",
-  Meta: "Meta",
-  Tab: "Tab",
-  Escape: "Esc",
-  Enter: "Enter",
-  Backspace: "Backspace",
-  Delete: "Del",
-  ArrowUp: "↑",
-  ArrowDown: "↓",
-  ArrowLeft: "←",
-  ArrowRight: "→",
-};
-
-function keyLabel(code: string): string {
-  if (KEY_LABELS[code]) return KEY_LABELS[code];
-  if (code.startsWith("Key")) return code.slice(3); // KeyX → X
-  if (code.startsWith("Digit")) return code.slice(5); // Digit1 → 1
-  if (code.startsWith("Numpad")) return "Num " + code.slice(6);
-  return code;
-}
+// Keybinds used to live in this overlay (sandbox-only). They moved
+// to the global Controls overlay on the landing page (`index.html`
+// + `src/landing/main.ts`) in v5 so a rebind applies to sandbox,
+// rooms, and the tutorial at once.
 
 const STYLE = `
 .dp-menu-root {
@@ -75,21 +54,6 @@ const STYLE = `
   background: transparent; padding: 0; border-radius: 5px;
   cursor: pointer;
 }
-.dp-bind {
-  background: rgba(255,255,255,0.06);
-  border: 1px solid rgba(255,255,255,0.15);
-  color: #fff;
-  font: inherit; font-size: 13px;
-  padding: 6px 14px; border-radius: 5px;
-  cursor: pointer; min-width: 110px;
-  transition: background 0.12s, border-color 0.12s, color 0.12s;
-}
-.dp-bind:hover { background: rgba(255,255,255,0.12); }
-.dp-bind.capturing {
-  background: rgba(0,229,255,0.18);
-  border-color: #00e5ff;
-  color: #00e5ff;
-}
 .dp-presets { display: flex; gap: 10px; flex-wrap: wrap; }
 .dp-btn {
   background: rgba(255,255,255,0.08);
@@ -119,12 +83,7 @@ export type MenuHandle = {
   isOpen(): boolean;
   setOpen(open: boolean): void;
   toggle(): void;
-  isCapturing(): boolean;
-  acceptCapturedKey(key: string): void;
-  cancelCapture(): void;
 };
-
-type CaptureSlot = { target: keyof Bindings; button: HTMLButtonElement };
 
 export function createMenu(
   settings: Settings,
@@ -137,20 +96,18 @@ export function createMenu(
   root.className = "dp-menu-root";
 
   let open = false;
-  let capturing: CaptureSlot | null = null;
 
   function rebuild() {
     root.innerHTML = "";
     const panel = document.createElement("div");
     panel.className = "dp-panel";
     panel.appendChild(makeHeader());
-    panel.appendChild(makeBindings());
     panel.appendChild(makeRun());
     panel.appendChild(makeBullets());
     // Player + dash physics live as constants in lib/config.ts so
-    // they stay identical across sandbox / rooms / tutorial. The
-    // old makePlayer() / makeDash() sections were removed alongside
-    // the schema move (settings:v3 → v4).
+    // they stay identical across sandbox / rooms / tutorial. Keybinds
+    // moved to the landing-page Controls overlay (v5) so the rebind
+    // applies globally. Both used to live in this menu.
     panel.appendChild(makePickups());
     panel.appendChild(makeAudio());
     panel.appendChild(makePresets());
@@ -165,9 +122,9 @@ export function createMenu(
     wrap.appendChild(t);
     const h = document.createElement("p");
     h.className = "dp-hint";
-    h.textContent = `${keyLabel(settings.bindings.menu1)} or ${keyLabel(
-      settings.bindings.menu2,
-    )} closes the menu · changes apply live`;
+    h.textContent =
+      "Esc or Tab closes the menu · changes apply live · " +
+      "rebind keys on the main-menu Controls page";
     wrap.appendChild(h);
     return wrap;
   }
@@ -241,38 +198,6 @@ export function createMenu(
       save();
     });
     return input;
-  }
-
-  function makeBindButton(target: keyof Bindings) {
-    const btn = document.createElement("button");
-    btn.className = "dp-bind";
-    btn.type = "button";
-    btn.textContent = keyLabel(settings.bindings[target]);
-    btn.addEventListener("click", () => {
-      if (capturing) {
-        capturing.button.classList.remove("capturing");
-        capturing.button.textContent = keyLabel(
-          settings.bindings[capturing.target],
-        );
-      }
-      capturing = { target, button: btn };
-      btn.classList.add("capturing");
-      btn.textContent = "Press any key…";
-    });
-    return btn;
-  }
-
-  function makeBindings() {
-    const s = makeSection("Bindings");
-    s.appendChild(makeRow("Move up", makeBindButton("up")));
-    s.appendChild(makeRow("Move down", makeBindButton("down")));
-    s.appendChild(makeRow("Move left", makeBindButton("left")));
-    s.appendChild(makeRow("Move right", makeBindButton("right")));
-    s.appendChild(makeRow("Walk (slow)", makeBindButton("walk")));
-    s.appendChild(makeRow("Dash", makeBindButton("dash")));
-    s.appendChild(makeRow("Open menu (1)", makeBindButton("menu1")));
-    s.appendChild(makeRow("Open menu (2)", makeBindButton("menu2")));
-    return s;
   }
 
   function makeRun() {
@@ -470,7 +395,6 @@ export function createMenu(
     open = value;
     root.classList.toggle("open", value);
     if (value) rebuild();
-    if (!value && capturing) cancelCapture();
   }
 
   function toggle() {
@@ -481,25 +405,6 @@ export function createMenu(
     return open;
   }
 
-  function isCapturing() {
-    return capturing !== null;
-  }
-
-  function acceptCapturedKey(key: string) {
-    if (!capturing) return;
-    settings.bindings[capturing.target] = key;
-    capturing = null;
-    save();
-    rebuild();
-  }
-
-  function cancelCapture() {
-    if (!capturing) return;
-    capturing.button.classList.remove("capturing");
-    capturing.button.textContent = keyLabel(settings.bindings[capturing.target]);
-    capturing = null;
-  }
-
   rebuild();
   document.body.appendChild(root);
 
@@ -508,8 +413,5 @@ export function createMenu(
     isOpen,
     setOpen,
     toggle,
-    isCapturing,
-    acceptCapturedKey,
-    cancelCapture,
   };
 }

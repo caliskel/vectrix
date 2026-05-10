@@ -45,6 +45,14 @@ import {
 } from "../lib/config";
 import { drawDoor, playerOverlapsDoor } from "../lib/door";
 import {
+  consumeAction,
+  formatKeybindLabel,
+  isActionPressed,
+  isAnyBoundCode,
+  loadKeybinds,
+  type KeybindProfile,
+} from "../lib/keybinds";
+import {
   drawEnemyDetection,
   updateEnemyAwareness,
 } from "../lib/enemies/awareness";
@@ -354,6 +362,13 @@ export function start(canvas: HTMLCanvasElement): void {
   const ctx: CanvasRenderingContext2D = rawCtx;
 
   const settings: Settings = loadSettings();
+  // Keybinds — global profile from the landing-page Controls
+  // overlay. Re-read on `storage` so rebinds in another tab take
+  // effect without a reload.
+  let keybinds: KeybindProfile = loadKeybinds();
+  window.addEventListener("storage", () => {
+    keybinds = loadKeybinds();
+  });
 
   audio.setMasterVolume(settings.audio.master);
   audio.setSfxVolume(settings.audio.sfx);
@@ -476,8 +491,14 @@ export function start(canvas: HTMLCanvasElement): void {
     room0Phase = phase;
     if (phase === "movement") {
       // Initial state — Room 0 already ships with the four direction
-      // markers; just queue the hint.
-      showHint("USE [↑][←][↓][→] TO MOVE");
+      // markers; just queue the hint. Key labels are pulled from the
+      // current keybind profile so a player who rebound WASD to QWES
+      // sees "USE [Q][A][W][E][S] TO MOVE" instead of being lied to.
+      const upK = formatKeybindLabel(keybinds.moveUp.primary);
+      const leftK = formatKeybindLabel(keybinds.moveLeft.primary);
+      const downK = formatKeybindLabel(keybinds.moveDown.primary);
+      const rightK = formatKeybindLabel(keybinds.moveRight.primary);
+      showHint(`USE [${upK}][${leftK}][${downK}][${rightK}] TO MOVE`);
     } else if (phase === "dash") {
       // Replace movement markers with a single goal beyond the wall.
       currentRoom.markers = [createMarker(900, 400, 1, "→")];
@@ -490,7 +511,8 @@ export function start(canvas: HTMLCanvasElement): void {
       // copy.
       room0DashWall = { x: 585, y: 0, w: 30, h: 800, dashable: true };
       currentRoom.walls.push(room0DashWall);
-      showHint("PRESS [X] TO DASH");
+      const dashK = formatKeybindLabel(keybinds.dash.primary);
+      showHint(`PRESS [${dashK}] TO DASH`);
     } else if (phase === "combat") {
       // Dispersion effect along the wall before clearing — burst of
       // bgGrid-coloured particles makes the obstacle "vaporize"
@@ -583,9 +605,11 @@ export function start(canvas: HTMLCanvasElement): void {
   type HintToken = { kind: "text" | "key"; value: string };
   function parseHintTokens(text: string): HintToken[] {
     const tokens: HintToken[] = [];
-    // Bracketed token = a keycap glyph. Letters A-Z for ASCII keys,
-    // ↑ ← ↓ → for the arrow-glyph movement hint in Phase 1.
-    const re = /\[([A-Z↑←↓→])\]/g;
+    // Bracketed token = a keycap glyph. Body can now be any
+    // non-bracket sequence so rebound keys render too (`[SPACE]`,
+    // `[L SHIFT]`, `[F1]`, arrow glyphs, etc.) — `formatKeybindLabel`
+    // emits multi-char names for many codes.
+    const re = /\[([^\]]+)\]/g;
     let last = 0;
     let m: RegExpExecArray | null;
     while ((m = re.exec(text))) {
@@ -638,9 +662,11 @@ export function start(canvas: HTMLCanvasElement): void {
     const fontSize = 28;
     const padX = 18;
     const padY = 10;
-    const keyW = 32;
+    const keyMinW = 32;
+    const keyTextPad = 16;
     const keyH = 32;
     const keyGap = 4;
+    const keyFont = "600 28px ui-monospace, SFMono-Regular, Menlo, monospace";
     ctx.save();
     ctx.font = `700 ${fontSize}px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif`;
     ctx.textBaseline = "middle";
@@ -654,8 +680,16 @@ export function start(canvas: HTMLCanvasElement): void {
         widths.push(w);
         totalContent += w;
       } else {
-        widths.push(keyW);
-        totalContent += keyW + keyGap;
+        // Keycap width grows for multi-char labels (`SPACE`,
+        // `L SHIFT`) — measure with the keycap font and pad either
+        // side, never below `keyMinW` so single letters stay
+        // square.
+        ctx.font = keyFont;
+        const measured = ctx.measureText(tk.value).width;
+        ctx.font = `700 ${fontSize}px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif`;
+        const w = Math.max(keyMinW, measured + keyTextPad);
+        widths.push(w);
+        totalContent += w + keyGap;
       }
     }
     const totalW = totalContent + padX * 2;
@@ -683,19 +717,18 @@ export function start(canvas: HTMLCanvasElement): void {
         ctx.fillText(tk.value, cursor, 0);
         cursor += widths[i];
       } else {
-        // keycap
+        // keycap — width is the per-token measured value so
+        // multi-char labels fit.
+        const w = widths[i];
         ctx.shadowBlur = 0;
         ctx.fillStyle = HINT_KEYCAP_FILL;
-        roundedRectPath(ctx, cursor, -keyH / 2, keyW, keyH, 4);
+        roundedRectPath(ctx, cursor, -keyH / 2, w, keyH, 4);
         ctx.fill();
         ctx.fillStyle = PALETTE.bg;
-        // Arrow glyphs need a touch more size than letters to read at
-        // the same optical weight; bumped from 22 → 28.
-        ctx.font =
-          "600 28px ui-monospace, SFMono-Regular, Menlo, monospace";
+        ctx.font = keyFont;
         ctx.textAlign = "center";
-        ctx.fillText(tk.value, cursor + keyW / 2, 1);
-        cursor += keyW + keyGap;
+        ctx.fillText(tk.value, cursor + w / 2, 1);
+        cursor += w + keyGap;
       }
     }
     ctx.restore();
@@ -898,32 +931,9 @@ export function start(canvas: HTMLCanvasElement): void {
     ],
   });
 
-  function normalizeCode(code: string): string {
-    switch (code) {
-      case "ShiftLeft":
-      case "ShiftRight":
-        return "Shift";
-      case "ControlLeft":
-      case "ControlRight":
-        return "Control";
-      case "AltLeft":
-      case "AltRight":
-        return "Alt";
-      case "MetaLeft":
-      case "MetaRight":
-        return "Meta";
-    }
-    return code;
-  }
-
-  function isBoundKey(k: string): boolean {
-    for (const v of Object.values(settings.bindings)) if (v === k) return true;
-    return false;
-  }
-
   window.addEventListener("keydown", (e) => {
     audio.init();
-    const code = normalizeCode(e.code);
+    const code = e.code;
 
     // Dev menu owns its own F1 / Esc handling. Short-circuit our
     // game-side keydown while it's open so Esc doesn't pop the
@@ -937,12 +947,9 @@ export function start(canvas: HTMLCanvasElement): void {
       return;
     }
 
-    // Pause menu has no key-rebinding capture flow (settings live in
-    // sandbox), so we go straight to the toggle test.
-    if (
-      code === settings.bindings.menu1 ||
-      code === settings.bindings.menu2
-    ) {
+    // Esc / Tab are SYSTEM keys — hardcoded pause toggle (not
+    // rebindable; the Controls overlay rejects them).
+    if (code === "Escape" || code === "Tab") {
       e.preventDefault();
       menu.toggle();
       if (!menu.isOpen()) lastTime = performance.now();
@@ -961,11 +968,11 @@ export function start(canvas: HTMLCanvasElement): void {
     }
 
     keys.add(code);
-    if (isBoundKey(code)) e.preventDefault();
+    if (isAnyBoundCode(code, keybinds)) e.preventDefault();
   });
 
   window.addEventListener("keyup", (e) => {
-    keys.delete(normalizeCode(e.code));
+    keys.delete(e.code);
   });
   window.addEventListener("blur", () => keys.clear());
 
@@ -985,7 +992,7 @@ export function start(canvas: HTMLCanvasElement): void {
 
   function tryStartDash() {
     if (player.dashTime > 0 || player.cooldown > 0) return;
-    const input = inputDirection(keys, settings.bindings);
+    const input = inputDirection(keys, keybinds);
     let dx: number;
     let dy: number;
     if (input.x !== 0 || input.y !== 0) {
@@ -1275,9 +1282,9 @@ export function start(canvas: HTMLCanvasElement): void {
 
     // -------- running --------
 
-    if (keys.has(settings.bindings.dash)) {
+    if (isActionPressed("dash", keys, keybinds)) {
       tryStartDash();
-      keys.delete(settings.bindings.dash);
+      consumeAction("dash", keys, keybinds);
     }
 
     if (player.dashTime > 0) {
@@ -1292,7 +1299,7 @@ export function start(canvas: HTMLCanvasElement): void {
         player.vy *= 0.35;
       }
     } else {
-      const input = inputDirection(keys, settings.bindings);
+      const input = inputDirection(keys, keybinds);
       if (input.x !== 0 || input.y !== 0) {
         player.facingX = input.x;
         player.facingY = input.y;
@@ -1303,7 +1310,7 @@ export function start(canvas: HTMLCanvasElement): void {
       const damp = Math.exp(-FRICTION * dt);
       player.vx *= damp;
       player.vy *= damp;
-      const cap = keys.has(settings.bindings.walk)
+      const cap = isActionPressed("walk", keys, keybinds)
         ? PLAYER_MAX_SPEED * PLAYER_WALK_FACTOR
         : PLAYER_MAX_SPEED;
       const sp = Math.hypot(player.vx, player.vy);

@@ -246,9 +246,12 @@ Player physics and dash are global constants in `config.ts`
 `DASH_COOLDOWN_MS`); not exposed in any Settings menu so they stay
 identical across sandbox / rooms / tutorial.
 
-Storage key: `dash-proto:settings:v4` (was `:v3` before player +
-dash physics moved out — `loadSettings` migrates the old blob over
-on first boot, drops the moved keys, and removes `:v3`). Per-config
+Storage key: `dash-proto:settings:v5` (v3 → v4 stripped the
+player + dash physics; v4 → v5 lifted keybinds into their own
+`dash-proto:keybinds:v1` profile so the Controls overlay on the
+landing page can configure them globally — see "Keybinds
+profile" below). `loadSettings` walks the chain on first boot,
+migrating each older key in order before dropping it. Per-config
 best-score keys: `dash-prototype:score:Default|Easy|Normal|Hard`.
 
 ## Main menu structure
@@ -258,19 +261,28 @@ couple of side panels. Same neon palette as the rest of the game,
 zero framework — pure HTML / CSS / a small TS module
 (`src/landing/main.ts`).
 
-Layout: a 2×2 grid of cards under the DASH title.
+Layout: two stacked grids under the DASH title.
+
+**Row 1 — play modes** (`.modes`, 3 columns, large cards):
 
 | card     | accent             | action                                             |
 | -------- | ------------------ | -------------------------------------------------- |
+| TUTORIAL | green `#4ade80`    | `<a href="/tutorial.html">` (locked → unlock copy) |
+| ROOMS    | cyan `--player-dash` | `<a href="/rooms.html">` (locked until tutorial)  |
 | SANDBOX  | purple `--player`  | `<a href="/sandbox.html">`                         |
-| ROOMS    | cyan `--player-dash` | `<a href="/rooms.html">`                         |
-| PLAYER   | yellow `#ffd60a`   | opens the Player overlay                           |
-| ABOUT    | neutral `--text`   | opens the About overlay                            |
 
-Both overlays share the same dark backdrop (`rgba(10,14,26,0.92)` +
-backdrop-filter blur), a centered frame, an `×` corner button that
-closes without saving, and an Esc handler. Tab is preventDefault'd
-while an overlay is open so focus doesn't leak under the modal.
+**Row 2 — utilities** (`.utilities`, 3 columns, shorter cards):
+
+| card     | accent             | action                                             |
+| -------- | ------------------ | -------------------------------------------------- |
+| PLAYER   | yellow `#ffd60a`   | opens the Player overlay (color picker + preview)  |
+| CONTROLS | cyan `#7dd3fc`     | opens the Controls overlay (keybind editor)        |
+| ABOUT    | neutral `--text`   | opens the About overlay (cheat sheet)              |
+
+All overlays share the same dark backdrop (`rgba(10,14,26,0.92)` +
+backdrop-filter blur), a centered frame, an `×` corner button, and
+the global Esc handler. Tab is preventDefault'd while any overlay
+is open so focus doesn't leak under the modal.
 
 ### Player overlay
 
@@ -292,10 +304,67 @@ the pickers back to `DEFAULT_PLAYER_PROFILE`. `×` and Esc close
 without saving (the next open re-reads from localStorage so unsaved
 edits are discarded).
 
+### Controls overlay
+
+The single, global keybind editor. Reachable from the landing
+page only — once the player is in a mode, rebinds require coming
+back here. Backed by `lib/keybinds.ts` and persisted under
+`dash-proto:keybinds:v1`.
+
+Layout: a 3-column table of six rows. The header reads
+`ACTION / PRIMARY / SECONDARY`; each action row puts its label
+on the left and two clickable keycap cells on the right.
+
+| action       | default primary | default secondary |
+| ------------ | --------------- | ----------------- |
+| MOVE UP      | `KeyW`          | `ArrowUp`         |
+| MOVE DOWN    | `KeyS`          | `ArrowDown`       |
+| MOVE LEFT    | `KeyA`          | `ArrowLeft`       |
+| MOVE RIGHT   | `KeyD`          | `ArrowRight`      |
+| DASH         | `Space`         | `KeyX`            |
+| WALK (SLOW)  | `ShiftLeft`     | `ShiftRight`      |
+
+Bindings store raw `KeyboardEvent.code` values (layout-independent —
+RU/EN swaps don't break the player's setup). `formatKeybindLabel`
+in `lib/keybinds.ts` maps them to display strings (`KeyW` → "W",
+`ArrowUp` → "↑", `ShiftLeft` → "L SHIFT", `Space` → "SPACE", etc.)
+for both the cells and the tutorial Room 0 hint banners.
+
+**Capture flow.** Click a cell → border flashes bright cyan, text
+reads "press a key…". The next non-reserved keydown writes that
+code into the slot and auto-saves to localStorage. Esc inside
+capture cancels without changing the binding; Esc outside capture
+closes the overlay. Capture-mode keydown is installed in the
+capture phase so it beats the overlay-close listener on Escape.
+
+**Reserved keys.** `Escape`, `Tab`, and `F1` are SYSTEM bindings —
+the pause / settings menu and dev overlay toggles. Attempting to
+capture any of them rejects with a "RESERVED KEY" toast (1.5 s).
+These are hardcoded inside each game's keydown handler so the
+Controls page can't accidentally clear them.
+
+**Duplicate handling.** Binding a code already in another slot
+evicts the loser: if it was a *secondary* slot, that slot clears
+to `null` ("—"). If it was a *primary*, the rebind is rejected
+with a toast — primaries can never be empty (the action would
+have no key). Within the same action, setting a slot to the value
+of the other slot in that action acts as a "clear" for secondary
+(it goes to `null`); primary always overwrites.
+
+**RESET TO DEFAULTS** slams the profile back to `DEFAULT_KEYBINDS`
+and saves immediately. `CLOSE` / `×` / Esc just close — auto-save
+makes a separate "save" button unnecessary.
+
+Live propagation: each game's `start()` calls `loadKeybinds()` once
+and subscribes to the `storage` event. A rebind in another tab
+updates the profile in the running game without a reload.
+
 ### About overlay
 
-A monospace text block with the controls cheat sheet and a CLOSE
-button. Static — no animation, no state.
+A monospace text block built fresh on every open. Lists the play
+modes, the current keybind cheat-sheet (pulled dynamically from
+`loadKeybinds()` via `formatKeybindLabel`), and the reserved
+system keys. Static layout — no animation, no live preview.
 
 ### Player profile and where it applies
 
@@ -431,7 +500,11 @@ dummy are spliced in / out of `currentRoom` as phases advance:
   the next-up. The route ends at lower-left so Phase 2 starts
   with the player on the LEFT side of the dash wall. HUD top
   shows `MARKERS X / 4`. Hint banner reads
-  `USE [W][A][S][D] TO MOVE`.
+  `USE [W][A][S][D] TO MOVE` **using the player's current
+  primary bindings** — labels are generated dynamically via
+  `formatKeybindLabel(keybinds.moveUp.primary)` etc., so a
+  player who rebound WASD to QWES sees `USE [Q][W][E][S] TO
+  MOVE` instead of being lied to.
 - **Phase 2 — dash.** Markers cleared, replaced with a single
   goal at (900, 400) and a vertical 30 × 800 wall obstacle at
   x = 585 spanning the entire arena height — the player
@@ -439,7 +512,8 @@ dummy are spliced in / out of `currentRoom` as phases advance:
   the player is in dash i-frames — the engine filters
   `room0DashWall` out of the wall list passed to
   `resolveEntityWallCollisions` when `dashIframeTime > 0`.
-  Hint reads `PRESS [X] TO DASH`. On phase transition the wall
+  Hint reads `PRESS [SPACE] TO DASH` (or whatever the player's
+  current `keybinds.dash.primary` is). On phase transition the wall
   vaporises with a 12-particle dispersion (PALETTE.bgGrid) and
   a faint white expansion ring at the wall midpoint.
 - **Phase 3 — combat.** Wall and marker cleared, a
@@ -456,9 +530,11 @@ dummy are spliced in / out of `currentRoom` as phases advance:
   transition to Tutorial Room 1.
 
 The hint banner sits bottom-center in screen space (`y =
-viewH - 80`). Text is parsed for `[X]` patterns which render as
-white keycap rectangles. Show / hide animations slide 8 px and
-fade over 300 / 200 ms. Visual is intentionally restrained —
+viewH - 80`). Text is parsed for `[…]` patterns (any non-bracket
+sequence) which render as white keycap rectangles whose width is
+measured per-token, so multi-char labels like `[SPACE]` or
+`[L SHIFT]` render correctly when the player has rebound keys.
+Show / hide animations slide 8 px and fade over 300 / 200 ms. Visual is intentionally restrained —
 text colour `#d4af0a` (dimmer than the canonical
 `PALETTE.player`), `shadowBlur 6`, denser backplate
 `rgba(10, 14, 26, 0.85)`. No idle pulse — the hint is meant to
@@ -1436,12 +1512,18 @@ in `config.ts` under `IMPACT_*`.
   Settings field; read at point of use so the menu controls
   everything live. **Player and dash physics are intentionally NOT
   in Settings** — they're file-level constants in `lib/config.ts`
-  (`PLAYER_*`, `DASH_*`) so all modes share the same hero. A
-  sandbox-only tweak to dash cooldown can no longer leak into the
-  campaign.
-- **Live tweaking via the menu is sacred.** Sliders / color pickers /
-  keybinds must propagate without restart. If you add a new setting,
-  also add the slider — or note explicitly why it's deferred.
+  (`PLAYER_*`, `DASH_*`) so all modes share the same hero. **Keybinds
+  are also out of sandbox Settings** — they live in a separate
+  global profile in `dash-proto:keybinds:v1`, configured via the
+  Controls overlay on the landing page, and apply to all modes.
+  Sandbox Settings now holds only sandbox-tunable mechanics
+  (bullets, run length, pickups, audio).
+- **Live tweaking via the menu is sacred.** Sliders / color pickers
+  must propagate without restart. Keybinds propagate via the
+  `storage` event each game subscribes to, so a rebind on the
+  landing page applies live (across tabs too). If you add a new
+  setting, also add the slider — or note explicitly why it's
+  deferred.
 - **`PALETTE` in `lib/palette.ts` is the only place colors live.** New
   colors go there; existing inline colors should migrate when touched.
 - **Audio init must be lazy.** Tone.js requires a user gesture, so
@@ -1450,11 +1532,15 @@ in `config.ts` under `IMPACT_*`.
 - **No DOM for game-world UI.** HUD, floating scores, end overlay, hit
   vignette — all canvas. Settings menu and the landing page are the
   agreed exceptions.
-- **`localStorage` keys are stable.** `dash-proto:settings:v4`
-  and `dash-prototype:score:*` should not change without a
-  migration in `lib/config.ts` `migrate()`. The v3 → v4 bump is
-  the live example: physics keys were stripped + new key written
-  on first load.
+- **`localStorage` keys are stable.** `dash-proto:settings:v5`,
+  `dash-proto:keybinds:v1`, `dash-proto:player-profile`, and
+  `dash-prototype:score:*` should not change without a migration
+  in `lib/config.ts` `migrate()` (or the equivalent in the
+  relevant module). The v3 → v4 → v5 chain is the live example:
+  v3 → v4 stripped the player + dash physics; v4 → v5 lifted the
+  `bindings` field into its own profile module so the Controls
+  overlay can configure it globally. Migration writes the new
+  shape and deletes the old key on first boot.
 - **Don't break sandbox while building rooms.** Rooms gets its own
   `GameState`; lib helpers stay pure. Anything that becomes
   cross-mode lives in `lib/`.

@@ -66,8 +66,8 @@ import {
   START_SQUASH_CUR_MIN,
   START_SQUASH_PREV_MAX,
   STRETCH_X,
-  type Bindings,
 } from "./config";
+import { isActionPressed, type KeybindProfile } from "./keybinds";
 import { drawNeon } from "./neon";
 import { PALETTE } from "./palette";
 
@@ -442,15 +442,15 @@ export function triggerPlayerSmash(
 }
 
 export function inputDirection(
-  keys: Set<string>,
-  bindings: Bindings,
+  pressedCodes: Set<string>,
+  profile: KeybindProfile,
 ): { x: number; y: number } {
   let x = 0;
   let y = 0;
-  if (keys.has(bindings.left)) x -= 1;
-  if (keys.has(bindings.right)) x += 1;
-  if (keys.has(bindings.up)) y -= 1;
-  if (keys.has(bindings.down)) y += 1;
+  if (isActionPressed("moveLeft", pressedCodes, profile)) x -= 1;
+  if (isActionPressed("moveRight", pressedCodes, profile)) x += 1;
+  if (isActionPressed("moveUp", pressedCodes, profile)) y -= 1;
+  if (isActionPressed("moveDown", pressedCodes, profile)) y += 1;
   const len = Math.hypot(x, y);
   if (len > 0) {
     x /= len;

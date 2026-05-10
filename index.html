@@ -57,6 +57,11 @@
         color: var(--muted);
         opacity: 0.7;
       }
+      .menu-stack {
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+      }
       .modes {
         display: grid;
         grid-template-columns: repeat(3, minmax(200px, 220px));
@@ -66,6 +71,20 @@
       @media (max-width: 760px) {
         .modes {
           grid-template-columns: repeat(2, minmax(200px, 220px));
+        }
+      }
+      /* Utility row — same column count as `.modes` but shorter
+         cards so the visual hierarchy reads "play modes on top,
+         tools on the bottom." */
+      .utilities {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(150px, 180px));
+        gap: 14px;
+        justify-content: center;
+      }
+      @media (max-width: 760px) {
+        .utilities {
+          grid-template-columns: repeat(2, minmax(150px, 180px));
         }
       }
       .mode {
@@ -97,6 +116,50 @@
         font-size: 12px;
         color: var(--muted);
         letter-spacing: 0.04em;
+      }
+      /* Utility-row cards are shorter + use a smaller label so
+         they read as secondary against the play modes above. */
+      .utility {
+        display: block;
+        text-align: left;
+        text-decoration: none;
+        color: var(--text);
+        font-family: inherit;
+        background: rgba(20, 25, 43, 0.55);
+        border: 1px solid rgba(216, 180, 254, 0.14);
+        border-radius: 8px;
+        padding: 14px 18px;
+        cursor: pointer;
+        transition: transform 0.15s, border-color 0.15s, box-shadow 0.15s;
+      }
+      .utility:hover {
+        transform: translateY(-2px);
+        border-color: rgba(125, 211, 252, 0.55);
+        box-shadow: 0 0 0 1px rgba(125, 211, 252, 0.15),
+          0 14px 28px rgba(125, 211, 252, 0.12);
+      }
+      .utility .label {
+        font-size: 16px;
+        font-weight: 600;
+        letter-spacing: 0.18em;
+      }
+      .utility .desc {
+        margin-top: 4px;
+        font-size: 11px;
+        color: var(--muted);
+        letter-spacing: 0.04em;
+      }
+      .utility--player .label {
+        color: var(--player-yellow);
+        text-shadow: 0 0 10px rgba(255, 214, 10, 0.45);
+      }
+      .utility--controls .label {
+        color: var(--player-dash);
+        text-shadow: 0 0 10px rgba(125, 211, 252, 0.5);
+      }
+      .utility--about .label {
+        color: var(--text);
+        text-shadow: 0 0 10px rgba(203, 213, 225, 0.3);
       }
       .mode--sandbox .label {
         color: var(--player);
@@ -279,29 +342,142 @@
         color: #ffffff;
       }
 
+      /* === Controls overlay === */
+      #overlay-controls .overlay-frame {
+        max-width: 540px;
+      }
+      .controls-overlay-title {
+        color: var(--player-dash);
+        text-shadow: 0 0 12px rgba(125, 211, 252, 0.45);
+      }
+      .controls-subtitle {
+        font-size: 12px;
+        color: var(--muted);
+        letter-spacing: 0.04em;
+        margin: -10px 0 18px;
+      }
+      .controls-table {
+        display: grid;
+        grid-template-columns: 1fr auto auto;
+        gap: 10px 16px;
+        align-items: center;
+      }
+      .controls-row-header {
+        display: contents;
+      }
+      .controls-row-header div {
+        font-size: 10px;
+        font-weight: 600;
+        letter-spacing: 0.22em;
+        color: var(--muted);
+        text-transform: uppercase;
+        padding-bottom: 6px;
+        border-bottom: 1px solid rgba(125, 211, 252, 0.15);
+      }
+      .controls-action {
+        font-size: 13px;
+        font-weight: 600;
+        letter-spacing: 0.12em;
+        color: var(--text);
+        padding: 6px 0;
+      }
+      .controls-cell {
+        min-width: 96px;
+        height: 36px;
+        padding: 0 14px;
+        border-radius: 6px;
+        background: transparent;
+        border: 1px solid rgba(125, 211, 252, 0.3);
+        color: var(--text);
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 13px;
+        font-weight: 600;
+        letter-spacing: 0.05em;
+        cursor: pointer;
+        transition: background 0.12s, border-color 0.12s, color 0.12s;
+      }
+      .controls-cell:hover {
+        border-color: rgba(125, 211, 252, 0.6);
+        background: rgba(125, 211, 252, 0.05);
+      }
+      .controls-cell.capturing {
+        border-color: var(--player-dash);
+        border-width: 2px;
+        background: rgba(125, 211, 252, 0.15);
+        color: var(--player-dash);
+        font-style: italic;
+        font-size: 11px;
+        letter-spacing: 0.06em;
+      }
+      .controls-toast {
+        position: absolute;
+        top: 12px;
+        left: 50%;
+        transform: translateX(-50%);
+        padding: 6px 12px;
+        background: rgba(255, 45, 85, 0.16);
+        border: 1px solid rgba(255, 45, 85, 0.4);
+        color: var(--bullet);
+        font-size: 11px;
+        letter-spacing: 0.08em;
+        border-radius: 6px;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.2s;
+        text-transform: uppercase;
+      }
+      .controls-toast.visible {
+        opacity: 1;
+      }
+
+      /* === About overlay === */
+      .about-body {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 13px;
+        line-height: 1.6;
+        color: var(--text);
+        white-space: pre-wrap;
+      }
+      .about-body strong {
+        color: var(--player-dash);
+        font-weight: 600;
+      }
+
     </style>
   </head>
   <body>
     <h1 class="title">DASH</h1>
     <div class="subtitle">arcade prototype</div>
-    <nav class="modes">
-      <a class="mode mode--tutorial" id="link-tutorial" href="/tutorial.html">
-        <div class="label">TUTORIAL</div>
-        <div class="desc" id="link-tutorial-desc">Learn the basics</div>
-      </a>
-      <a class="mode mode--rooms" id="link-rooms" href="/rooms.html">
-        <div class="label">ROOMS</div>
-        <div class="desc" id="link-rooms-desc">Story mode</div>
-      </a>
-      <a class="mode mode--sandbox" href="/sandbox.html">
-        <div class="label">SANDBOX</div>
-        <div class="desc">Endless practice mode</div>
-      </a>
-      <button type="button" class="mode mode--player" data-overlay="player">
-        <div class="label">PLAYER</div>
-        <div class="desc">Customize your character</div>
-      </button>
-    </nav>
+    <div class="menu-stack">
+      <nav class="modes">
+        <a class="mode mode--tutorial" id="link-tutorial" href="/tutorial.html">
+          <div class="label">TUTORIAL</div>
+          <div class="desc" id="link-tutorial-desc">Learn the basics</div>
+        </a>
+        <a class="mode mode--rooms" id="link-rooms" href="/rooms.html">
+          <div class="label">ROOMS</div>
+          <div class="desc" id="link-rooms-desc">Story mode</div>
+        </a>
+        <a class="mode mode--sandbox" href="/sandbox.html">
+          <div class="label">SANDBOX</div>
+          <div class="desc">Endless practice mode</div>
+        </a>
+      </nav>
+      <nav class="utilities">
+        <button type="button" class="utility utility--player" data-overlay="player">
+          <div class="label">PLAYER</div>
+          <div class="desc">colors</div>
+        </button>
+        <button type="button" class="utility utility--controls" data-overlay="controls">
+          <div class="label">CONTROLS</div>
+          <div class="desc">keyboard bindings</div>
+        </button>
+        <button type="button" class="utility utility--about" data-overlay="about">
+          <div class="label">ABOUT</div>
+          <div class="desc">cheat sheet</div>
+        </button>
+      </nav>
+    </div>
     <div class="version">v0.0.0</div>
 
     <div class="overlay" id="overlay-player" hidden>
@@ -351,6 +527,39 @@
               <button type="button" class="btn btn--accent" id="profile-save">SAVE &amp; CLOSE</button>
             </div>
           </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="overlay" id="overlay-controls" hidden>
+      <div class="overlay-frame">
+        <button class="overlay-close" data-close type="button" aria-label="Close">×</button>
+        <div class="overlay-title controls-overlay-title">CONTROLS</div>
+        <p class="controls-subtitle">
+          Click a binding to capture a new key. Esc / Tab / F1 are reserved.
+        </p>
+        <div class="controls-toast" id="controls-toast"></div>
+        <div class="controls-table" id="controls-table">
+          <div class="controls-row-header">
+            <div>ACTION</div>
+            <div>PRIMARY</div>
+            <div>SECONDARY</div>
+          </div>
+        </div>
+        <div class="form-actions">
+          <button type="button" class="btn" id="controls-reset">RESET TO DEFAULTS</button>
+          <button type="button" class="btn btn--accent" data-close>CLOSE</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="overlay" id="overlay-about" hidden>
+      <div class="overlay-frame">
+        <button class="overlay-close" data-close type="button" aria-label="Close">×</button>
+        <div class="overlay-title">ABOUT</div>
+        <div class="about-body" id="about-body"></div>
+        <div class="form-actions">
+          <button type="button" class="btn btn--accent" data-close>CLOSE</button>
         </div>
       </div>
     </div>

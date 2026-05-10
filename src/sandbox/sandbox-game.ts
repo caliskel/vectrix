@@ -32,6 +32,13 @@ import {
   isGodMode,
 } from "../lib/god-mode";
 import { emitBulletHit, type ImpactContext } from "../lib/impacts";
+import {
+  consumeAction,
+  isActionPressed,
+  isAnyBoundCode,
+  loadKeybinds,
+  type KeybindProfile,
+} from "../lib/keybinds";
 import { createSandboxPauseMenu } from "../lib/pause-menu";
 import { createMenu } from "../lib/settings-menu";
 import {
@@ -62,6 +69,13 @@ const settings: Settings = loadSettings();
 // chosen colours follow them between modes. Loaded once at start;
 // the editor lives on the landing page.
 const profile: PlayerProfile = loadPlayerProfile();
+// Keybind profile — also global, also configured on the landing
+// page (Controls overlay). Re-read on the `storage` event so a
+// rebind in another tab / window propagates without a reload.
+let keybinds: KeybindProfile = loadKeybinds();
+window.addEventListener("storage", () => {
+  keybinds = loadKeybinds();
+});
 const save = () => saveSettings(settings);
 
 // volumes are applied lazily — audio.init() runs on the first user gesture,
@@ -154,43 +168,16 @@ const pauseMenu = createSandboxPauseMenu({
   },
 });
 
-function normalizeCode(code: string): string {
-  switch (code) {
-    case "ShiftLeft":
-    case "ShiftRight":
-      return "Shift";
-    case "ControlLeft":
-    case "ControlRight":
-      return "Control";
-    case "AltLeft":
-    case "AltRight":
-      return "Alt";
-    case "MetaLeft":
-    case "MetaRight":
-      return "Meta";
-  }
-  return code;
-}
-
-function isBoundKey(k: string): boolean {
-  for (const v of Object.values(settings.bindings)) if (v === k) return true;
-  return false;
-}
-
 window.addEventListener("keydown", (e) => {
   // Tone.js requires a user gesture to start the AudioContext.
   // init() is idempotent — only the first call costs anything.
   audio.init();
-  const code = normalizeCode(e.code);
+  const code = e.code;
 
-  if (menu.isCapturing()) {
-    e.preventDefault();
-    if (code === "Escape") menu.cancelCapture();
-    else menu.acceptCapturedKey(code);
-    return;
-  }
-
-  if (code === settings.bindings.menu1 || code === settings.bindings.menu2) {
+  // Esc / Tab are SYSTEM keys (not rebindable) — they toggle the
+  // pause / settings overlay. Hardcoded here so the Controls page
+  // can't accidentally clear the game's only way to open menus.
+  if (code === "Escape" || code === "Tab") {
     e.preventDefault();
     if (menu.isOpen()) {
       // Settings overlay was opened from the pause menu — close it
@@ -222,11 +209,11 @@ window.addEventListener("keydown", (e) => {
   }
 
   keys.add(code);
-  if (isBoundKey(code)) e.preventDefault();
+  if (isAnyBoundCode(code, keybinds)) e.preventDefault();
 });
 
 window.addEventListener("keyup", (e) => {
-  keys.delete(normalizeCode(e.code));
+  keys.delete(e.code);
 });
 window.addEventListener("blur", () => keys.clear());
 
@@ -481,10 +468,10 @@ resetRun();
 function inputDir(): { x: number; y: number } {
   let x = 0;
   let y = 0;
-  if (keys.has(settings.bindings.left)) x -= 1;
-  if (keys.has(settings.bindings.right)) x += 1;
-  if (keys.has(settings.bindings.up)) y -= 1;
-  if (keys.has(settings.bindings.down)) y += 1;
+  if (isActionPressed("moveLeft", keys, keybinds)) x -= 1;
+  if (isActionPressed("moveRight", keys, keybinds)) x += 1;
+  if (isActionPressed("moveUp", keys, keybinds)) y -= 1;
+  if (isActionPressed("moveDown", keys, keybinds)) y += 1;
   const len = Math.hypot(x, y);
   if (len > 0) {
     x /= len;
@@ -1009,7 +996,11 @@ function frame(now: number) {
 
   if (!started) {
     const probe = inputDir();
-    if (probe.x !== 0 || probe.y !== 0 || keys.has(settings.bindings.dash)) {
+    if (
+      probe.x !== 0 ||
+      probe.y !== 0 ||
+      isActionPressed("dash", keys, keybinds)
+    ) {
       started = true;
     }
   }
@@ -1032,9 +1023,11 @@ function frame(now: number) {
     }
   }
 
-  if (keys.has(settings.bindings.dash)) {
+  if (isActionPressed("dash", keys, keybinds)) {
     tryStartDash();
-    keys.delete(settings.bindings.dash);
+    // Consume both primary + secondary so a held secondary doesn't
+    // immediately retrigger the dash next frame.
+    consumeAction("dash", keys, keybinds);
   }
 
   if (player.dashTime > 0) {
@@ -1061,7 +1054,7 @@ function frame(now: number) {
     player.vx *= damp;
     player.vy *= damp;
     const maxSpeed = PLAYER_MAX_SPEED;
-    const cap = keys.has(settings.bindings.walk)
+    const cap = isActionPressed("walk", keys, keybinds)
       ? maxSpeed * PLAYER_WALK_FACTOR
       : maxSpeed;
     const sp = Math.hypot(player.vx, player.vy);
