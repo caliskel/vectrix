@@ -8,6 +8,10 @@ import {
 } from "../lib/god-mode";
 import { type Bullet, pushTrailSample } from "../lib/bullets";
 import {
+  getBulletSprite,
+  getBulletSpriteOffset,
+} from "../lib/bullet-sprite";
+import {
   createCamera,
   snapCamera,
   updateCamera,
@@ -1777,14 +1781,13 @@ export function start(canvas: HTMLCanvasElement): void {
     for (const e of currentRoom.enemies) e.draw(ctx);
 
 
-    // bullets — trail pass then live pass. State hoisted out of the
-    // hot loops: shadowBlur and fillStyle are set once per pass
-    // instead of per bullet, and the live pass uses a single shadow
-    // stroke instead of drawNeon's two passes. Phase 3 of the boss
-    // (4 corner turrets + faster cadence) regularly puts 60-80
-    // bullets on screen — per-bullet drawNeon was the dominant
-    // frame cost. Single 12-blur reads close to the old 20+8 stack
-    // for an 8 px square.
+    // bullets — trail pass then live pass. Trail still uses plain
+    // fillRect (no shadow, just modulated alpha). Live pass blits a
+    // pre-rendered sprite (one offscreen canvas per color/size combo
+    // in lib/bullet-sprite) so per-bullet shadowBlur is gone — the
+    // dominant frame cost in phase 3 of the boss (50-80 bullets
+    // steady-state with the cadence boost + corner turrets + mine
+    // detonations).
     const bSize = settings.bullets.size;
     const bColor = settings.bullets.color;
     ctx.save();
@@ -1802,12 +1805,12 @@ export function start(canvas: HTMLCanvasElement): void {
       }
     }
     ctx.globalAlpha = 1;
-    ctx.shadowColor = bColor;
-    ctx.shadowBlur = 12;
-    for (const b of bullets) {
-      ctx.fillRect(b.x - bSize / 2, b.y - bSize / 2, bSize, bSize);
-    }
     ctx.restore();
+    const bulletSprite = getBulletSprite(bColor, bSize);
+    const bulletOffset = getBulletSpriteOffset(bSize);
+    for (const b of bullets) {
+      ctx.drawImage(bulletSprite, b.x - bulletOffset, b.y - bulletOffset);
+    }
 
     // particles — same hoisting pattern. Color changes per particle
     // so we can't hoist fillStyle, but we drop the per-particle
