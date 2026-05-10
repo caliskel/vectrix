@@ -147,6 +147,16 @@ window.addEventListener("keydown", (e) => {
   // init() is idempotent — only the first call costs anything.
   audio.init();
   const code = normalizeCode(e.code);
+  // TEMP DEBUG — walk-binding bug diagnosis (sandbox)
+  // eslint-disable-next-line no-console
+  console.log(
+    "[input keydown sandbox]",
+    "raw=", e.code,
+    "normalized=", code,
+    "walkBinding=", settings.bindings.walk,
+    "match=", code === settings.bindings.walk,
+    "repeat=", e.repeat,
+  );
 
   if (menu.isCapturing()) {
     e.preventDefault();
@@ -1010,9 +1020,25 @@ function frame(now: number) {
     player.vx *= damp;
     player.vy *= damp;
     const maxSpeed = settings.player.maxSpeed;
-    const cap = keys.has(settings.bindings.walk)
+    const walking = keys.has(settings.bindings.walk);
+    const cap = walking
       ? maxSpeed * settings.player.walkFactor
       : maxSpeed;
+    // TEMP DEBUG — walk cap diagnosis (sandbox). Once per ~30 frames.
+    if (Math.random() < 0.033) {
+      // eslint-disable-next-line no-console
+      console.log(
+        "[walk cap sandbox]",
+        "walking=", walking,
+        "walkBinding=", settings.bindings.walk,
+        "keysHasShift=", keys.has("Shift"),
+        "keysHasShiftLeft=", keys.has("ShiftLeft"),
+        "keys=", Array.from(keys),
+        "walkFactor=", settings.player.walkFactor,
+        "cap=", cap.toFixed(1),
+        "vx=", player.vx.toFixed(1),
+      );
+    }
     const sp = Math.hypot(player.vx, player.vy);
     if (sp > cap) {
       const k = cap / sp;
