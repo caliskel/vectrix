@@ -706,6 +706,40 @@ Restart and transitionToRoom both reset
 constructs in `"intro"`, so re-entering Room 5 plays the
 intro from scratch.
 
+#### Visual polish
+
+- **Eye stack** — eight concentric layers (ext glow → amber rim →
+  wine fill → red iris → inner ring → two hot-core whites → warm
+  pupil) drawn outermost-first so the bright inner cores paint on
+  top. Eight 0.8 px radial spokes in `#ff5577` between r 11 and
+  r 18 sell the "alive iris." A 1400 ms breath cycle scales the
+  whole stack 0.94 ↔ 1.06 and ramps the ext-glow alpha 0.10 ↔ 0.25
+  in lockstep.
+- **Depth rings** — each of the three hex shells now renders as a
+  shadow stroke (darker, thicker) under a bright stroke (saturated,
+  thinner). `RingDepth` configs in sentinel.ts pin the colours per
+  shell. Each ring carries an independent rotation state
+  (`angle / angularVel / targetAngularVel / nextChangeAtMs`) that
+  lerps angularVel toward a fresh ±max-vel target every 2–5 s
+  (max-vel: outer 0.8, mid 1.2, inner 1.6 rad/s; lerp coefficient
+  0.02 per frame). Three 30° vertex-aligned arc markers per ring
+  rotate with the ring so the motion actually reads.
+- **Body breath** — 2200 ms sin scales the whole shell stack 0.98 ↔
+  1.02 and ramps the outer-ring glow alpha 0.20 ↔ 0.35 on its own
+  phase (independent of the eye), so the silhouette pulses out of
+  sync with itself.
+- **Energy burst** — fired on the radial-burst telegraph → firing
+  transition. Two shockwaves push into rooms-game's shared
+  `rings` list (shockwave 1 immediately, shockwave 2 after a 50 ms
+  internal delay timer); a 80 ms additive white "boss flash"
+  overlay paints on top of the shell stack; 24 alternating
+  white / pink line streamers fly out radially at 400–550 px/s
+  with a 250 ms life and a 100 ms fade-out tail. Streamers are
+  kept on the boss instance (not the shared Particle list)
+  because they're line segments oriented along velocity, which the
+  Particle pipeline can't represent. `enterDying()` clears any
+  in-flight burst remnants so the death cinematic is uncluttered.
+
 ## Enemy awareness system (`lib/enemies/awareness.ts`)
 
 Every enemy starts in `idle` and won't fight back until the player

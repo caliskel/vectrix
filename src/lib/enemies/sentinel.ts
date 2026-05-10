@@ -1,6 +1,5 @@
 import { makeBullet } from "../bullets";
 import { drawNeon } from "../neon";
-import { PALETTE } from "../palette";
 import { initAwareness } from "./awareness";
 import type {
   AwarenessState,
@@ -49,7 +48,6 @@ const FRAGMENT_ROTATION_RATE = -0.4; // rad/s — counter-rotates
 const PULSE_PERIOD_SEC = 2.0;
 const PULSE_AMPLITUDE = 0.05;
 const EYE_PULSE_PERIOD_SEC = 1.5;
-const EYE_PULSE_AMPLITUDE = 0.05;
 
 // Movement — lazy figure-8 (lemniscate) around the arena centre.
 // Independent of the player so the boss doesn't drift through walls
@@ -118,6 +116,128 @@ const OUTER_VERTS = hexVerts(110);
 const MIDDLE_VERTS = hexVerts(85);
 const INNER_VERTS = hexVerts(60);
 
+// === Visual polish constants ===
+//
+// Eye — multi-layer iris drawn outermost-first so brighter inner
+// circles paint on top of softer outer glow. Radii match the spec
+// in lib/enemies/sentinel.ts comments and are NOT scaled by the
+// boss's own pulse — the eye has its own breath cycle.
+const EYE_LAYERS: ReadonlyArray<{
+  r: number;
+  fill?: string;
+  stroke?: string;
+  lineWidth?: number;
+  alpha?: number;
+}> = [
+  { r: 32, stroke: "#ffaa22", lineWidth: 8, alpha: 0.15 }, // ext glow (alpha overridden by breath)
+  { r: 24, stroke: "#ffaa22", lineWidth: 2, alpha: 0.9 }, // amber rim
+  { r: 22, fill: "#2a0612" }, // wine fill
+  { r: 18, stroke: "#ff3344", lineWidth: 1.5 }, // red iris
+  { r: 12, stroke: "#ff5577", lineWidth: 1, alpha: 0.6 }, // inner ring
+  { r: 8, stroke: "#ffffff", lineWidth: 5, alpha: 0.2 }, // hot core soft
+  { r: 7, stroke: "#ffffff", lineWidth: 2.5, alpha: 0.5 }, // hot core sharp
+  { r: 5, fill: "#fff8e0" }, // warm white pupil
+];
+const EYE_BREATH_PERIOD_SEC = 1.4;
+const EYE_SCALE_MIN = 0.94;
+const EYE_SCALE_MAX = 1.06;
+const EYE_EXT_GLOW_ALPHA_MIN = 0.1;
+const EYE_EXT_GLOW_ALPHA_MAX = 0.25;
+const EYE_SPOKE_COUNT = 8;
+const EYE_SPOKE_INNER_R = 11;
+const EYE_SPOKE_OUTER_R = 18;
+const EYE_SPOKE_COLOR = "#ff5577";
+const EYE_SPOKE_LINE_WIDTH = 0.8;
+const EYE_SPOKE_ALPHA = 0.7;
+
+// Rings — each shell now renders as shadow + bright stroke for depth,
+// plus three vertex-aligned 30° markers that rotate independently per
+// ring so the rotation is actually readable.
+type RingDepth = {
+  shadowColor: string;
+  shadowLineWidth: number;
+  shadowAlpha: number;
+  brightColor: string;
+  brightLineWidth: number;
+  brightAlpha: number;
+  markerColor: string;
+  markerLineWidth: number;
+  maxAngularVel: number; // rad/s — the random target sample range
+};
+const OUTER_RING_DEPTH: RingDepth = {
+  shadowColor: "#660022",
+  shadowLineWidth: 6,
+  shadowAlpha: 0.4,
+  brightColor: "#ff3344",
+  brightLineWidth: 3,
+  brightAlpha: 1.0,
+  markerColor: "#ff7788",
+  markerLineWidth: 4,
+  maxAngularVel: 0.8,
+};
+const MID_RING_DEPTH: RingDepth = {
+  shadowColor: "#4a0319",
+  shadowLineWidth: 5,
+  shadowAlpha: 1.0,
+  brightColor: "#ff5577",
+  brightLineWidth: 2.5,
+  brightAlpha: 1.0,
+  markerColor: "#ff99aa",
+  markerLineWidth: 3.5,
+  maxAngularVel: 1.2,
+};
+const INNER_RING_DEPTH: RingDepth = {
+  shadowColor: "#330011",
+  shadowLineWidth: 4,
+  shadowAlpha: 0.7,
+  brightColor: "#ff3344",
+  brightLineWidth: 1.5,
+  brightAlpha: 0.8,
+  markerColor: "#ff7788",
+  markerLineWidth: 2.5,
+  maxAngularVel: 1.6,
+};
+const RING_ANGULAR_VEL_LERP = 0.02;
+const RING_RETARGET_MIN_MS = 2000;
+const RING_RETARGET_MAX_MS = 5000;
+const RING_MARKER_COUNT = 3;
+const RING_MARKER_ARC_RAD = (Math.PI * 30) / 180; // 30°
+
+// Body — slow breath rescales the whole shell stack and ramps the
+// outer-ring glow alpha. Kept on a different period from the eye so
+// the silhouette breathes "out of sync with itself."
+const BODY_BREATH_PERIOD_SEC = 2.2;
+const BODY_SCALE_MIN = 0.98;
+const BODY_SCALE_MAX = 1.02;
+const BODY_GLOW_ALPHA_MIN = 0.2;
+const BODY_GLOW_ALPHA_MAX = 0.35;
+
+// Energy burst — fired on the radial-burst telegraph → firing
+// transition. Two shockwave rings, a brief boss flash, and a
+// streamer puff out the boss centre.
+const BURST_FLASH_DURATION_SEC = 0.08;
+const BURST_FLASH_PEAK_ALPHA = 0.4;
+const BURST_SW1_LIFETIME_SEC = 0.35;
+const BURST_SW1_R_START = 120;
+const BURST_SW1_R_END = 220;
+const BURST_SW1_LW_START = 8;
+const BURST_SW1_LW_END = 1;
+const BURST_SW1_COLOR = "#ff3344";
+const BURST_SW2_DELAY_SEC = 0.05;
+const BURST_SW2_LIFETIME_SEC = 0.5;
+const BURST_SW2_R_START = 140;
+const BURST_SW2_R_END = 260;
+const BURST_SW2_LW_START = 4;
+const BURST_SW2_LW_END = 0.5;
+const BURST_SW2_COLOR = "#ffaa22";
+const BURST_STREAMER_COUNT = 24;
+const BURST_STREAMER_SPEED_MIN = 400;
+const BURST_STREAMER_SPEED_MAX = 550;
+const BURST_STREAMER_LIFETIME_SEC = 0.25;
+const BURST_STREAMER_FADE_OUT_SEC = 0.1;
+const BURST_STREAMER_LENGTH_PX = 18;
+const BURST_STREAMER_LINE_WIDTH = 2.5;
+
 function hexVerts(r: number): { x: number; y: number }[] {
   const verts: { x: number; y: number }[] = [];
   for (let i = 0; i < 6; i++) {
@@ -131,6 +251,17 @@ function easeOutBack(t: number): number {
   const c1 = 1.70158;
   const c3 = c1 + 1;
   return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
+}
+
+function randomAngularVel(max: number): number {
+  return (Math.random() * 2 - 1) * max;
+}
+
+function nextRingRetargetMs(): number {
+  return (
+    RING_RETARGET_MIN_MS +
+    Math.random() * (RING_RETARGET_MAX_MS - RING_RETARGET_MIN_MS)
+  );
 }
 
 export type SentinelState =
@@ -197,6 +328,40 @@ export class Sentinel implements Enemy {
   private fragmentRotation = 0;
   private pulsePhase = Math.random() * Math.PI * 2;
   private eyePulsePhase = Math.random() * Math.PI * 2;
+  // Independent breath phases for the eye stack and the body shell —
+  // different periods on purpose so the silhouette doesn't pulse "in
+  // sync with itself."
+  private eyeBreathPhase = Math.random() * Math.PI * 2;
+  private bodyBreathPhase = Math.random() * Math.PI * 2;
+  // Per-ring rotation state. angle accumulates current rotation,
+  // angularVel lerps toward targetAngularVel until nextChangeAtMs
+  // is hit, at which point a fresh target is sampled.
+  private ringStates: {
+    angle: number;
+    angularVel: number;
+    targetAngularVel: number;
+    nextChangeAtMs: number;
+  }[] = [
+    { angle: 0, angularVel: 0, targetAngularVel: 0, nextChangeAtMs: 0 },
+    { angle: 0, angularVel: 0, targetAngularVel: 0, nextChangeAtMs: 0 },
+    { angle: 0, angularVel: 0, targetAngularVel: 0, nextChangeAtMs: 0 },
+  ];
+  private ringElapsedMs = 0;
+  // Energy-burst transient state — boss flash overlay timer, the
+  // delayed-spawn bookkeeping for the second shockwave, and the
+  // local streamer list. Streamers live as line segments in world
+  // space rather than in the global Particle pipeline so we can
+  // honour the spec'd shape.
+  private bossFlashTimer = 0;
+  private pendingShockwave2DelayTimer = -1;
+  private streamers: {
+    x: number;
+    y: number;
+    vx: number;
+    vy: number;
+    age: number;
+    color: string;
+  }[] = [];
 
   // movement — figure-8 around the arena centre
   private figurePhase = 0;
@@ -302,6 +467,12 @@ export class Sentinel implements Enemy {
       this.pulsePhase += (Math.PI * 2 * realDt) / PULSE_PERIOD_SEC;
       this.eyePulsePhase +=
         (Math.PI * 2 * realDt) / EYE_PULSE_PERIOD_SEC;
+      this.eyeBreathPhase +=
+        (Math.PI * 2 * realDt) / EYE_BREATH_PERIOD_SEC;
+      this.bodyBreathPhase +=
+        (Math.PI * 2 * realDt) / BODY_BREATH_PERIOD_SEC;
+      this.tickRingRotation(realDt);
+      this.tickEnergyBurst(ctxRoom, realDt);
     }
 
     switch (this.state) {
@@ -547,6 +718,111 @@ export class Sentinel implements Enemy {
         ),
       );
     }
+    this.triggerEnergyBurst(ctxRoom);
+  }
+
+  private triggerEnergyBurst(ctxRoom: EnemyContext): void {
+    // Shockwave 1 fires immediately into the shared rings list —
+    // the existing ring renderer interpolates radius / line width /
+    // alpha across age so we get the visual for free.
+    ctxRoom.rings.push({
+      x: this.x,
+      y: this.y,
+      age: 0,
+      lifetime: BURST_SW1_LIFETIME_SEC,
+      startR: BURST_SW1_R_START,
+      endR: BURST_SW1_R_END,
+      color: BURST_SW1_COLOR,
+      startLineWidth: BURST_SW1_LW_START,
+      endLineWidth: BURST_SW1_LW_END,
+      glowBlur: 16,
+    });
+    // Shockwave 2 is delayed BURST_SW2_DELAY_SEC; parked on a
+    // per-frame countdown that fires the ring once.
+    this.pendingShockwave2DelayTimer = BURST_SW2_DELAY_SEC;
+    // Boss flash — additive white overlay on the body for ~80ms.
+    this.bossFlashTimer = BURST_FLASH_DURATION_SEC;
+    // Streamers — kept on the boss instance because they're line
+    // segments, not the circles the global Particle pipeline draws.
+    for (let i = 0; i < BURST_STREAMER_COUNT; i++) {
+      const a =
+        (i / BURST_STREAMER_COUNT) * Math.PI * 2 +
+        Math.random() * 0.05;
+      const speed =
+        BURST_STREAMER_SPEED_MIN +
+        Math.random() *
+          (BURST_STREAMER_SPEED_MAX - BURST_STREAMER_SPEED_MIN);
+      this.streamers.push({
+        x: this.x,
+        y: this.y,
+        vx: Math.cos(a) * speed,
+        vy: Math.sin(a) * speed,
+        age: 0,
+        color: i % 2 === 0 ? "#ffffff" : "#ff5577",
+      });
+    }
+  }
+
+  private tickRingRotation(dt: number): void {
+    this.ringElapsedMs += dt * 1000;
+    const depths: RingDepth[] = [
+      OUTER_RING_DEPTH,
+      MID_RING_DEPTH,
+      INNER_RING_DEPTH,
+    ];
+    for (let i = 0; i < this.ringStates.length; i++) {
+      const r = this.ringStates[i];
+      const d = depths[i];
+      // First-time init — schedule the first retarget so the ring
+      // doesn't start motionless until the timer fires.
+      if (r.nextChangeAtMs === 0) {
+        r.targetAngularVel = randomAngularVel(d.maxAngularVel);
+        r.nextChangeAtMs = this.ringElapsedMs + nextRingRetargetMs();
+      }
+      // Retarget on timer.
+      if (this.ringElapsedMs >= r.nextChangeAtMs) {
+        r.targetAngularVel = randomAngularVel(d.maxAngularVel);
+        r.nextChangeAtMs = this.ringElapsedMs + nextRingRetargetMs();
+      }
+      // Smooth easing toward target so velocity changes don't jerk.
+      r.angularVel +=
+        (r.targetAngularVel - r.angularVel) * RING_ANGULAR_VEL_LERP;
+      r.angle += r.angularVel * dt;
+    }
+  }
+
+  private tickEnergyBurst(ctxRoom: EnemyContext, dt: number): void {
+    if (this.bossFlashTimer > 0) {
+      this.bossFlashTimer = Math.max(0, this.bossFlashTimer - dt);
+    }
+    if (this.pendingShockwave2DelayTimer >= 0) {
+      this.pendingShockwave2DelayTimer -= dt;
+      if (this.pendingShockwave2DelayTimer <= 0) {
+        this.pendingShockwave2DelayTimer = -1;
+        ctxRoom.rings.push({
+          x: this.x,
+          y: this.y,
+          age: 0,
+          lifetime: BURST_SW2_LIFETIME_SEC,
+          startR: BURST_SW2_R_START,
+          endR: BURST_SW2_R_END,
+          color: BURST_SW2_COLOR,
+          startLineWidth: BURST_SW2_LW_START,
+          endLineWidth: BURST_SW2_LW_END,
+          glowBlur: 12,
+        });
+      }
+    }
+    for (const s of this.streamers) {
+      s.x += s.vx * dt;
+      s.y += s.vy * dt;
+      s.age += dt;
+    }
+    if (this.streamers.length > 0) {
+      this.streamers = this.streamers.filter(
+        (s) => s.age < BURST_STREAMER_LIFETIME_SEC,
+      );
+    }
   }
 
   private fireAimedBullet(ctxRoom: EnemyContext): void {
@@ -595,6 +871,11 @@ export class Sentinel implements Enemy {
     this.aimedTimer = 0;
     this.aimedIdleTimer = 0;
     this.aimedShotsFired = 0;
+    // Clear any in-flight energy-burst remnants so they don't bleed
+    // into the dying cinematic.
+    this.bossFlashTimer = 0;
+    this.pendingShockwave2DelayTimer = -1;
+    this.streamers.length = 0;
   }
 
   private updateDying(_ctxRoom: EnemyContext, dt: number): void {
@@ -709,11 +990,47 @@ export class Sentinel implements Enemy {
       return;
     }
     // idle / attacking — aim-line first (so the body draws on top
-    // of it), then the body.
+    // of it), then the body, then the streamers (drawn last so they
+    // sit on top of the boss silhouette).
     if (this.aimedPhase === "telegraph") {
       this.renderAimedTelegraph(ctx);
     }
     this.renderBody(ctx, 1);
+    if (this.streamers.length > 0) {
+      this.renderStreamers(ctx);
+    }
+  }
+
+  private renderStreamers(ctx: CanvasRenderingContext2D): void {
+    ctx.save();
+    ctx.lineWidth = BURST_STREAMER_LINE_WIDTH;
+    ctx.lineCap = "round";
+    for (const s of this.streamers) {
+      const fade =
+        s.age > BURST_STREAMER_LIFETIME_SEC - BURST_STREAMER_FADE_OUT_SEC
+          ? Math.max(
+              0,
+              1 -
+                (s.age -
+                  (BURST_STREAMER_LIFETIME_SEC - BURST_STREAMER_FADE_OUT_SEC)) /
+                  BURST_STREAMER_FADE_OUT_SEC,
+            )
+          : 1;
+      const speed = Math.hypot(s.vx, s.vy) || 1;
+      const ux = s.vx / speed;
+      const uy = s.vy / speed;
+      ctx.globalAlpha = fade;
+      ctx.strokeStyle = s.color;
+      ctx.beginPath();
+      ctx.moveTo(s.x, s.y);
+      ctx.lineTo(
+        s.x - ux * BURST_STREAMER_LENGTH_PX,
+        s.y - uy * BURST_STREAMER_LENGTH_PX,
+      );
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+    ctx.restore();
   }
 
   private renderAimedTelegraph(ctx: CanvasRenderingContext2D): void {
@@ -844,10 +1161,109 @@ export class Sentinel implements Enemy {
     }
   }
 
+  private renderDepthRing(
+    ctx: CanvasRenderingContext2D,
+    radius: number,
+    rotState: { angle: number },
+    depth: RingDepth,
+  ): void {
+    ctx.save();
+    ctx.rotate(rotState.angle);
+    // Shadow stroke first — gives the ring perceived thickness.
+    ctx.beginPath();
+    ctx.arc(0, 0, radius, 0, Math.PI * 2);
+    ctx.strokeStyle = depth.shadowColor;
+    ctx.lineWidth = depth.shadowLineWidth;
+    ctx.globalAlpha = depth.shadowAlpha;
+    ctx.stroke();
+    // Bright stroke on top.
+    ctx.beginPath();
+    ctx.arc(0, 0, radius, 0, Math.PI * 2);
+    ctx.strokeStyle = depth.brightColor;
+    ctx.lineWidth = depth.brightLineWidth;
+    ctx.globalAlpha = depth.brightAlpha;
+    ctx.stroke();
+    // Three rotation-tracking arc markers — without them a perfect
+    // circle reads as static even when angle is changing.
+    ctx.strokeStyle = depth.markerColor;
+    ctx.lineWidth = depth.markerLineWidth;
+    ctx.globalAlpha = 1;
+    for (let i = 0; i < RING_MARKER_COUNT; i++) {
+      const start = (i / RING_MARKER_COUNT) * Math.PI * 2;
+      ctx.beginPath();
+      ctx.arc(0, 0, radius, start, start + RING_MARKER_ARC_RAD);
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+    ctx.restore();
+  }
+
+  private renderEyeLayers(ctx: CanvasRenderingContext2D): void {
+    // Eye breath — uniform scale + ext-glow alpha sync. Independent
+    // of the body's pulse so two cycles overlap rather than echo.
+    const breathScale =
+      EYE_SCALE_MIN +
+      ((Math.sin(this.eyeBreathPhase) + 1) / 2) *
+        (EYE_SCALE_MAX - EYE_SCALE_MIN);
+    const extGlowAlpha =
+      EYE_EXT_GLOW_ALPHA_MIN +
+      ((Math.sin(this.eyeBreathPhase) + 1) / 2) *
+        (EYE_EXT_GLOW_ALPHA_MAX - EYE_EXT_GLOW_ALPHA_MIN);
+
+    ctx.save();
+    ctx.scale(breathScale, breathScale);
+
+    for (let i = 0; i < EYE_LAYERS.length; i++) {
+      const layer = EYE_LAYERS[i];
+      ctx.beginPath();
+      ctx.arc(0, 0, layer.r, 0, Math.PI * 2);
+      // First (outermost) layer's alpha is driven by breath so the
+      // glow brightens with the inhale.
+      const alpha =
+        i === 0 ? extGlowAlpha : (layer.alpha ?? 1);
+      ctx.globalAlpha = alpha;
+      if (layer.fill) {
+        ctx.fillStyle = layer.fill;
+        ctx.fill();
+      }
+      if (layer.stroke && layer.lineWidth) {
+        ctx.strokeStyle = layer.stroke;
+        ctx.lineWidth = layer.lineWidth;
+        ctx.stroke();
+      }
+    }
+
+    // Eight radial spokes inside the iris — give the eye the "alive"
+    // feel without animating each one separately.
+    ctx.strokeStyle = EYE_SPOKE_COLOR;
+    ctx.lineWidth = EYE_SPOKE_LINE_WIDTH;
+    ctx.globalAlpha = EYE_SPOKE_ALPHA;
+    for (let i = 0; i < EYE_SPOKE_COUNT; i++) {
+      const a = (i / EYE_SPOKE_COUNT) * Math.PI * 2;
+      const cos = Math.cos(a);
+      const sin = Math.sin(a);
+      ctx.beginPath();
+      ctx.moveTo(EYE_SPOKE_INNER_R * cos, EYE_SPOKE_INNER_R * sin);
+      ctx.lineTo(EYE_SPOKE_OUTER_R * cos, EYE_SPOKE_OUTER_R * sin);
+      ctx.stroke();
+    }
+
+    ctx.globalAlpha = 1;
+    ctx.restore();
+  }
+
   private renderBody(ctx: CanvasRenderingContext2D, scale: number): void {
     ctx.save();
     ctx.translate(this.x, this.y);
-    if (scale !== 1) ctx.scale(scale, scale);
+    // Body breath — rescales the whole shell stack on a slow sin
+    // wave. Composes multiplicatively with the intro-driven scale
+    // so the boss still grows in from 0.1 → 1 during materialise.
+    const breathScale =
+      BODY_SCALE_MIN +
+      ((Math.sin(this.bodyBreathPhase) + 1) / 2) *
+        (BODY_SCALE_MAX - BODY_SCALE_MIN);
+    const totalScale = scale * breathScale;
+    if (totalScale !== 1) ctx.scale(totalScale, totalScale);
 
     // Telegraph jitter — small random offset while charging the
     // radial burst. Aimed-shot telegraph doesn't shake the body
@@ -862,19 +1278,27 @@ export class Sentinel implements Enemy {
     }
 
     const pulseScale = 1 + Math.sin(this.pulsePhase) * PULSE_AMPLITUDE;
-    const eyePulseScale =
-      1 + Math.sin(this.eyePulsePhase) * EYE_PULSE_AMPLITUDE;
 
+    // Body glow alpha — same phase as bodyBreathPhase so the silhouette
+    // pulses light + scale together.
+    const bodyGlowAlpha =
+      BODY_GLOW_ALPHA_MIN +
+      ((Math.sin(this.bodyBreathPhase) + 1) / 2) *
+        (BODY_GLOW_ALPHA_MAX - BODY_GLOW_ALPHA_MIN);
+
+    // Outer ring with a glow halo — alpha tracks bodyGlowAlpha for
+    // the breath sync.
     ctx.save();
     ctx.rotate(this.rotation);
-
     drawNeon(
       ctx,
       () => {
+        ctx.globalAlpha = bodyGlowAlpha;
         strokeHexagon(ctx, OUTER_VERTS, pulseScale);
         ctx.strokeStyle = SENTINEL_COLOR;
         ctx.lineWidth = 3;
         ctx.stroke();
+        ctx.globalAlpha = 1;
       },
       SENTINEL_COLOR,
       this.radialPhase === "telegraph" ? 40 : 22,
@@ -895,6 +1319,11 @@ export class Sentinel implements Enemy {
     ctx.globalAlpha = 1;
     ctx.restore();
 
+    // === Three independently-rotating depth rings ===
+    this.renderDepthRing(ctx, 110, this.ringStates[0], OUTER_RING_DEPTH);
+    this.renderDepthRing(ctx, 85, this.ringStates[1], MID_RING_DEPTH);
+    this.renderDepthRing(ctx, 60, this.ringStates[2], INNER_RING_DEPTH);
+
     // Fragments orbiting the outer vertices — counter-rotation.
     ctx.save();
     ctx.rotate(this.fragmentRotation);
@@ -913,32 +1342,26 @@ export class Sentinel implements Enemy {
     ctx.globalAlpha = 1;
     ctx.restore();
 
-    // Central eye.
-    ctx.fillStyle = SENTINEL_COLOR;
-    ctx.globalAlpha = 0.45;
-    circle(ctx, 0, 0, 35 * eyePulseScale);
-
-    ctx.fillStyle = PALETTE.bg;
-    ctx.globalAlpha = 1;
-    circle(ctx, 0, 0, 22 * eyePulseScale);
-
-    ctx.fillStyle = SENTINEL_COLOR;
-    ctx.globalAlpha = 0.9;
-    circle(ctx, 0, 0, 14 * eyePulseScale);
-
-    ctx.fillStyle = "#ffffff";
-    ctx.globalAlpha = 1;
-    const pupilR =
-      this.radialPhase === "telegraph"
-        ? 6 + 6 * Math.min(1, this.radialTimer / RADIAL_TELEGRAPH_SEC)
-        : 6;
-    circle(ctx, 0, 0, pupilR);
+    // === Central eye stack ===
+    this.renderEyeLayers(ctx);
 
     if (this.hitFlashTime > 0) {
       ctx.globalCompositeOperation = "lighter";
       ctx.fillStyle = "#ffffff";
       ctx.globalAlpha = Math.min(1, this.hitFlashTime * 5);
       circle(ctx, 0, 0, SENTINEL_HITBOX_RADIUS);
+      ctx.globalAlpha = 1;
+      ctx.globalCompositeOperation = "source-over";
+    }
+
+    // Energy-burst boss flash — short additive overlay covering the
+    // body bbox right after the radial burst lands.
+    if (this.bossFlashTimer > 0) {
+      const t = this.bossFlashTimer / BURST_FLASH_DURATION_SEC;
+      ctx.globalCompositeOperation = "lighter";
+      ctx.fillStyle = "#ffffff";
+      ctx.globalAlpha = BURST_FLASH_PEAK_ALPHA * t;
+      circle(ctx, 0, 0, SENTINEL_HITBOX_RADIUS + 6);
       ctx.globalAlpha = 1;
       ctx.globalCompositeOperation = "source-over";
     }
