@@ -411,19 +411,26 @@ dummy are spliced in / out of `currentRoom` as phases advance:
 
   movement → dash → combat → complete
 
-- **Phase 1 — movement.** Four `Marker`s at compass positions
-  around the spawn (right / upper-left / upper-right / down).
-  Any order — each one ticks its own pulse, and on player
-  overlap it sets `reached = true` (markers are non-sequential
-  in this build). HUD top shows `MARKERS X / 4`. Hint banner
-  reads `USE [W][A][S][D] TO MOVE`.
-- **Phase 2 — dash.** Markers 1–4 cleared, replaced with a
-  single goal at (950, 400) and a 200×30 wall obstacle at
-  (580, 385) blocking the lane. The wall is permeable while
+- **Phase 1 — movement.** Four `Marker`s walked in strict 1 → 2
+  → 3 → 4 order: (600, 400) center → (200, 200) upper-left →
+  (1000, 200) upper-right → (300, 600) lower-left. Only the
+  active marker (`markers[markerIndex]`) reacts to overlap and
+  pulses with its label; future markers render as α 0.25
+  silhouettes so the path is visible without distracting from
+  the next-up. The route ends at lower-left so Phase 2 starts
+  with the player on the LEFT side of the dash wall. HUD top
+  shows `MARKERS X / 4`. Hint banner reads
+  `USE [W][A][S][D] TO MOVE`.
+- **Phase 2 — dash.** Markers cleared, replaced with a single
+  goal at (900, 400) and a vertical 30 × 800 wall obstacle at
+  x = 585 spanning the entire arena height — the player
+  literally cannot walk around it. The wall is permeable while
   the player is in dash i-frames — the engine filters
   `room0DashWall` out of the wall list passed to
   `resolveEntityWallCollisions` when `dashIframeTime > 0`.
-  Hint reads `PRESS [X] TO DASH`.
+  Hint reads `PRESS [X] TO DASH`. On phase transition the wall
+  vaporises with a 12-particle dispersion (PALETTE.bgGrid) and
+  a faint white expansion ring at the wall midpoint.
 - **Phase 3 — combat.** Wall and marker cleared, a
   `TrainingDummy` (`lib/enemies/training-dummy.ts`) spawns at
   (600, 400). It's a 50 px grey-fill / white-outline disc
@@ -440,13 +447,16 @@ dummy are spliced in / out of `currentRoom` as phases advance:
 The hint banner sits bottom-center in screen space (`y =
 viewH - 80`). Text is parsed for `[X]` patterns which render as
 white keycap rectangles. Show / hide animations slide 8 px and
-fade over 300 / 200 ms; if the player is idle for 5 s in the
-current phase, the banner starts pulsing scale at
-`HINT_PULSE_PERIOD_SEC` to nudge attention. `tickHint(dt)` runs
-every frame; `drawTutorialHint()` draws after the HUD so it
-sits above everything. `syncTutorialStateForRoom()` resets
-phase, hint, and prop state on transitions / restarts so a
-re-entry to Room 0 starts fresh.
+fade over 300 / 200 ms. Visual is intentionally restrained —
+text colour `#d4af0a` (dimmer than the canonical
+`PALETTE.player`), `shadowBlur 6`, denser backplate
+`rgba(10, 14, 26, 0.85)`. No idle pulse — the hint is meant to
+be a calm prompt the player can read while still focusing on
+the world. `tickHint(dt)` runs every frame;
+`drawTutorialHint()` draws after the HUD so it sits above
+everything. `syncTutorialStateForRoom()` resets phase, hint,
+and prop state on transitions / restarts so a re-entry to
+Room 0 starts fresh.
 
 ### Tutorial Rooms 1–3
 

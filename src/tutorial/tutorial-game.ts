@@ -414,19 +414,18 @@ export function start(canvas: HTMLCanvasElement): void {
   let hintText: string | null = null;
   let hintState: HintState = "idle";
   let hintAge = 0;
-  let hintPulsing = false;
   let hintPendingText: string | null = null;
   const HINT_FADE_IN_SEC = 0.3;
   const HINT_FADE_OUT_SEC = 0.2;
-  const HINT_IDLE_PULSE_AFTER_SEC = 5;
-  const HINT_PULSE_PERIOD_SEC = 0.5;
+  const HINT_TEXT_COLOR = "#d4af0a";
+  const HINT_BACKPLATE_COLOR = "rgba(10, 14, 26, 0.85)";
+  const HINT_GLOW_BLUR = 6;
 
   function showHint(text: string): void {
     if (hintState === "idle" || !hintText) {
       hintText = text;
       hintState = "showing";
       hintAge = 0;
-      hintPulsing = false;
       hintPendingText = null;
     } else {
       hintPendingText = text;
@@ -434,7 +433,6 @@ export function start(canvas: HTMLCanvasElement): void {
         hintState = "hiding";
         hintAge = 0;
       }
-      hintPulsing = false;
     }
   }
   function tickHint(dt: number): void {
@@ -449,14 +447,11 @@ export function start(canvas: HTMLCanvasElement): void {
         hintPendingText = null;
         hintState = "showing";
         hintAge = 0;
-        hintPulsing = false;
       } else {
         hintState = "idle";
         hintText = null;
       }
     }
-    hintPulsing =
-      hintState === "visible" && hintAge >= HINT_IDLE_PULSE_AFTER_SEC;
   }
 
   function room0Enter(phase: Room0Phase): void {
@@ -467,13 +462,52 @@ export function start(canvas: HTMLCanvasElement): void {
       showHint("USE [W][A][S][D] TO MOVE");
     } else if (phase === "dash") {
       // Replace movement markers with a single goal beyond the wall.
-      currentRoom.markers = [createMarker(950, 400, 1, "→")];
+      currentRoom.markers = [createMarker(900, 400, 1, "→")];
       markerIndex = 0;
-      // Horizontal wall obstacle the player has to dash through.
-      room0DashWall = { x: 580, y: 385, w: 200, h: 30 };
+      // Vertical wall spanning the full arena height — only way
+      // through is a dash (the wall is filtered out of the player's
+      // collision list while dashIframeTime > 0).
+      room0DashWall = { x: 585, y: 0, w: 30, h: 800 };
       currentRoom.walls.push(room0DashWall);
       showHint("PRESS [X] TO DASH");
     } else if (phase === "combat") {
+      // Dispersion effect along the wall before clearing — burst of
+      // bgGrid-coloured particles makes the obstacle "vaporize"
+      // instead of popping out of existence.
+      if (room0DashWall) {
+        const w = room0DashWall;
+        for (let i = 0; i < 12; i++) {
+          const px = w.x + w.w / 2 + (Math.random() - 0.5) * w.w;
+          const py = w.y + Math.random() * w.h;
+          const speed = 80 + Math.random() * 140;
+          const angle = Math.random() * Math.PI * 2;
+          particles.push({
+            x: px,
+            y: py,
+            vx: Math.cos(angle) * speed,
+            vy: Math.sin(angle) * speed,
+            initialSize: 4,
+            color: PALETTE.bgGrid,
+            age: 0,
+            lifetime: 0.55,
+            glowStrong: 8,
+            glowSoft: 3,
+            drag: 0.94,
+          });
+        }
+        rings.push({
+          x: w.x + w.w / 2,
+          y: w.y + w.h / 2,
+          age: 0,
+          lifetime: 0.3,
+          startR: w.h * 0.25,
+          endR: w.h * 0.55,
+          color: "#cbd5e1",
+          startLineWidth: 2,
+          endLineWidth: 0.5,
+          glowBlur: 12,
+        });
+      }
       currentRoom.markers = undefined;
       markerIndex = 0;
       if (room0DashWall) {
@@ -576,15 +610,6 @@ export function start(canvas: HTMLCanvasElement): void {
       alpha = 1 - t;
       slideY = -t * 8;
     }
-    let scale = 1;
-    if (hintPulsing && hintState === "visible") {
-      const phase =
-        ((hintAge - HINT_IDLE_PULSE_AFTER_SEC) /
-          HINT_PULSE_PERIOD_SEC) *
-        Math.PI *
-        2;
-      scale = 1 + 0.05 * (Math.sin(phase) * 0.5 + 0.5);
-    }
 
     const tokens = parseHintTokens(hintText);
     const fontSize = 28;
@@ -615,22 +640,21 @@ export function start(canvas: HTMLCanvasElement): void {
     const cx = viewW / 2;
     const cy = viewH - 80 + slideY;
     ctx.translate(cx, cy);
-    ctx.scale(scale, scale);
     ctx.globalAlpha = alpha;
 
-    // backplate
-    ctx.fillStyle = "rgba(10, 14, 26, 0.6)";
+    // Denser backplate so the text reads without leaning on a bright
+    // glow halo behind it.
+    ctx.fillStyle = HINT_BACKPLATE_COLOR;
     roundedRectPath(ctx, -totalW / 2, -totalH / 2, totalW, totalH, 8);
     ctx.fill();
 
     let cursor = -totalW / 2 + padX;
-    const HINT_COLOR = "#ffd60a";
     for (let i = 0; i < tokens.length; i++) {
       const tk = tokens[i];
       if (tk.kind === "text") {
-        ctx.fillStyle = HINT_COLOR;
-        ctx.shadowColor = HINT_COLOR;
-        ctx.shadowBlur = hintPulsing ? 24 : 12;
+        ctx.fillStyle = HINT_TEXT_COLOR;
+        ctx.shadowColor = HINT_TEXT_COLOR;
+        ctx.shadowBlur = HINT_GLOW_BLUR;
         ctx.font = `700 ${fontSize}px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif`;
         ctx.textAlign = "left";
         ctx.fillText(tk.value, cursor, 0);
@@ -720,7 +744,6 @@ export function start(canvas: HTMLCanvasElement): void {
     hintText = null;
     hintState = "idle";
     hintAge = 0;
-    hintPulsing = false;
     hintPendingText = null;
     if (currentRoom.id === "room0") {
       room0Enter("movement");
@@ -1582,24 +1605,23 @@ export function start(canvas: HTMLCanvasElement): void {
       }
     }
 
-    // tutorial markers — non-sequential. Each unreached marker
-    // ticks its pulse, and any of them can be reached by the player
-    // walking over it. Reached markers retire and stop rendering.
+    // tutorial markers — strictly sequential. Only the marker at
+    // `markerIndex` (the active one) reacts to overlap; future
+    // markers render as silhouettes (handled in the draw pass).
+    // tickMarker advances the pulse phase for the active one only —
+    // silhouettes don't pulse.
     if (currentRoom.markers && currentRoom.markers.length > 0) {
-      for (const m of currentRoom.markers) {
-        if (m.reached) continue;
-        tickMarker(m, dt);
-        if (markerOverlapsPlayer(m, player.x, player.y)) {
-          m.reached = true;
+      const active = currentRoom.markers[markerIndex];
+      if (active && !active.reached) {
+        tickMarker(active, dt);
+        if (markerOverlapsPlayer(active, player.x, player.y)) {
+          active.reached = true;
           markerIndex += 1;
-          // Resetting hintAge gives the player credit for progress —
-          // the 5-sec idle pulse only fires when the phase has
-          // genuinely stalled.
           hintAge = 0;
           audio.play.pickupGrab("hp");
           rings.push({
-            x: m.x,
-            y: m.y,
+            x: active.x,
+            y: active.y,
             age: 0,
             lifetime: 0.35,
             startR: 16,
@@ -1613,8 +1635,8 @@ export function start(canvas: HTMLCanvasElement): void {
             const a = Math.random() * Math.PI * 2;
             const sp = 180 + Math.random() * 140;
             particles.push({
-              x: m.x,
-              y: m.y,
+              x: active.x,
+              y: active.y,
               vx: Math.cos(a) * sp,
               vy: Math.sin(a) * sp,
               initialSize: 3,
@@ -1758,11 +1780,14 @@ export function start(canvas: HTMLCanvasElement): void {
     drawWalls(ctx, currentRoom.walls);
     if (currentRoom.door) drawDoor(ctx, currentRoom.door);
 
-    // tutorial markers — drawn after walls, before enemies. All
-    // unreached markers render in their active style (pulse + label);
-    // reached ones are skipped by drawMarker itself.
+    // tutorial markers — drawn after walls, before enemies. Active
+    // marker (markers[markerIndex]) renders bright + pulse + label;
+    // future ones render as alpha-0.25 silhouettes; reached ones
+    // self-skip.
     if (currentRoom.markers) {
-      for (const m of currentRoom.markers) drawMarker(ctx, m);
+      for (let i = 0; i < currentRoom.markers.length; i++) {
+        drawMarker(ctx, currentRoom.markers[i], i === markerIndex);
+      }
     }
 
     // detection rings (drawn under everything so they read as a

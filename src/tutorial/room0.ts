@@ -54,12 +54,16 @@ export function buildRoom0(): Room {
     nextRoomId: "room1",
     spawnX: 200,
     spawnY: 400,
-    // Phase 1 — four movement markers reachable in any order.
+    // Phase 1 — four movement markers walked in strict 1 → 2 → 3 → 4
+    // order. Path: center → upper-left → upper-right → lower-left.
+    // The last marker lands the player on the LEFT side so that when
+    // Phase 2's vertical wall slams down at x=585, the dash lane runs
+    // left-to-right through it.
     markers: [
       createMarker(600, 400, 1, "→"),
       createMarker(200, 200, 2, "↖"),
       createMarker(1000, 200, 3, "↗"),
-      createMarker(600, 700, 4, "↓"),
+      createMarker(300, 600, 4, "↙"),
     ],
   };
 }

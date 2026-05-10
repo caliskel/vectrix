@@ -50,14 +50,34 @@ export function markerOverlapsPlayer(
 }
 
 /**
- * Draw an active (not-yet-reached) marker with full glow + label.
- * Reached markers are skipped — the engine doesn't call this for them.
+ * Draw an unreached marker. Active markers (the next-up in sequence)
+ * get the full glow + label + pulse; future markers render as a
+ * silhouette so the path ahead is visible but the player knows
+ * which one to chase. Reached markers are skipped.
  */
 export function drawMarker(
   ctx: CanvasRenderingContext2D,
   marker: Marker,
+  isActive: boolean,
 ): void {
   if (marker.reached) return;
+  if (!isActive) {
+    // Silhouette — flat alpha, no pulse, no label.
+    ctx.save();
+    ctx.globalAlpha = 0.25;
+    ctx.strokeStyle = PALETTE.pickupHP;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(marker.x, marker.y, MARKER_RADIUS, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.fillStyle = PALETTE.pickupHP;
+    ctx.font = "600 18px ui-monospace, SFMono-Regular, Menlo, monospace";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(String(marker.number), marker.x, marker.y);
+    ctx.restore();
+    return;
+  }
   const pulse = 1 + Math.sin(marker.pulsePhase) * MARKER_PULSE_AMPLITUDE;
   const r = MARKER_RADIUS * pulse;
   ctx.save();
