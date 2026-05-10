@@ -15,7 +15,6 @@ import {
   HUNTER_TRAIL_MAX_ALPHA,
   HUNTER_TRAIL_MAX_SCALE,
   HUNTER_TRAIL_MIN_SCALE,
-  HUNTER_TRAIL_MIN_VELOCITY,
 } from "../config";
 import { drawNeon } from "../neon";
 import { resolveEntityWallCollisions } from "../walls";
@@ -83,11 +82,21 @@ type TrailSample = {
    *  pointing the way the Hunter is going right now. */
   angle: number;
   age: number;
+  /** Visual params captured at emission time so an idle → aggro
+   *  transition fades old softer ghosts while new brighter ones
+   *  spawn behind the now-charging Hunter. */
+  maxAlpha: number;
+  glowBlur: number;
 };
 
 type IdlePathType = "figure8" | "oval" | "circle";
 const IDLE_PATH_TYPES: IdlePathType[] = ["figure8", "oval", "circle"];
 const HUNTER_IDLE_TRAIL_INTERVAL_SEC = HUNTER_IDLE_TRAIL_INTERVAL_MS / 1000;
+// Minimum displacement (squared, to skip the sqrt) between trail
+// samples — gates emission by actual position change instead of
+// instantaneous velocity, which is unreliable on the slow parametric
+// idle path.
+const TRAIL_MIN_DISPLACEMENT_SQ = 5 * 5;
 
 export class Hunter implements Enemy {
   readonly type: EnemyType = "hunter";
@@ -131,6 +140,12 @@ export class Hunter implements Enemy {
   private maxSpeed = 528; // 1.2 * 440 default; refreshed in update()
   private trailSamples: TrailSample[] = [];
   private trailTimer = 0;
+  /** Position of the last trail sample so we can gate emission by
+   *  actual displacement instead of velocity magnitude — the slow
+   *  parametric idle path moves at ~28 px/s, well below any sane
+   *  velocity gate. -1 means "no sample yet, emit on next chance". */
+  private lastTrailX = Number.NEGATIVE_INFINITY;
+  private lastTrailY = Number.NEGATIVE_INFINITY;
 
   constructor(x: number, y: number) {
     this.x = x;
@@ -216,10 +231,15 @@ export class Hunter implements Enemy {
       this.contactSquashTime = Math.max(0, this.contactSquashTime - dt);
     }
 
-    // Aggro-tuned trail emission (sharper interval, brighter render
-    // params handled in drawTrail). Idle uses HUNTER_IDLE_* timing
-    // via emitTrailSample called from tickIdle.
-    this.emitTrailSample(dt, HUNTER_TRAIL_INTERVAL_SEC);
+    // Aggro-tuned trail emission (sharper interval, brighter per-
+    // sample params). Idle uses HUNTER_IDLE_* timing via
+    // emitTrailSample called from tickIdle.
+    this.emitTrailSample(
+      dt,
+      HUNTER_TRAIL_INTERVAL_SEC,
+      HUNTER_TRAIL_MAX_ALPHA,
+      HUNTER_TRAIL_GLOW_BLUR,
+    );
 
     // Aggro angle for body — derive directly from velocity since the
     // chase model already gives a clean direction every frame.
@@ -243,7 +263,7 @@ export class Hunter implements Enemy {
     // as a hypnotic motion ghost rather than a combat streak.
     // Suppressed only during the post-contact bounce window.
     const isAggro = this.awarenessState === "aggro";
-    if (this.contactSquashTime <= 0) this.drawTrail(ctx, isAggro);
+    if (this.contactSquashTime <= 0) this.drawTrail(ctx);
     const speed = Math.hypot(this.vx, this.vy);
     const speedNorm =
       this.maxSpeed > 0 ? Math.min(1, speed / this.maxSpeed) : 0;
@@ -396,39 +416,55 @@ export class Hunter implements Enemy {
 
     resolveEntityWallCollisions(this, ctxRoom.walls, HUNTER_HITBOX_RADIUS);
 
-    // Trail emission with idle-tuned interval (sparser than aggro)
-    this.emitTrailSample(dt, HUNTER_IDLE_TRAIL_INTERVAL_SEC);
+    // Trail emission with idle-tuned interval / softer per-sample
+    // params (sparser, dimmer, smaller glow than aggro).
+    this.emitTrailSample(
+      dt,
+      HUNTER_IDLE_TRAIL_INTERVAL_SEC,
+      HUNTER_IDLE_TRAIL_MAX_ALPHA,
+      HUNTER_IDLE_TRAIL_GLOW_BLUR,
+    );
   }
 
   /**
-   * Push one trail sample if `interval` has elapsed since the last,
-   * age existing samples, and drop those past the buffer cap or
-   * MAX_AGE. Used by both idle and aggro paths.
+   * Emit a trail sample if the interval has elapsed AND the Hunter
+   * has actually moved away from the last sample. The displacement
+   * gate replaces the old velocity gate so the slow parametric idle
+   * path (~28 px/s) still leaves a trail. Each sample carries its
+   * own emission-time visual params (`maxAlpha`, `glowBlur`) so an
+   * idle → aggro transition lets old soft ghosts fade while new
+   * brighter ones spawn behind the charging body.
    */
-  private emitTrailSample(dt: number, interval: number): void {
+  private emitTrailSample(
+    dt: number,
+    interval: number,
+    maxAlpha: number,
+    glowBlur: number,
+  ): void {
     for (const sample of this.trailSamples) sample.age += dt;
     if (this.trailSamples.length > 0) {
       this.trailSamples = this.trailSamples.filter(
         (s) => s.age < HUNTER_TRAIL_MAX_AGE_SEC,
       );
     }
-    const speed = Math.hypot(this.vx, this.vy);
-    if (speed > HUNTER_TRAIL_MIN_VELOCITY) {
-      this.trailTimer += dt;
-      if (this.trailTimer >= interval) {
-        this.trailTimer = 0;
-        this.trailSamples.push({
-          x: this.x,
-          y: this.y,
-          angle: Math.atan2(this.vy, this.vx),
-          age: 0,
-        });
-        if (this.trailSamples.length > HUNTER_TRAIL_BUFFER_SIZE) {
-          this.trailSamples.shift();
-        }
-      }
-    } else {
-      this.trailTimer = 0;
+    this.trailTimer += dt;
+    if (this.trailTimer < interval) return;
+    const dxLast = this.x - this.lastTrailX;
+    const dyLast = this.y - this.lastTrailY;
+    if (dxLast * dxLast + dyLast * dyLast < TRAIL_MIN_DISPLACEMENT_SQ) return;
+    this.trailTimer = 0;
+    this.trailSamples.push({
+      x: this.x,
+      y: this.y,
+      angle: this.currentAngle,
+      age: 0,
+      maxAlpha,
+      glowBlur,
+    });
+    this.lastTrailX = this.x;
+    this.lastTrailY = this.y;
+    if (this.trailSamples.length > HUNTER_TRAIL_BUFFER_SIZE) {
+      this.trailSamples.shift();
     }
   }
 
@@ -439,21 +475,17 @@ export class Hunter implements Enemy {
     this.contactSquashTime = CONTACT_SQUASH_SEC;
   }
 
-  private drawTrail(ctx: CanvasRenderingContext2D, isAggro: boolean): void {
+  private drawTrail(ctx: CanvasRenderingContext2D): void {
     const len = this.trailSamples.length;
     if (len === 0) return;
-    const maxAlpha = isAggro
-      ? HUNTER_TRAIL_MAX_ALPHA
-      : HUNTER_IDLE_TRAIL_MAX_ALPHA;
-    const glowBlurBase = isAggro
-      ? HUNTER_TRAIL_GLOW_BLUR
-      : HUNTER_IDLE_TRAIL_GLOW_BLUR;
     // Iterate old → new so freshly-emitted ghosts overlay older ones,
     // matching the alpha ramp of i / len (0 = old / faint, 1 = fresh).
+    // Per-sample maxAlpha / glowBlur let an idle → aggro transition
+    // fade dim ghosts while new bright ones overlay them.
     for (let i = 0; i < len; i++) {
       const s = this.trailSamples[i];
       const t = i / len;
-      const alpha = t * maxAlpha;
+      const alpha = t * s.maxAlpha;
       const scale =
         HUNTER_TRAIL_MIN_SCALE +
         t * (HUNTER_TRAIL_MAX_SCALE - HUNTER_TRAIL_MIN_SCALE);
@@ -462,7 +494,7 @@ export class Hunter implements Enemy {
       ctx.rotate(s.angle);
       ctx.scale(scale, scale);
       ctx.shadowColor = HUNTER_COLOR;
-      ctx.shadowBlur = glowBlurBase * scale;
+      ctx.shadowBlur = s.glowBlur * scale;
       // Inner translucent fill at the same fill / stroke ratio as the
       // live body. Stroke at full alpha for the ghost.
       ctx.fillStyle = HUNTER_COLOR;
