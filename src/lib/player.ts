@@ -158,7 +158,7 @@ export type PlayerProfile = {
 export const DEFAULT_PLAYER_PROFILE: PlayerProfile = {
   outerRing: "#ffffff",
   iris: "#ffffff",
-  pupil: "#ffffff",
+  pupil: "#000000",
   dashParticles: "#9ca3af",
 };
 
