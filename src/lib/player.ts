@@ -927,7 +927,11 @@ export function drawPlayerEye(
     ? (opts.profile as PlayerProfile).outerRing
     : opts.glowColor;
   const irisColor = opts.profile?.iris ?? opts.irisColor ?? PALETTE.bg;
-  const ghostColor = opts.ghostColor;
+  // Dash ghosts use the player's profile iris colour so the trailing
+  // copies read as a fading echo of the player's own skin. Callers
+  // without a profile (none currently — kept as a safety fallback)
+  // get the legacy ghostColor opt.
+  const ghostColor = opts.profile?.iris ?? opts.ghostColor;
 
   // ===== ghosts (drawn first, behind the live eye, in world space) =====
   if (p.dashGhosts.length > 0) {
