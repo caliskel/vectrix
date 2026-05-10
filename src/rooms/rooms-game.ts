@@ -444,7 +444,7 @@ export function start(canvas: HTMLCanvasElement): void {
   function restartRun() {
     audio.silence();
     rebuildAllRooms();
-    currentRoom = rooms.get("room1")!;
+    currentRoom = rooms.get("room4")!;
     state.runState = "playing";
     state.hp = 3;
     state.score = 0;
