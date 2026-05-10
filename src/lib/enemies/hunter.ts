@@ -1,3 +1,12 @@
+import {
+  HUNTER_TRAIL_BUFFER_SIZE,
+  HUNTER_TRAIL_GLOW_BLUR,
+  HUNTER_TRAIL_INTERVAL_MS,
+  HUNTER_TRAIL_MAX_ALPHA,
+  HUNTER_TRAIL_MAX_SCALE,
+  HUNTER_TRAIL_MIN_SCALE,
+  HUNTER_TRAIL_MIN_VELOCITY,
+} from "../config";
 import { drawNeon } from "../neon";
 import type { Enemy, EnemyContext, EnemyType } from "./types";
 
@@ -42,6 +51,27 @@ const SPEED_LINES_HIGH: Array<readonly [number, number]> = [
   [9, 10],
 ];
 
+const HUNTER_TRAIL_INTERVAL_SEC = HUNTER_TRAIL_INTERVAL_MS / 1000;
+// Samples are dropped by buffer cap during sustained motion; this age
+// kicks in once the Hunter slows down so existing samples fade out
+// over roughly the visible-trail length instead of lingering.
+const HUNTER_TRAIL_MAX_AGE_SEC =
+  (HUNTER_TRAIL_BUFFER_SIZE + 2) * HUNTER_TRAIL_INTERVAL_SEC;
+// Inner translucent fill alpha relative to the outer stroke alpha,
+// matching the body's 0.4 fill / 1.0 stroke ratio.
+const HUNTER_TRAIL_FILL_RATIO = 0.4;
+const HUNTER_TRAIL_STROKE_WIDTH = 2;
+
+type TrailSample = {
+  x: number;
+  y: number;
+  /** Direction the Hunter was facing when this sample was recorded.
+   *  Stored so the trail ghosts curve through a turn instead of all
+   *  pointing the way the Hunter is going right now. */
+  angle: number;
+  age: number;
+};
+
 export class Hunter implements Enemy {
   readonly type: EnemyType = "hunter";
   x: number;
@@ -54,6 +84,8 @@ export class Hunter implements Enemy {
   private contactSquashTime = 0;
   // Cached so draw() can scale glow / speed lines without an EnemyContext
   private maxSpeed = 528; // 1.2 * 440 default; refreshed in update()
+  private trailSamples: TrailSample[] = [];
+  private trailTimer = 0;
 
   constructor(x: number, y: number) {
     this.x = x;
@@ -100,10 +132,42 @@ export class Hunter implements Enemy {
     if (this.contactSquashTime > 0) {
       this.contactSquashTime = Math.max(0, this.contactSquashTime - dt);
     }
+
+    // Trail buffer — age existing samples, drop expired ones, and
+    // emit a new one every HUNTER_TRAIL_INTERVAL while moving fast
+    // enough. When stopped, emission halts but ages keep advancing
+    // so the existing trail fades naturally.
+    for (const sample of this.trailSamples) sample.age += dt;
+    if (this.trailSamples.length > 0) {
+      this.trailSamples = this.trailSamples.filter(
+        (s) => s.age < HUNTER_TRAIL_MAX_AGE_SEC,
+      );
+    }
+    const speedNow = Math.hypot(this.vx, this.vy);
+    if (speedNow > HUNTER_TRAIL_MIN_VELOCITY) {
+      this.trailTimer += dt;
+      if (this.trailTimer >= HUNTER_TRAIL_INTERVAL_SEC) {
+        this.trailTimer = 0;
+        this.trailSamples.push({
+          x: this.x,
+          y: this.y,
+          angle: Math.atan2(this.vy, this.vx),
+          age: 0,
+        });
+        if (this.trailSamples.length > HUNTER_TRAIL_BUFFER_SIZE) {
+          this.trailSamples.shift();
+        }
+      }
+    } else {
+      this.trailTimer = 0;
+    }
   }
 
   draw(ctx: CanvasRenderingContext2D): void {
     if (this.destroyed) return;
+    // Trail draws under the body. Suppressed during the contact
+    // window so the bounce squash isn't competing with motion ghosts.
+    if (this.contactSquashTime <= 0) this.drawTrail(ctx);
     const speed = Math.hypot(this.vx, this.vy);
     const angle = speed > 0.01 ? Math.atan2(this.vy, this.vx) : 0;
     const speedNorm =
@@ -194,6 +258,39 @@ export class Hunter implements Enemy {
     this.vx *= CONTACT_BOUNCE_FACTOR;
     this.vy *= CONTACT_BOUNCE_FACTOR;
     this.contactSquashTime = CONTACT_SQUASH_SEC;
+  }
+
+  private drawTrail(ctx: CanvasRenderingContext2D): void {
+    const len = this.trailSamples.length;
+    if (len === 0) return;
+    // Iterate old → new so freshly-emitted ghosts overlay older ones,
+    // matching the alpha ramp of i / len (0 = old / faint, 1 = fresh).
+    for (let i = 0; i < len; i++) {
+      const s = this.trailSamples[i];
+      const t = i / len;
+      const alpha = t * HUNTER_TRAIL_MAX_ALPHA;
+      const scale =
+        HUNTER_TRAIL_MIN_SCALE +
+        t * (HUNTER_TRAIL_MAX_SCALE - HUNTER_TRAIL_MIN_SCALE);
+      ctx.save();
+      ctx.translate(s.x, s.y);
+      ctx.rotate(s.angle);
+      ctx.scale(scale, scale);
+      ctx.shadowColor = HUNTER_COLOR;
+      ctx.shadowBlur = HUNTER_TRAIL_GLOW_BLUR * scale;
+      // Inner translucent fill at the same fill / stroke ratio as the
+      // live body. Stroke at full alpha for the ghost.
+      ctx.fillStyle = HUNTER_COLOR;
+      ctx.globalAlpha = alpha * HUNTER_TRAIL_FILL_RATIO;
+      polyPath(ctx);
+      ctx.fill();
+      ctx.globalAlpha = alpha;
+      ctx.strokeStyle = HUNTER_COLOR;
+      ctx.lineWidth = HUNTER_TRAIL_STROKE_WIDTH;
+      polyPath(ctx);
+      ctx.stroke();
+      ctx.restore();
+    }
   }
 }
 

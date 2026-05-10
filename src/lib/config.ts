@@ -242,6 +242,17 @@ export const WATCHER_BRAKE_STRETCH_Y = 1.12;
 export const WATCHER_BRAKE_SQUASH_DURATION_MS = 150;
 export const WATCHER_BRAKE_RECOVERY_MS = 200;
 
+// Hunter motion trail — shrunk + faded copies of the body left
+// behind every TRAIL_INTERVAL_MS while moving. Samples age out so a
+// stopped Hunter's trail fades naturally instead of lingering.
+export const HUNTER_TRAIL_BUFFER_SIZE = 12;
+export const HUNTER_TRAIL_INTERVAL_MS = 25;
+export const HUNTER_TRAIL_MIN_VELOCITY = 50;
+export const HUNTER_TRAIL_MAX_ALPHA = 0.6;
+export const HUNTER_TRAIL_MIN_SCALE = 0.3;
+export const HUNTER_TRAIL_MAX_SCALE = 0.8;
+export const HUNTER_TRAIL_GLOW_BLUR = 8;
+
 // Bindings store KeyboardEvent.code values (layout-independent). Modifier
 // codes are normalized to drop the Left/Right side suffix (see normalizeCode
 // in main.ts) so either Shift key counts as "Shift", etc.
