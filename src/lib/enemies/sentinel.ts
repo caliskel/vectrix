@@ -1,4 +1,5 @@
 import { audio } from "../audio";
+import { isGodMode } from "../god-mode";
 import { makeBullet } from "../bullets";
 import { initAwareness } from "./awareness";
 import type {
@@ -1130,6 +1131,15 @@ export class Sentinel implements Enemy {
     // Phase-transition cinematic also gates incoming damage.
     if (this.state !== "idle" && this.state !== "attacking") return;
     if (this.phaseTransition) return;
+    // God-mode dev shortcut — any successful damage call drops the
+    // boss instantly so the death cinematic is one dash-through eye-
+    // hit away. Lets us iterate on the dying / VICTORY visuals
+    // without grinding through 60 HP every time.
+    if (isGodMode()) {
+      this.hp = 0;
+      this.enterDying();
+      return;
+    }
     this.hp = Math.max(0, this.hp - amount);
     if (this.hp <= 0) {
       this.enterDying();
@@ -4099,6 +4109,20 @@ export class Sentinel implements Enemy {
     // (matches takeDamage's gate so the boss is fully invulnerable
     // through the 2 s window).
     if (this.phaseTransition) return false;
+    // God-mode dev shortcut — any dash through the body kills the
+    // boss outright. Skips the body-vs-eye distinction so we can
+    // trigger the death cinematic from any phase without grinding
+    // for a Ring Burst window.
+    if (isGodMode()) {
+      const dx = px - this.x;
+      const dy = py - this.y;
+      const r = SENTINEL_HITBOX_RADIUS + half;
+      if (dx * dx + dy * dy < r * r) {
+        this.takeDamage(SENTINEL_HP_MAX);
+        return true;
+      }
+      return false;
+    }
     // Ring Burst vulnerable: the eye is the *only* damage path
     // anywhere in the fight. Body is intangible during this
     // phase (ghosted), and ring contact damage is handled
