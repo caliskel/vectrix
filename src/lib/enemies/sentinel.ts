@@ -458,13 +458,17 @@ const PHASE_TRANSITION_HITSTOP_SHAKE_PX = 6;
 const PHASE_TRANSITION_HITSTOP_SHAKE_SEC = 0.1;
 const PHASE_TRANSITION_HP_MARKER_FLASH_SEC = 0.3;
 
-// Sweep Laser — phase 2+ attack. The boss anchors a 180° beam, then
-// rotates it across the player's quadrant over 1.5 s. Player either
-// stands on the cold side or dashes through the beam under
-// i-frames; standing in the path otherwise = 1 HP.
+// Sweep Laser — phase 2+ attack. Double-pass beam: a 180° forward
+// sweep, a brief mid-pause where the beam hangs at the end-angle
+// and visually "telegraphs the reverse," then a 180° return sweep
+// back to the starting angle. The player has to dodge twice per
+// attack — and the mid-pause itself still deals damage so the
+// end-angle isn't a free safe-zone. Total damaging window:
+// firing-1 + mid-pause + firing-2 = 1.95 s.
 const SWEEP_LASER_TELEGRAPH_SEC = 0.8;
-const SWEEP_LASER_FIRING_SEC = 1.5;
-const SWEEP_LASER_RECOVERY_SEC = 0.4;
+const SWEEP_LASER_FIRING_PASS_SEC = 0.9;
+const SWEEP_LASER_MID_PAUSE_SEC = 0.15;
+const SWEEP_LASER_RECOVERY_SEC = 0.5;
 const SWEEP_LASER_BASE_COOLDOWN_SEC = 5.0;
 const SWEEP_LASER_BEAM_HIT_HALF_ANGLE = 0.04; // ~2.3° each side
 const SWEEP_LASER_TELEGRAPH_DASH_PATTERN: [number, number] = [10, 8];
@@ -478,6 +482,21 @@ const SWEEP_LASER_RECOVERY_FADE_SEC = 0.2;
 const SWEEP_LASER_BEAM_PARTICLE_INTERVAL_SEC = 0.05;
 const SWEEP_LASER_BEAM_PARTICLE_SPEED = 600;
 const SWEEP_LASER_BEAM_PARTICLE_LIFETIME_SEC = 0.2;
+// Mid-pause visuals — the beam freezes at the end-angle and
+// flashes; pulse + arrow tell the player "it's about to swing back."
+const SWEEP_LASER_MID_PAUSE_CORE_LW_BASE = 6;
+const SWEEP_LASER_MID_PAUSE_CORE_LW_PEAK = 12;
+const SWEEP_LASER_MID_PAUSE_GLOW_ALPHA_BASE = 0.15;
+const SWEEP_LASER_MID_PAUSE_GLOW_ALPHA_PEAK = 0.4;
+const SWEEP_LASER_MID_PAUSE_ARROW_OFFSET = 80;
+const SWEEP_LASER_MID_PAUSE_ARROW_SIZE = 14;
+const SWEEP_LASER_MID_PAUSE_ARROW_SCALE_MIN = 0.8;
+const SWEEP_LASER_MID_PAUSE_ARROW_SCALE_MAX = 1.4;
+const SWEEP_LASER_MID_PAUSE_SHAKE_PX = 2;
+const SWEEP_LASER_MID_PAUSE_SHAKE_SEC = 0.1;
+// Subtle white-to-cyan core shift so the return pass reads
+// differently from the forward pass at a glance.
+const SWEEP_LASER_RETURN_CORE_COLOR = "#aaeeff";
 
 // Energy burst — fired on the radial-burst telegraph → firing
 // transition. Two shockwave rings, a brief boss flash, and a
@@ -623,6 +642,17 @@ export type SentinelState =
   | "defeated";
 
 type AttackPhase = "idle" | "telegraph" | "firing" | "recovery";
+
+// Sweep Laser carries extra sub-phases for the double-pass cycle:
+// firing-1 (forward) → mid-pause (held at end-angle, still damaging)
+// → firing-2 (return). Telegraph + recovery bookend the cycle.
+type SweepPhase =
+  | "idle"
+  | "telegraph"
+  | "firing-1"
+  | "mid-pause"
+  | "firing-2"
+  | "recovery";
 
 type RingBurstPhase =
   | "idle"
@@ -821,7 +851,7 @@ export class Sentinel implements Enemy {
   phaseMarkerFlashTimer2to3 = -1;
 
   // === Sweep Laser sub-state machine (phase 2+) ===
-  private sweepLaserPhase: AttackPhase = "idle";
+  private sweepLaserPhase: SweepPhase = "idle";
   private sweepLaserTimer = 0;
   private sweepLaserIdleTimer = 0;
   private sweepLaserStartAngle = 0;
@@ -1931,6 +1961,10 @@ export class Sentinel implements Enemy {
   }
 
   // === Sweep Laser ===
+  // Double-pass cycle: telegraph → firing-1 → mid-pause → firing-2 →
+  // recovery → idle. Mid-pause is part of the damaging window — the
+  // beam freezes at end-angle and flashes, signaling the reversal,
+  // but anyone standing on that line still takes the hit.
   // State-machine progression only. Cooldown ticking + start gating
   // are handled by the central scheduler in updateCombat (mutual
   // exclusion across all four attacks).
@@ -1938,6 +1972,7 @@ export class Sentinel implements Enemy {
     if (this.sweepLaserPhase === "idle") return;
 
     this.sweepLaserTimer += dt;
+
     if (this.sweepLaserPhase === "telegraph") {
       const span =
         SWEEP_LASER_TELEGRAPH_DASH_PATTERN[0] +
@@ -1946,15 +1981,21 @@ export class Sentinel implements Enemy {
         (this.sweepLaserDashOffset + SWEEP_LASER_TELEGRAPH_DASH_RATE * dt) %
         span;
       if (this.sweepLaserTimer >= SWEEP_LASER_TELEGRAPH_SEC) {
-        this.sweepLaserPhase = "firing";
+        this.sweepLaserPhase = "firing-1";
         this.sweepLaserTimer = 0;
         this.sweepLaserBeamParticleTimer = 0;
       }
       return;
     }
-    if (this.sweepLaserPhase === "firing") {
-      // Damage check — angle from boss to player vs current beam
-      // angle. ±SWEEP_LASER_BEAM_HIT_HALF_ANGLE around the line.
+
+    // Damage + particle emission shared across all three damaging
+    // phases. currentSweepBeamAngle() handles the per-phase angle
+    // math; the collision check itself is identical.
+    const beamActive =
+      this.sweepLaserPhase === "firing-1" ||
+      this.sweepLaserPhase === "mid-pause" ||
+      this.sweepLaserPhase === "firing-2";
+    if (beamActive) {
       const player = ctxRoom.player;
       if (player.dashIframeTime <= 0) {
         const currentAngle = this.currentSweepBeamAngle();
@@ -1966,9 +2007,6 @@ export class Sentinel implements Enemy {
           this.requestPlayerHit = true;
         }
       }
-      // Beam particle emission — short streaks travelling outward
-      // along the live beam direction so the energy reads as
-      // streaming through the line.
       this.sweepLaserBeamParticleTimer += dt;
       while (
         this.sweepLaserBeamParticleTimer >=
@@ -1977,13 +2015,19 @@ export class Sentinel implements Enemy {
         this.sweepLaserBeamParticleTimer -=
           SWEEP_LASER_BEAM_PARTICLE_INTERVAL_SEC;
         const a = this.currentSweepBeamAngle();
+        // Particles flip to cyan during the return pass so the
+        // streaming energy carries the same colour cue as the core.
+        const particleColor =
+          this.sweepLaserPhase === "firing-2"
+            ? SWEEP_LASER_RETURN_CORE_COLOR
+            : "#ffffff";
         ctxRoom.particles.push({
           x: this.x,
           y: this.y,
           vx: Math.cos(a) * SWEEP_LASER_BEAM_PARTICLE_SPEED,
           vy: Math.sin(a) * SWEEP_LASER_BEAM_PARTICLE_SPEED,
           initialSize: 3,
-          color: "#ffffff",
+          color: particleColor,
           age: 0,
           lifetime: SWEEP_LASER_BEAM_PARTICLE_LIFETIME_SEC,
           glowStrong: 10,
@@ -1991,12 +2035,40 @@ export class Sentinel implements Enemy {
           drag: 0.97,
         });
       }
-      if (this.sweepLaserTimer >= SWEEP_LASER_FIRING_SEC) {
+    }
+
+    if (this.sweepLaserPhase === "firing-1") {
+      if (this.sweepLaserTimer >= SWEEP_LASER_FIRING_PASS_SEC) {
+        this.sweepLaserPhase = "mid-pause";
+        this.sweepLaserTimer = 0;
+        // Reverse cue — small kinetic + audio confirmation that the
+        // beam is about to swing back. No drone synth in the audio
+        // module yet, so the alert chirp doubles as the "reversing"
+        // ping; replace with a dedicated swoosh once the boss audio
+        // pass lands.
+        this.pendingShakePx = SWEEP_LASER_MID_PAUSE_SHAKE_PX;
+        this.pendingShakeSec = SWEEP_LASER_MID_PAUSE_SHAKE_SEC;
+        audio.play.alert();
+      }
+      return;
+    }
+
+    if (this.sweepLaserPhase === "mid-pause") {
+      if (this.sweepLaserTimer >= SWEEP_LASER_MID_PAUSE_SEC) {
+        this.sweepLaserPhase = "firing-2";
+        this.sweepLaserTimer = 0;
+      }
+      return;
+    }
+
+    if (this.sweepLaserPhase === "firing-2") {
+      if (this.sweepLaserTimer >= SWEEP_LASER_FIRING_PASS_SEC) {
         this.sweepLaserPhase = "recovery";
         this.sweepLaserTimer = 0;
       }
       return;
     }
+
     if (this.sweepLaserPhase === "recovery") {
       if (this.sweepLaserTimer >= SWEEP_LASER_RECOVERY_SEC) {
         this.sweepLaserPhase = "idle";
@@ -2021,12 +2093,37 @@ export class Sentinel implements Enemy {
     audio.play.alert();
   }
 
-  /** Live beam angle during firing — start angle plus
-   *  `direction * π * (timer / SWEEP_LASER_FIRING_SEC)`. Read by both
-   *  the damage check and the render path. */
+  /** Live beam angle. Read by the damage check, the particle
+   *  emitter, and the render path so all three stay in sync.
+   *  - firing-1: lerps `start → start + direction*π` over the pass.
+   *  - mid-pause: held at `start + direction*π` (the end-angle).
+   *  - firing-2: lerps the end-angle back to `start` (so direction
+   *    of motion is `-direction`).
+   *  - telegraph / recovery / idle: anchored at start (recovery
+   *    freezes wherever firing-2 ended, which equals start angle).
+   */
   private currentSweepBeamAngle(): number {
-    const t = Math.min(1, this.sweepLaserTimer / SWEEP_LASER_FIRING_SEC);
-    return this.sweepLaserStartAngle + this.sweepLaserDirection * Math.PI * t;
+    const start = this.sweepLaserStartAngle;
+    const direction = this.sweepLaserDirection;
+    const endAngle = start + direction * Math.PI;
+    if (this.sweepLaserPhase === "firing-1") {
+      const t = Math.min(
+        1,
+        this.sweepLaserTimer / SWEEP_LASER_FIRING_PASS_SEC,
+      );
+      return start + direction * Math.PI * t;
+    }
+    if (this.sweepLaserPhase === "mid-pause") {
+      return endAngle;
+    }
+    if (this.sweepLaserPhase === "firing-2") {
+      const t = Math.min(
+        1,
+        this.sweepLaserTimer / SWEEP_LASER_FIRING_PASS_SEC,
+      );
+      return endAngle - direction * Math.PI * t;
+    }
+    return start;
   }
 
   private fireAimedBullet(ctxRoom: EnemyContext): void {
@@ -2233,7 +2330,9 @@ export class Sentinel implements Enemy {
     }
     this.renderBody(ctx, 1);
     if (
-      this.sweepLaserPhase === "firing" ||
+      this.sweepLaserPhase === "firing-1" ||
+      this.sweepLaserPhase === "mid-pause" ||
+      this.sweepLaserPhase === "firing-2" ||
       this.sweepLaserPhase === "recovery"
     ) {
       this.renderSweepLaserBeam(ctx);
@@ -2338,11 +2437,39 @@ export class Sentinel implements Enemy {
       );
     }
     if (alpha <= 0) return;
+    // Mid-pause flash factor — triangle wave 0 → 1 → 0 across the
+    // 150 ms window. Drives both the core line-width pulse and the
+    // outer-glow alpha bump so the beam visibly "charges up" before
+    // the reverse pass.
+    let flash = 0;
+    if (this.sweepLaserPhase === "mid-pause") {
+      const u = Math.min(
+        1,
+        this.sweepLaserTimer / SWEEP_LASER_MID_PAUSE_SEC,
+      );
+      flash = u < 0.5 ? u * 2 : (1 - u) * 2;
+    }
+    const coreLineWidth =
+      SWEEP_LASER_MID_PAUSE_CORE_LW_BASE +
+      (SWEEP_LASER_MID_PAUSE_CORE_LW_PEAK -
+        SWEEP_LASER_MID_PAUSE_CORE_LW_BASE) *
+        flash;
+    const outerGlowAlpha =
+      SWEEP_LASER_MID_PAUSE_GLOW_ALPHA_BASE +
+      (SWEEP_LASER_MID_PAUSE_GLOW_ALPHA_PEAK -
+        SWEEP_LASER_MID_PAUSE_GLOW_ALPHA_BASE) *
+        flash;
+    // Cyan core during firing-2 — subtle "this is the return pass"
+    // tell the player picks up via peripheral vision.
+    const coreColor =
+      this.sweepLaserPhase === "firing-2"
+        ? SWEEP_LASER_RETURN_CORE_COLOR
+        : "#ffffff";
     ctx.save();
     // Outer glow layer
     ctx.strokeStyle = accent;
     ctx.lineWidth = 24;
-    ctx.globalAlpha = 0.15 * alpha;
+    ctx.globalAlpha = outerGlowAlpha * alpha;
     ctx.beginPath();
     ctx.moveTo(this.x, this.y);
     ctx.lineTo(endX, endY);
@@ -2355,13 +2482,65 @@ export class Sentinel implements Enemy {
     ctx.lineTo(endX, endY);
     ctx.stroke();
     // Hot core
-    ctx.strokeStyle = "#ffffff";
-    ctx.lineWidth = 6;
+    ctx.strokeStyle = coreColor;
+    ctx.lineWidth = coreLineWidth;
     ctx.globalAlpha = 1 * alpha;
     ctx.beginPath();
     ctx.moveTo(this.x, this.y);
     ctx.lineTo(endX, endY);
     ctx.stroke();
+    ctx.restore();
+
+    // Reverse arrow — only during mid-pause. Sits along the static
+    // beam at a fixed offset and points along the OPPOSITE rotation
+    // direction so the player has half a beat to read which way the
+    // beam is about to swing back.
+    if (this.sweepLaserPhase === "mid-pause") {
+      this.renderSweepReverseArrow(ctx, a);
+    }
+  }
+
+  private renderSweepReverseArrow(
+    ctx: CanvasRenderingContext2D,
+    beamAngle: number,
+  ): void {
+    const baseX =
+      this.x + Math.cos(beamAngle) * SWEEP_LASER_MID_PAUSE_ARROW_OFFSET;
+    const baseY =
+      this.y + Math.sin(beamAngle) * SWEEP_LASER_MID_PAUSE_ARROW_OFFSET;
+    const reverseDir = (-this.sweepLaserDirection) as 1 | -1;
+    const u = Math.min(
+      1,
+      this.sweepLaserTimer / SWEEP_LASER_MID_PAUSE_SEC,
+    );
+    const pulse = u < 0.5 ? u * 2 : (1 - u) * 2;
+    const scale =
+      SWEEP_LASER_MID_PAUSE_ARROW_SCALE_MIN +
+      (SWEEP_LASER_MID_PAUSE_ARROW_SCALE_MAX -
+        SWEEP_LASER_MID_PAUSE_ARROW_SCALE_MIN) *
+        pulse;
+    const size = SWEEP_LASER_MID_PAUSE_ARROW_SIZE * scale;
+    const tangentA = beamAngle + reverseDir * (Math.PI / 2);
+    const apexX = baseX + Math.cos(tangentA) * size * 1.2;
+    const apexY = baseY + Math.sin(tangentA) * size * 1.2;
+    const sideA = beamAngle + reverseDir * (Math.PI / 2 + 0.6);
+    const sideB = beamAngle + reverseDir * (Math.PI / 2 - 0.6);
+    ctx.save();
+    ctx.fillStyle = "#ffffff";
+    ctx.shadowColor = "#ffffff";
+    ctx.shadowBlur = 12;
+    ctx.beginPath();
+    ctx.moveTo(apexX, apexY);
+    ctx.lineTo(
+      baseX + Math.cos(sideA) * size * 0.5,
+      baseY + Math.sin(sideA) * size * 0.5,
+    );
+    ctx.lineTo(
+      baseX + Math.cos(sideB) * size * 0.5,
+      baseY + Math.sin(sideB) * size * 0.5,
+    );
+    ctx.closePath();
+    ctx.fill();
     ctx.restore();
   }
 
