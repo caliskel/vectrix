@@ -499,9 +499,11 @@ Long horizontal corridor — first room that needs the follow camera.
   no longer the clip-through eye it used to be).
 - The third turret has `dropsKey = true` — its kill spawns a Key
   at the kill site. Door at (3570, 300) is `requiresKey: true`;
-  it stays closed until both every enemy is dead AND the player
-  picked up the key. On clear: door switches to "open" arrow,
-  +5 mult-up sting, → Room 2.
+  it opens the moment the player picks up the key, regardless of
+  whether the surviving turrets / Watcher are still alive (the
+  carrier kill is the gate, stragglers don't block the exit).
+  On unlock: door switches to "open" arrow, +5 mult-up sting,
+  → Room 2.
 
 ### Room 2 — arena with circular defence
 
@@ -521,10 +523,11 @@ manage distance and angles instead of peeking around a column.
   segment takes a hit, including for-free turret kills when the
   player lines the Watcher up with a corner.
 - The Watcher carries the key — its kill spawns a Key in the
-  centre. Door at (1385, 450) is `requiresKey: true` and stays
-  closed until the key is collected AND every enemy is dead.
-  `useCamera = true` (1400×900 ≥ 1200×800 viewport letterbox).
-  Spawn at (200, 450). On clear → Room 3 placeholder.
+  centre. Door at (1385, 450) is `requiresKey: true` and opens
+  on the key alone (the corner turrets can stay alive — the
+  Watcher kill is the gate). `useCamera = true` (1400×900 ≥
+  1200×800 viewport letterbox). Spawn at (200, 450). On unlock
+  → Room 3 placeholder.
 - If the open layout reads as too punishing later, dropping one
   or two 50×200 columns back near the centre is the cheapest
   next step; the bullet/laser clipping was tested with columns
@@ -615,25 +618,29 @@ entirely and treat world coords as canvas coords 1:1.
 
 ## Keys system (`lib/keys.ts`)
 
-Per-room key pickup that gates the exit door alongside "all
-enemies dead". `Key` is `{ x, y, collected, age }`; `createKey`
-spawns at the kill site, `updateKey` advances spawn pop + bob,
-`drawKey` renders a golden diamond + stem + teeth with a neon
-glow, `checkKeyPickup(key, px, py)` is a 28 px radius proximity
-check, and `drawKeyHudIcon(ctx, x, y, collected)` paints the
-HUD slot (silhouette outline when not held, filled gold when
-held).
+Per-room key pickup that owns the unlock condition for its room
+on its own — the carrier kill is the gate, and surviving
+stragglers don't block the exit. `Key` is `{ x, y, collected,
+age }`; `createKey` spawns at the kill site, `updateKey` advances
+spawn pop + bob, `drawKey` renders a golden diamond + stem +
+teeth with a neon glow, `checkKeyPickup(key, px, py)` is a 28 px
+radius proximity check, and `drawKeyHudIcon(ctx, x, y, collected)`
+paints the HUD slot (silhouette outline when not held, filled
+gold when held).
 
 Game flow: when an `Enemy.dropsKey` flagged enemy dies via
 `emitEnemyKill`, rooms-game stamps `currentKey = createKey(e.x,
 e.y)`. The frame loop ticks the key + checks pickup; on pickup
 `keyHeld = true`, an "KEY ACQUIRED" floating text rises from
 the player, and `audio.play.pickupGrab("hp")` plays as a
-placeholder cue. `checkRoomCleared` skips the open transition
-while `door.requiresKey && !keyHeld`, even if all enemies are
-dead — so the player must collect before exiting. `Door` gained
-a `requiresKey` flag (default false); when true and closed the
-door visual swaps the red X for a golden lock with a keyhole.
+placeholder cue. `checkRoomCleared` has two unlock branches:
+`door.requiresKey` opens on `keyHeld` alone, ignoring alive
+enemies; non-key doors require every enemy in the room to be
+dead (and every marker reached, in tutorial Room 0). `Door`
+carries a `requiresKey` flag (default false); when true and
+closed the door visual swaps the red X for a golden lock with
+a keyhole. The HUD key indicator shows `0 / 1` (dim silhouette)
+until pickup, then flips to `1 / 1` (filled gold).
 
 ### Watcher (`lib/enemies/watcher.ts`)
 

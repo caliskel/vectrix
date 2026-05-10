@@ -1151,19 +1151,25 @@ export function start(canvas: HTMLCanvasElement): void {
 
   function checkRoomCleared() {
     if (state.clearedRoomIds.has(currentRoom.id)) return;
-    const hasEnemies = currentRoom.enemies.length > 0;
-    const markers = currentRoom.markers;
-    const hasMarkers = (markers?.length ?? 0) > 0;
-    if (!hasEnemies && !hasMarkers) return; // empty rooms — skip
-    if (hasEnemies && aliveEnemies().length > 0) return;
-    if (hasMarkers && markers && markerIndex < markers.length) return;
-    // Door with requiresKey stays closed until the player has the key,
-    // even after every enemy is dead. Once the key is grabbed and
-    // we're already cleared, we'll open then via the same path.
-    if (currentRoom.door?.requiresKey && !keyHeld) return;
+    const door = currentRoom.door;
+    if (!door) return;
+    // Two unlock rules: requiresKey doors open on the key alone,
+    // non-key doors require every enemy dead AND every marker
+    // reached. (Tutorial rooms only use markers in Room 0; combat
+    // rooms still resolve through the enemy clear branch.)
+    if (door.requiresKey) {
+      if (!keyHeld) return;
+    } else {
+      const hasEnemies = currentRoom.enemies.length > 0;
+      const markers = currentRoom.markers;
+      const hasMarkers = (markers?.length ?? 0) > 0;
+      if (!hasEnemies && !hasMarkers) return; // empty rooms — skip
+      if (hasEnemies && aliveEnemies().length > 0) return;
+      if (hasMarkers && markers && markerIndex < markers.length) return;
+    }
     state.clearedRoomIds.add(currentRoom.id);
     state.clearFlash = ROOM_CLEAR_FLASH;
-    if (currentRoom.door) currentRoom.door.state = "open";
+    door.state = "open";
     audio.play.multUp(5); // placeholder sting
   }
 
@@ -2297,7 +2303,7 @@ export function start(canvas: HTMLCanvasElement): void {
       ctx.fillStyle = keyHeld ? "#ffd60a" : "rgba(255, 214, 10, 0.55)";
       ctx.font = "500 11px ui-monospace, SFMono-Regular, Menlo, monospace";
       ctx.textAlign = "right";
-      ctx.fillText("1 / 1", viewW - 20, ky + 14);
+      ctx.fillText(keyHeld ? "1 / 1" : "0 / 1", viewW - 20, ky + 14);
     }
 
     ctx.restore();
