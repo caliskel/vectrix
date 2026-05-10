@@ -28,6 +28,32 @@ const previewPlayer = createPlayer();
 previewPlayer.x = PREVIEW_CANVAS_SIZE / 2;
 previewPlayer.y = PREVIEW_CANVAS_SIZE / 2;
 
+// Reflect tutorial-completed state in the menu — ROOMS card stays
+// locked until the player has been through the tutorial, and the
+// tutorial card swaps its blurb to "Replay" once it's done.
+function applyTutorialState(): void {
+  const completed =
+    localStorage.getItem("dash-proto:tutorial-completed") === "true";
+  const tutDesc = document.getElementById("link-tutorial-desc");
+  if (tutDesc) {
+    tutDesc.textContent = completed ? "Replay tutorial" : "Learn the basics";
+  }
+  const roomsLink = document.getElementById("link-rooms");
+  const roomsDesc = document.getElementById("link-rooms-desc");
+  if (roomsLink && roomsDesc) {
+    if (!completed) {
+      roomsLink.classList.add("locked");
+      roomsLink.setAttribute("aria-disabled", "true");
+      roomsDesc.textContent = "🔒 Complete tutorial first";
+    } else {
+      roomsLink.classList.remove("locked");
+      roomsLink.removeAttribute("aria-disabled");
+      roomsDesc.textContent = "Story mode";
+    }
+  }
+}
+applyTutorialState();
+
 function setOverlay(name: "player" | "about" | null) {
   if (activeOverlay) {
     if (activeOverlay.id === "overlay-player") stopPreview();

@@ -1,6 +1,7 @@
-import type { Door } from "../lib/door";
-import type { Enemy } from "../lib/enemies/types";
-import type { Wall } from "../lib/walls";
+import type { Door } from "./door";
+import type { Enemy } from "./enemies/types";
+import type { Marker } from "./markers";
+import type { Wall } from "./walls";
 
 export type Room = {
   id: string;
@@ -20,4 +21,8 @@ export type Room = {
   useCamera?: boolean;
   /** When set, drawn as a centered overlay message on top of the room. */
   message?: string;
+  /** Optional sequence of tutorial markers — game engine treats them
+   *  like enemies for the room-cleared check (room is cleared once
+   *  every marker has been touched in order). */
+  markers?: Marker[];
 };

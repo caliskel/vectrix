@@ -59,9 +59,14 @@
       }
       .modes {
         display: grid;
-        grid-template-columns: repeat(2, minmax(220px, 240px));
+        grid-template-columns: repeat(3, minmax(200px, 220px));
         gap: 22px;
         justify-content: center;
+      }
+      @media (max-width: 760px) {
+        .modes {
+          grid-template-columns: repeat(2, minmax(200px, 220px));
+        }
       }
       .mode {
         display: block;
@@ -100,6 +105,18 @@
       .mode--rooms .label {
         color: var(--player-dash);
         text-shadow: 0 0 12px rgba(0, 229, 255, 0.5);
+      }
+      .mode--tutorial .label {
+        color: #4ade80;
+        text-shadow: 0 0 12px rgba(74, 222, 128, 0.55);
+      }
+      .mode.locked {
+        opacity: 0.45;
+        cursor: not-allowed;
+        pointer-events: none;
+      }
+      .mode.locked .label {
+        text-shadow: none;
       }
       .mode--player .label {
         color: var(--player-yellow);
@@ -288,13 +305,17 @@
     <h1 class="title">DASH</h1>
     <div class="subtitle">arcade prototype</div>
     <nav class="modes">
+      <a class="mode mode--tutorial" id="link-tutorial" href="/tutorial.html">
+        <div class="label">TUTORIAL</div>
+        <div class="desc" id="link-tutorial-desc">Learn the basics</div>
+      </a>
+      <a class="mode mode--rooms" id="link-rooms" href="/rooms.html">
+        <div class="label">ROOMS</div>
+        <div class="desc" id="link-rooms-desc">Story mode</div>
+      </a>
       <a class="mode mode--sandbox" href="/sandbox.html">
         <div class="label">SANDBOX</div>
         <div class="desc">Endless practice mode</div>
-      </a>
-      <a class="mode mode--rooms" href="/rooms.html">
-        <div class="label">ROOMS</div>
-        <div class="desc">Story mode (in development)</div>
       </a>
       <button type="button" class="mode mode--player" data-overlay="player">
         <div class="label">PLAYER</div>

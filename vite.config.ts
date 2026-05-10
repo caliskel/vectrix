@@ -8,6 +8,7 @@ export default defineConfig({
         main: resolve(__dirname, "index.html"),
         sandbox: resolve(__dirname, "sandbox.html"),
         rooms: resolve(__dirname, "rooms.html"),
+        tutorial: resolve(__dirname, "tutorial.html"),
       },
     },
   },

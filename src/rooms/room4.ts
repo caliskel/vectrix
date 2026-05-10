@@ -2,7 +2,7 @@ import { makeDoor } from "../lib/door";
 import { Turret } from "../lib/enemies/turret";
 import { Watcher } from "../lib/enemies/watcher";
 import type { Wall } from "../lib/walls";
-import type { Room } from "./room";
+import type { Room } from "../lib/room";
 
 const ROOM_W = 3600;
 const ROOM_H = 600;

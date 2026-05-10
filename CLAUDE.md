@@ -49,17 +49,27 @@ src/
                         MULT_* tunables, MULT_TIER_PORTS, multColor
   sandbox/
     main.ts           — entry; side-effect import of sandbox-game
-    sandbox-game.ts   — owns the entire sandbox GameState (HP, score,
-                        multiplier, bullets, pickups, particles,
-                        rings, floating texts, end snapshot, …),
-                        rAF loop, input, render, end overlay, HUD
+    sandbox-game.ts   — owns the entire sandbox GameState
   rooms/
     main.ts           — entry; locates #app and calls start()
-    rooms-game.ts     — placeholder loop that draws "ROOMS / coming soon"
-                        in the same neon palette
+    rooms-game.ts     — campaign engine; locks behind the tutorial and
+                        currently runs Room 4 (corridor) + Room 5
+                        placeholder
+    room4.ts / room5.ts
+  tutorial/
+    main.ts           — entry for /tutorial.html
+    tutorial-game.ts  — fork of rooms-game with tutorial-specific HUD,
+                        marker support in Room 0, and the "TUTORIAL
+                        COMPLETE" overlay that writes the unlock flag
+    room0.ts          — controls room (5 sequenced markers + a dash
+                        gate)
+    room1.ts / room2.ts / room3.ts
+                      — single-encounter intros for Turret / Watcher /
+                        Hunter (lifted from the old src/rooms/)
 sandbox.html          — Sandbox page (`/src/sandbox/main.ts`)
-rooms.html            — Rooms page (`/src/rooms/main.ts`)
-index.html            — Landing page with neon DASH title and two buttons
+rooms.html            — Story-mode page (`/src/rooms/main.ts`)
+tutorial.html         — Tutorial page (`/src/tutorial/main.ts`)
+index.html            — Landing page with the 5-card menu
 vite.config.ts        — multi-page build via rollupOptions.input
 ```
 
@@ -356,46 +366,59 @@ type Room = {
 Each room is rebuilt fresh by its `buildRoomN()` factory on
 `restartRun`, so enemies/door state always reset cleanly.
 
-### Room 1
+## Tutorial mode (separate page)
 
-- Player spawns at (150, 400), facing right.
-- One **Turret** at (600, 400). 50 px diameter neon-cyan body with a
-  rotating barrel that aims at the player (lerp rate 10/s,
-  frame-rate independent).
-- Turret fires every 1.4 s — the last 0.3 s before a shot brightens
-  the barrel as a telegraph. Bullet uses sandbox-shared
-  `lib/bullets.ts` (size/speed/color from `settings.bullets`,
-  `bounces=false`).
-- Turret HP = 3. Player damages it only when their AABB overlaps the
-  turret body **during a dash i-frame**. Each dash session can deal
-  at most one damage (`dashIdAlreadyDamaged` per turret).
-- Outside dash, the turret hits the player on contact (same as a
-  bullet hit).
-- Right wall has a 80 × 120 gap at (1200, 400). The wall is split
-  around the gap; the gap is occupied by a `Door` entity.
-- Door starts **closed** — drawn as a wall-tinted rect with a neon
-  red `×`, blocks the player like any wall and aborts a dash on
-  contact. When the last enemy in the room dies:
-  - The door switches to **open** (pulsing neon arrow `→`).
-  - A 0.2 s green flash plays over the screen at 0.15 alpha.
-  - `audio.play.multUp(5)` rings as a placeholder room-cleared sting
-    (will get its own cue later).
-- Stepping into the open door triggers `transitionToRoom(nextRoomId)`,
-  which rebuilds bullets/rings/floating texts and respawns the player
-  at the next room's spawn point.
+`tutorial.html` is its own entry, served by `src/tutorial/main.ts` →
+`src/tutorial/tutorial-game.ts` (a fork of `rooms-game.ts` with
+campaign-specific bits swapped for tutorial behavior). Four rooms
+in order: **Room 0** (controls), **Room 1** (Turret), **Room 2**
+(Watcher), **Room 3** (Hunter). HUD label flips to
+`TUTORIAL — ROOM N / 4`. The single-pellet enemy intros are
+the same encounters that previously lived under `src/rooms/`;
+they were moved here so the campaign in `rooms.html` can hold
+its own larger encounters.
 
-### Room 2
+Completion is sticky — when the player walks through the open
+door of Room 3 (its `nextRoomId` is `null`),
+`completeTutorial()` writes
+`localStorage["dash-proto:tutorial-completed"] = "true"`, plays
+`audio.play.multUp(8)` as a victory sting, and shows a
+"TUTORIAL COMPLETE" overlay; any keypress takes the player to
+`/`. The flag unlocks the campaign and changes the landing
+copy on the tutorial card to "Replay tutorial".
 
-- Player spawns at (150, 400). One **Watcher** at (950, 400). Right
-  wall has the same 80×120 door gap as Room 1; the door is closed
-  while the Watcher is alive and opens on clear with the same flash
-  + sting flow. Door leads to Room 3.
+### Tutorial Room 0 — Controls
 
-### Room 3
+- 1200 × 800, no camera, no enemies, no HP loss possible.
+- Player spawns at (200, 400). Five `Marker` checkpoints
+  (lib/markers.ts) teach D / W / A / S / X in that order —
+  each marker is a green pulsing 35 px disc with the digit and
+  the binding label hovering above. Two short pillar walls at
+  (700, 350) / (700, 480) force a dash to reach the last
+  marker.
+- Engine tracks an `markerIndex`; on overlap with the active
+  marker the player gets a green pickup-style ring + 6
+  particles + `audio.play.pickupGrab("hp")`, and the index
+  advances. Door (closed) opens once `markerIndex` equals 5.
 
-- Player spawns at (150, 400). One **Hunter** at (950, 400). Same
-  right-wall door layout as Rooms 1–2 — door closed until the Hunter
-  is destroyed. On clear: door opens → Room 4 placeholder.
+### Tutorial Rooms 1–3
+
+Identical to the original Rooms 1–3 in mechanics (one Turret /
+Watcher / Hunter encounter respectively, same right-wall
+door pattern). Lift-and-shifted into `src/tutorial/room1.ts`,
+`room2.ts`, `room3.ts`; only Room 3's `nextRoomId` changed —
+it's now `null` so the door triggers `completeTutorial()`
+instead of advancing.
+
+## Campaign rooms (`rooms.html`)
+
+The campaign now starts at **Room 4 (corridor)**, displayed in
+the HUD as `ROOM 1 / 2`. Room 5 is the next-up placeholder
+("coming soon" message). On launch the engine checks
+`localStorage["dash-proto:tutorial-completed"]` — if absent,
+it renders a "STORY MODE LOCKED" full-page overlay with a CTA
+that links straight to `/tutorial.html`, and never starts the
+game loop.
 
 ### Room 4
 

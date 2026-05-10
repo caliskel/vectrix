@@ -72,12 +72,19 @@ import {
   resolvePlayerWallCollisions,
   type Wall,
 } from "../lib/walls";
-import { buildRoom4 } from "./room4";
-import { buildRoom5 } from "./room5";
+import { buildRoom0 } from "./room0";
+import { buildRoom1 } from "./room1";
+import { buildRoom2 } from "./room2";
+import { buildRoom3 } from "./room3";
+import {
+  drawMarker,
+  markerOverlapsPlayer,
+  tickMarker,
+} from "../lib/markers";
 import type { Room } from "../lib/room";
 
-// Canonical letterbox viewport (constant across all rooms; camera-
-// rooms scroll a wider/taller world inside this frame).
+// Canonical letterbox viewport — same as rooms-game.ts; markers /
+// pillar walls / camera all assume 1200x800 logical space.
 const ROOM_W_PX = 1200;
 const ROOM_H_PX = 800;
 
@@ -94,12 +101,12 @@ const LASER_FRIENDLY_FIRE_HALF_WIDTH = 8; // matches firing-beam visual width
 const FRIENDLY_FIRE_BONUS = 200;
 const SCREEN_SHAKE_DURATION_SEC = 0.2;
 const SCREEN_SHAKE_PX = 4;
-// Campaign currently has Room 4 (corridor) + Room 5 placeholder. The
-// HUD displays them as 1 / 2 since rooms 1–3 moved to the tutorial.
-const ROOM_TOTAL = 2;
+// Tutorial has 4 rooms — Room 0 (controls intro), 1 (Turret),
+// 2 (Watcher), 3 (Hunter). HUD label is "TUTORIAL — ROOM N / 4".
+const ROOM_TOTAL = 4;
 const TUTORIAL_COMPLETED_KEY = "dash-proto:tutorial-completed";
 const ROOM_CLEAR_FLASH = 0.2;
-const ROOMS_BEST_KEY = "dash-proto:rooms-best";
+const ROOMS_BEST_KEY = "dash-proto:tutorial-best";
 
 function pointSegmentDistanceSq(
   px: number,
@@ -295,7 +302,7 @@ function drawLaser(ctx: CanvasRenderingContext2D, l: Laser): void {
   ctx.restore();
 }
 
-type RunState = "playing" | "failed";
+type RunState = "playing" | "failed" | "completed";
 
 type FailedSnapshot = {
   score: number;
@@ -330,15 +337,6 @@ export function start(canvas: HTMLCanvasElement): void {
   const rawCtx = canvas.getContext("2d");
   if (!rawCtx) return;
   const ctx: CanvasRenderingContext2D = rawCtx;
-
-  // Story-mode lock — players must clear the tutorial before
-  // unlocking the campaign. Render a "complete tutorial first"
-  // overlay and don't start the game loop. The button takes them
-  // straight to /tutorial.html.
-  if (localStorage.getItem(TUTORIAL_COMPLETED_KEY) !== "true") {
-    showTutorialLockOverlay(canvas, ctx);
-    return;
-  }
 
   const settings: Settings = loadSettings();
 
@@ -391,10 +389,16 @@ export function start(canvas: HTMLCanvasElement): void {
   const camera: Camera = createCamera();
   let currentKey: Key | null = null;
   let keyHeld = false;
+  // Index of the next-to-reach tutorial marker (Room 0). Reset on
+  // every room enter; markers are progressed by overlap in the sim
+  // loop, and the room is "cleared" once markerIndex equals length.
+  let markerIndex = 0;
 
   const rooms = new Map<string, Room>();
-  rooms.set("room4", buildRoom4());
-  rooms.set("room5", buildRoom5());
+  rooms.set("room0", buildRoom0());
+  rooms.set("room1", buildRoom1());
+  rooms.set("room2", buildRoom2());
+  rooms.set("room3", buildRoom3());
 
   const state: GameState = {
     runState: "playing",
@@ -415,7 +419,7 @@ export function start(canvas: HTMLCanvasElement): void {
     failedSnapshot: null,
   };
 
-  let currentRoom: Room = rooms.get("room4")!;
+  let currentRoom: Room = rooms.get("room0")!;
 
   // overlay button bounds (CSS pixel space)
   let tryAgainBounds: Bounds | null = null;
@@ -437,8 +441,10 @@ export function start(canvas: HTMLCanvasElement): void {
   snapCameraToRoom();
 
   function rebuildAllRooms() {
-    rooms.set("room4", buildRoom4());
-    rooms.set("room5", buildRoom5());
+    rooms.set("room0", buildRoom0());
+    rooms.set("room1", buildRoom1());
+    rooms.set("room2", buildRoom2());
+    rooms.set("room3", buildRoom3());
   }
 
   function restartRun() {
@@ -467,6 +473,7 @@ export function start(canvas: HTMLCanvasElement): void {
     lasers = [];
     currentKey = null;
     keyHeld = false;
+    markerIndex = 0;
     tryAgainBounds = null;
     spawnPlayerInCurrentRoom();
     resetEyeState(player);
@@ -483,6 +490,7 @@ export function start(canvas: HTMLCanvasElement): void {
     lasers = [];
     currentKey = null;
     keyHeld = false;
+    markerIndex = 0;
     spawnPlayerInCurrentRoom();
     snapCameraToRoom();
   }
@@ -584,6 +592,12 @@ export function start(canvas: HTMLCanvasElement): void {
         e.preventDefault();
         restartRun();
       }
+      return;
+    }
+
+    if (state.runState === "completed") {
+      e.preventDefault();
+      window.location.href = "/";
       return;
     }
 
@@ -763,6 +777,17 @@ export function start(canvas: HTMLCanvasElement): void {
     };
   }
 
+  function completeTutorial() {
+    state.runState = "completed";
+    audio.play.multUp(8);
+    try {
+      localStorage.setItem(TUTORIAL_COMPLETED_KEY, "true");
+    } catch {
+      // privacy / quota — completion still happens for the session,
+      // we just can't remember it on next visit.
+    }
+  }
+
   function destroyEnemy(enemy: Enemy) {
     // FX (rings, particles, sound, screen shake, screen flash) live in
     // emitEnemyKill — this function only credits score and floats the
@@ -803,8 +828,12 @@ export function start(canvas: HTMLCanvasElement): void {
 
   function checkRoomCleared() {
     if (state.clearedRoomIds.has(currentRoom.id)) return;
-    if (currentRoom.enemies.length === 0) return; // empty rooms (room2) — skip
-    if (aliveEnemies().length > 0) return;
+    const hasEnemies = currentRoom.enemies.length > 0;
+    const markers = currentRoom.markers;
+    const hasMarkers = (markers?.length ?? 0) > 0;
+    if (!hasEnemies && !hasMarkers) return; // empty rooms — skip
+    if (hasEnemies && aliveEnemies().length > 0) return;
+    if (hasMarkers && markers && markerIndex < markers.length) return;
     // Door with requiresKey stays closed until the player has the key,
     // even after every enemy is dead. Once the key is grabbed and
     // we're already cleared, we'll open then via the same path.
@@ -858,7 +887,7 @@ export function start(canvas: HTMLCanvasElement): void {
       currentRoom.door.pulse += dt;
     }
 
-    if (state.runState === "failed") {
+    if (state.runState === "failed" || state.runState === "completed") {
       if (state.hitVignette > 0) {
         state.hitVignette = Math.max(0, state.hitVignette - dt);
       }
@@ -1262,6 +1291,49 @@ export function start(canvas: HTMLCanvasElement): void {
       }
     }
 
+    // tutorial markers — tick all (so future markers also breathe in
+    // sync) and advance the active one when the player walks over it.
+    if (currentRoom.markers && currentRoom.markers.length > 0) {
+      for (const m of currentRoom.markers) tickMarker(m, dt);
+      if (markerIndex < currentRoom.markers.length) {
+        const active = currentRoom.markers[markerIndex];
+        if (markerOverlapsPlayer(active, player.x, player.y)) {
+          // Mini "reach" feedback — green ring + 6 particles + audio.
+          markerIndex += 1;
+          audio.play.pickupGrab("hp");
+          rings.push({
+            x: active.x,
+            y: active.y,
+            age: 0,
+            lifetime: 0.35,
+            startR: 16,
+            endR: 60,
+            color: PALETTE.pickupHP,
+            startLineWidth: 3,
+            endLineWidth: 1,
+            glowBlur: 14,
+          });
+          for (let i = 0; i < 6; i++) {
+            const a = Math.random() * Math.PI * 2;
+            const sp = 180 + Math.random() * 140;
+            particles.push({
+              x: active.x,
+              y: active.y,
+              vx: Math.cos(a) * sp,
+              vy: Math.sin(a) * sp,
+              initialSize: 3,
+              color: PALETTE.pickupHP,
+              age: 0,
+              lifetime: 0.4,
+              glowStrong: 10,
+              glowSoft: 4,
+              drag: 0.94,
+            });
+          }
+        }
+      }
+    }
+
     // key tick + pickup
     if (currentKey) {
       updateKey(currentKey, dt);
@@ -1318,14 +1390,17 @@ export function start(canvas: HTMLCanvasElement): void {
       dashDurationSec: settings.dash.durationMs / 1000,
     });
 
-    // door overlap → transition
+    // door overlap → transition (or tutorial completion if no next)
     if (
       currentRoom.door &&
       currentRoom.door.state === "open" &&
-      currentRoom.nextRoomId &&
       playerOverlapsDoor(currentRoom.door, player.x, player.y, half)
     ) {
-      transitionToRoom(currentRoom.nextRoomId);
+      if (currentRoom.nextRoomId) {
+        transitionToRoom(currentRoom.nextRoomId);
+      } else if (state.runState === "playing") {
+        completeTutorial();
+      }
     }
 
     // follow camera — runs even on the failed-overlay branch since
@@ -1384,6 +1459,16 @@ export function start(canvas: HTMLCanvasElement): void {
 
     drawWalls(ctx, currentRoom.walls);
     if (currentRoom.door) drawDoor(ctx, currentRoom.door);
+
+    // tutorial markers — drawn after walls, before enemies. The
+    // currently-active marker pulses bright + shows its label;
+    // already-reached markers (index < markerIndex) are skipped.
+    if (currentRoom.markers) {
+      for (let i = 0; i < currentRoom.markers.length; i++) {
+        if (i < markerIndex) continue;
+        drawMarker(ctx, currentRoom.markers[i], i === markerIndex);
+      }
+    }
 
     // detection rings (drawn under everything so they read as a
     // ground-level radar pulse, not an overlay on top of the enemy)
@@ -1609,6 +1694,50 @@ export function start(canvas: HTMLCanvasElement): void {
     drawHUD();
 
     if (state.runState === "failed") drawFailedOverlay();
+    if (state.runState === "completed") drawCompletedOverlay();
+  }
+
+  function drawCompletedOverlay() {
+    const w = 460;
+    const h = 220;
+    const x = Math.round((viewW - w) / 2);
+    const y = Math.round((viewH - h) / 2 - 30);
+
+    ctx.save();
+    ctx.fillStyle = "rgba(15,15,18,0.95)";
+    ctx.fillRect(x, y, w, h);
+    ctx.strokeStyle = "rgba(255,255,255,0.18)";
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+
+    ctx.textAlign = "center";
+    ctx.textBaseline = "top";
+
+    ctx.fillStyle = PALETTE.pickupHP;
+    ctx.font = "600 14px system-ui, -apple-system, sans-serif";
+    ctx.fillText("TUTORIAL COMPLETE", x + w / 2, y + 26);
+
+    ctx.fillStyle = "#cbd5e1";
+    ctx.font = "500 13px system-ui, -apple-system, sans-serif";
+    ctx.fillText(
+      "You've learned the basics.",
+      x + w / 2,
+      y + 60,
+    );
+    ctx.fillText(
+      "Story mode is now unlocked.",
+      x + w / 2,
+      y + 80,
+    );
+
+    ctx.fillStyle = PALETTE.playerDash;
+    ctx.font =
+      "600 13px ui-monospace, SFMono-Regular, Menlo, monospace";
+    ctx.fillText("← BACK TO MENU", x + w / 2, y + 140);
+    ctx.fillStyle = "#7d8590";
+    ctx.font = "500 11px system-ui, -apple-system, sans-serif";
+    ctx.fillText("(press any key)", x + w / 2, y + 162);
+    ctx.restore();
   }
 
   function drawHUD() {
@@ -1624,13 +1753,22 @@ export function start(canvas: HTMLCanvasElement): void {
 
     ctx.font = "500 11px system-ui, -apple-system, sans-serif";
     ctx.fillStyle = "#7d8590";
-    ctx.fillText("ROOM", colA, y0);
+    ctx.fillText("TUTORIAL — ROOM", colA, y0);
     ctx.fillText("ENEMIES", colB, y0);
 
     ctx.font = "600 22px ui-monospace, SFMono-Regular, Menlo, monospace";
     ctx.fillStyle = "#ffffff";
-    // Campaign rooms: room4 → display "1", room5 placeholder → "2".
-    const roomNum = currentRoom.id === "room5" ? 2 : 1;
+    // Tutorial rooms display 1-based: room0 → 1, room1 → 2, etc.
+    const roomNum =
+      currentRoom.id === "room0"
+        ? 1
+        : currentRoom.id === "room1"
+          ? 2
+          : currentRoom.id === "room2"
+            ? 3
+            : currentRoom.id === "room3"
+              ? 4
+              : 1;
     ctx.fillText(`${roomNum} / ${ROOM_TOTAL}`, colA, y0 + 14);
 
     const alive = aliveEnemies().length;
@@ -1772,51 +1910,4 @@ export function start(canvas: HTMLCanvasElement): void {
     lastTime = t;
     requestAnimationFrame(frame);
   });
-}
-
-function showTutorialLockOverlay(
-  canvas: HTMLCanvasElement,
-  ctx: CanvasRenderingContext2D,
-): void {
-  const dpr = window.devicePixelRatio || 1;
-  const renderOnce = () => {
-    const w = window.innerWidth;
-    const h = window.innerHeight;
-    canvas.width = Math.floor(w * dpr);
-    canvas.height = Math.floor(h * dpr);
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.fillStyle = PALETTE.bg;
-    ctx.fillRect(0, 0, w, h);
-    ctx.fillStyle = "#facc15";
-    ctx.font = "600 32px system-ui, -apple-system, sans-serif";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.fillText("STORY MODE LOCKED", w / 2, h / 2 - 60);
-    ctx.fillStyle = "#cbd5e1";
-    ctx.font = "500 16px system-ui, -apple-system, sans-serif";
-    ctx.fillText("Complete the tutorial first.", w / 2, h / 2 - 18);
-  };
-  // DOM CTA so the button is keyboard-accessible and styled like the
-  // landing menu instead of being painted on the canvas.
-  const btn = document.createElement("a");
-  btn.href = "/tutorial.html";
-  btn.textContent = "GO TO TUTORIAL";
-  btn.style.cssText = [
-    "position: fixed",
-    "left: 50%",
-    "top: 50%",
-    "transform: translate(-50%, 30px)",
-    "padding: 12px 28px",
-    "border: 1px solid rgba(0, 229, 255, 0.5)",
-    "background: rgba(0, 229, 255, 0.14)",
-    "color: #00e5ff",
-    "font: 600 13px system-ui, -apple-system, sans-serif",
-    "letter-spacing: 0.18em",
-    "border-radius: 6px",
-    "text-decoration: none",
-    "z-index: 100",
-  ].join(";");
-  document.body.appendChild(btn);
-  renderOnce();
-  window.addEventListener("resize", renderOnce);
 }

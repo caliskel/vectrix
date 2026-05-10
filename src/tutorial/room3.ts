@@ -1,7 +1,7 @@
 import { makeDoor } from "../lib/door";
 import { Hunter } from "../lib/enemies/hunter";
 import type { Wall } from "../lib/walls";
-import type { Room } from "./room";
+import type { Room } from "../lib/room";
 
 const ROOM_W = 1200;
 const ROOM_H = 800;
@@ -39,7 +39,7 @@ export function buildRoom3(): Room {
       DOOR_H,
       "closed",
     ),
-    nextRoomId: "room4",
+    nextRoomId: null,
     spawnX: 150,
     spawnY: 400,
   };
