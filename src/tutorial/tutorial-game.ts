@@ -476,9 +476,12 @@ export function start(canvas: HTMLCanvasElement): void {
       currentRoom.markers = [createMarker(900, 400, 1, "→")];
       markerIndex = 0;
       // Vertical wall spanning the full arena height — only way
-      // through is a dash (the wall is filtered out of the player's
-      // collision list while dashIframeTime > 0).
-      room0DashWall = { x: 585, y: 0, w: 30, h: 800 };
+      // through is a dash. The `dashable` flag makes
+      // `wallsForCollision` filter it out while dashIframeTime > 0
+      // and `drawWalls` paints it with the canonical cyan dashed
+      // outline so the dash colour reads as "phase through" without
+      // copy.
+      room0DashWall = { x: 585, y: 0, w: 30, h: 800, dashable: true };
       currentRoom.walls.push(room0DashWall);
       showHint("PRESS [X] TO DASH");
     } else if (phase === "combat") {
@@ -1370,12 +1373,13 @@ export function start(canvas: HTMLCanvasElement): void {
     // interior walls (perimeter is already handled above).
     const preVx = player.vx;
     const preVy = player.vy;
-    // Dash wall (Room 0 phase 2) is permeable during dash i-frames so
-    // the player can phase through it — that's the whole point of
-    // the lesson. Filter it out of the wall list while dashing.
+    // Walls flagged `dashable` (Room 0 phase 2 dash gate) are
+    // filtered out of the player wall list while dashIframeTime > 0
+    // so a clean dash phases through. Same mechanism as Room 4's
+    // section dividers.
     const wallsForCollision =
-      player.dashIframeTime > 0 && room0DashWall
-        ? currentRoom.walls.filter((w) => w !== room0DashWall)
+      player.dashIframeTime > 0
+        ? currentRoom.walls.filter((w) => !w.dashable)
         : currentRoom.walls;
     const collisionResult = resolvePlayerWallCollisions(
       player,
