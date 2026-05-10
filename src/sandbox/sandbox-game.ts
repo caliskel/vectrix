@@ -19,6 +19,11 @@ import {
   type Settings,
 } from "../lib/config";
 import { audio } from "../lib/audio";
+import {
+  drawGodModeBadge,
+  installGodModeToggle,
+  isGodMode,
+} from "../lib/god-mode";
 import { emitBulletHit, type ImpactContext } from "../lib/impacts";
 import { createSandboxPauseMenu } from "../lib/pause-menu";
 import { createMenu } from "../lib/settings-menu";
@@ -123,6 +128,7 @@ function drawNeon(
 
 resize();
 window.addEventListener("resize", resize);
+installGodModeToggle();
 
 const keys = new Set<string>();
 const menu = createMenu(settings, save, () => resetRun());
@@ -908,6 +914,7 @@ function awardNearMiss(b: Bullet) {
 
 function hitPlayer() {
   if (state.runState === "ended") return;
+  if (isGodMode()) return;
   audio.play.hit();
   state.hp -= 1;
   state.score -= HIT_PENALTY;
@@ -1594,6 +1601,7 @@ function render() {
   }
 
   drawHUD();
+  drawGodModeBadge(ctx, viewW);
 
   // bullet-breaker bottom progress bar — full-width "you're in power mode" cue
   if (state.effects.breaker) {

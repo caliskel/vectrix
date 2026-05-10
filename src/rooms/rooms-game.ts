@@ -1,4 +1,9 @@
 import { audio } from "../lib/audio";
+import {
+  drawGodModeBadge,
+  installGodModeToggle,
+  isGodMode,
+} from "../lib/god-mode";
 import { type Bullet, pushTrailSample } from "../lib/bullets";
 import {
   createCamera,
@@ -346,6 +351,7 @@ export function start(canvas: HTMLCanvasElement): void {
   audio.setMasterVolume(settings.audio.master);
   audio.setSfxVolume(settings.audio.sfx);
   audio.setMusicVolume(settings.audio.music);
+  installGodModeToggle();
 
   // Player profile from the landing-page editor (saved in localStorage).
   // Loaded once at start; the editor lives on a different page so a
@@ -737,6 +743,7 @@ export function start(canvas: HTMLCanvasElement): void {
     if (state.runState !== "playing") return;
     if (state.hitIframe > 0) return;
     if (player.dashIframeTime > 0) return;
+    if (isGodMode()) return;
     audio.play.hit();
     state.hp -= 1;
     state.hitIframe = HIT_IFRAME;
@@ -1662,6 +1669,7 @@ export function start(canvas: HTMLCanvasElement): void {
     }
 
     drawHUD();
+    drawGodModeBadge(ctx, viewW);
 
     if (state.runState === "failed") drawFailedOverlay();
   }

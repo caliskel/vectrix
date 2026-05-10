@@ -11,13 +11,11 @@ const DOOR_CENTER_Y = 450;
 const DOOR_W = 30;
 const DOOR_H = 120;
 
-// Arena with circular defence — four corner turrets, a Watcher in the
-// middle, and four columns the player can use as cover. The columns
-// double as a friendly-fire teaching ground: positioning the player
-// so the Watcher's beam aims past a column toward a turret kills the
-// turret for free. Bullets and beams both clip on the columns
-// because they're regular Wall entries (the rooms-game bullet filter
-// and the laser raycast iterate every wall in currentRoom.walls).
+// Arena with circular defence — four corner turrets and a Watcher in
+// the middle. Fully open: no internal cover, no column clipping for
+// bullets or beams. Forces distance management instead of cover-and-
+// peek; we can drop a column or two back in if the open layout reads
+// as too punishing.
 export function buildRoom2(): Room {
   const gapTop = DOOR_CENTER_Y - DOOR_H / 2;
   const gapBottom = DOOR_CENTER_Y + DOOR_H / 2;
@@ -33,13 +31,6 @@ export function buildRoom2(): Room {
       w: WALL_T,
       h: ROOM_H - gapBottom,
     },
-    // four columns arranged around the centre, leaving open lanes
-    // between them so the Watcher's beam can reach each turret along
-    // at least one player-controllable angle.
-    { x: 500, y: 350, w: 50, h: 200 },
-    { x: 850, y: 350, w: 50, h: 200 },
-    { x: 500, y: 550, w: 50, h: 200 },
-    { x: 850, y: 550, w: 50, h: 200 },
   ];
 
   const turretTL = new Turret(250, 250);

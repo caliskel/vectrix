@@ -505,31 +505,30 @@ Long horizontal corridor — first room that needs the follow camera.
 
 ### Room 2 — arena with circular defence
 
-1400×900 open arena teaching tactical positioning + the friendly-
-fire mechanic on the Watcher's beam.
+1400×900 fully open arena. No internal cover; the player has to
+manage distance and angles instead of peeking around a column.
 
 - Four **Turret**s in the corners at (250, 250), (1150, 250),
   (250, 650), (1150, 650). One **Watcher** in the centre at
   (700, 450) with `dropsKey = true`. All enemies wake on their
   own detection radii; the player can sneak up on individual
   turrets if they take a wide path.
-- Four **column** walls (50×200) at (500, 350), (850, 350),
-  (500, 550), (850, 550). They're plain `Wall` entries so the
-  existing bullet-vs-wall filter and the laser raycast both clip
-  on them — pellets disappear on contact, the Watcher's beam
-  shortens to whichever column it crosses first.
-- The friendly-fire teaching: the `refreshLaserEndpoints` raycast
-  in `rooms-game.ts` already iterates every wall and picks the
-  nearest hit, and the friendly-fire scan uses
-  `pointSegmentDistanceSq` against the *clipped* segment — so a
-  turret behind a column relative to the Watcher is safe, but
-  positioning the player so the Watcher fires through an open
-  lane to a turret kills the turret for free.
+- Bullets and the Watcher's laser still clip on perimeter walls
+  via the existing `bulletInsideWall` filter and the
+  `raycastWalls` AABB raycast — but with no interior obstacles
+  there's nothing in the room interior to clip on. Friendly fire
+  on the laser keeps working unchanged: any enemy on the beam's
+  segment takes a hit, including for-free turret kills when the
+  player lines the Watcher up with a corner.
 - The Watcher carries the key — its kill spawns a Key in the
   centre. Door at (1385, 450) is `requiresKey: true` and stays
   closed until the key is collected AND every enemy is dead.
   `useCamera = true` (1400×900 ≥ 1200×800 viewport letterbox).
   Spawn at (200, 450). On clear → Room 3 placeholder.
+- If the open layout reads as too punishing later, dropping one
+  or two 50×200 columns back near the centre is the cheapest
+  next step; the bullet/laser clipping was tested with columns
+  in place and works regardless.
 
 ### Room 3 (placeholder)
 
