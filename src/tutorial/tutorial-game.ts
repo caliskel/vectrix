@@ -1,8 +1,9 @@
 import { audio } from "../lib/audio";
+import { createDevMenu, type DevMenu } from "../lib/dev-menu";
 import {
   drawGodModeBadge,
-  installGodModeToggle,
   isGodMode,
+  setGodMode,
 } from "../lib/god-mode";
 import { type Bullet, pushTrailSample } from "../lib/bullets";
 import {
@@ -357,7 +358,6 @@ export function start(canvas: HTMLCanvasElement): void {
   audio.setMasterVolume(settings.audio.master);
   audio.setSfxVolume(settings.audio.sfx);
   audio.setMusicVolume(settings.audio.music);
-  installGodModeToggle();
 
   // Player profile from the landing-page editor (saved in localStorage).
   // Loaded once at start; the editor lives on a different page so a
@@ -876,6 +876,28 @@ export function start(canvas: HTMLCanvasElement): void {
     },
   });
 
+  // Dev menu (F1) — same overlay shape as rooms-game, mode-specific
+  // teleport list. Teleport routes through transitionToRoom so all
+  // the side-effects (room rebuild, key reset) match a normal door
+  // crossing. Disabled when run-state isn't "playing" so a dev
+  // tool can't sneak past failed / completed overlays.
+  const devMenu: DevMenu = createDevMenu({
+    getGodMode: () => isGodMode(),
+    setGodMode: (v) => setGodMode(v),
+    getCurrentRoomId: () => currentRoom.id,
+    isTeleportLocked: () => state.runState !== "playing",
+    teleportToRoom: (id) => {
+      transitionToRoom(id);
+      lastTime = performance.now();
+    },
+    rooms: [
+      { id: "room0", label: "Room 0 — Controls" },
+      { id: "room1", label: "Room 1 — Turret" },
+      { id: "room2", label: "Room 2 — Watcher" },
+      { id: "room3", label: "Room 3 — Hunter" },
+    ],
+  });
+
   function normalizeCode(code: string): string {
     switch (code) {
       case "ShiftLeft":
@@ -902,6 +924,11 @@ export function start(canvas: HTMLCanvasElement): void {
   window.addEventListener("keydown", (e) => {
     audio.init();
     const code = normalizeCode(e.code);
+
+    // Dev menu owns its own F1 / Esc handling. Short-circuit our
+    // game-side keydown while it's open so Esc doesn't pop the
+    // pause overlay underneath, etc.
+    if (devMenu.isOpen()) return;
 
     // While the completion overlay is up, keystrokes shouldn't toggle
     // the pause menu / restart / move the player. Mouse-only choice.
@@ -1197,7 +1224,7 @@ export function start(canvas: HTMLCanvasElement): void {
     lastTime = now;
     if (dt > 0.05) dt = 0.05;
 
-    if (menu.isOpen()) {
+    if (menu.isOpen() || devMenu.isOpen()) {
       render();
       requestAnimationFrame(frame);
       return;

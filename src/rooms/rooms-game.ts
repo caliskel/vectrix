@@ -1,8 +1,9 @@
 import { audio } from "../lib/audio";
+import { createDevMenu, type DevMenu } from "../lib/dev-menu";
 import {
   drawGodModeBadge,
-  installGodModeToggle,
   isGodMode,
+  setGodMode,
 } from "../lib/god-mode";
 import { type Bullet, pushTrailSample } from "../lib/bullets";
 import {
@@ -381,7 +382,6 @@ export function start(canvas: HTMLCanvasElement): void {
   audio.setMasterVolume(settings.audio.master);
   audio.setSfxVolume(settings.audio.sfx);
   audio.setMusicVolume(settings.audio.music);
-  installGodModeToggle();
 
   // Player profile from the landing-page editor (saved in localStorage).
   // Loaded once at start; the editor lives on a different page so a
@@ -618,6 +618,30 @@ export function start(canvas: HTMLCanvasElement): void {
     },
   });
 
+  // Dev menu — F1 opens an overlay with a god-mode toggle and a
+  // teleport-to-room list. transitionToRoom handles the heavy
+  // lifting (camera snap, room rebuild, etc.) so the dev menu just
+  // routes a click into it. Teleport disabled while the failed
+  // overlay is up so the dev tool can't sneak past run state.
+  const devMenu: DevMenu = createDevMenu({
+    getGodMode: () => isGodMode(),
+    setGodMode: (v) => setGodMode(v),
+    getCurrentRoomId: () => currentRoom.id,
+    isTeleportLocked: () =>
+      state.runState !== "playing",
+    teleportToRoom: (id) => {
+      transitionToRoom(id);
+      lastTime = performance.now();
+    },
+    rooms: [
+      { id: "room1", label: "Room 1 — Corridor" },
+      { id: "room3", label: "Room 2 — Trap" },
+      { id: "room2", label: "Room 3 — Arena" },
+      { id: "room4", label: "Room 4 — Phase Corridor" },
+      { id: "room5", label: "Room 5 — Boss" },
+    ],
+  });
+
   function normalizeCode(code: string): string {
     switch (code) {
       case "ShiftLeft":
@@ -644,6 +668,11 @@ export function start(canvas: HTMLCanvasElement): void {
   window.addEventListener("keydown", (e) => {
     audio.init();
     const code = normalizeCode(e.code);
+
+    // Dev menu owns its own F1 / Esc handling. Short-circuit our
+    // game-side keydown while it's open so Esc doesn't also pop the
+    // pause overlay underneath, etc.
+    if (devMenu.isOpen()) return;
 
     // Pause menu has no key-rebinding capture flow (settings live in
     // sandbox), so we go straight to the toggle test.
@@ -992,7 +1021,7 @@ export function start(canvas: HTMLCanvasElement): void {
     lastTime = now;
     if (dt > 0.05) dt = 0.05;
 
-    if (menu.isOpen()) {
+    if (menu.isOpen() || devMenu.isOpen()) {
       render();
       requestAnimationFrame(frame);
       return;

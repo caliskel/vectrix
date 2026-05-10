@@ -1,18 +1,23 @@
-// Developer toggle — F1 flips a process-local flag that makes the
-// player immune to damage. Lives in module state and is intentionally
+// Developer toggle — process-local flag that makes the player
+// immune to damage. Lives in module state and is intentionally
 // NOT persisted to localStorage so it can never accidentally leak
 // into a built/shipped session: every reload starts on `false`.
 //
-// Each game file calls installGodModeToggle() once and reads
-// isGodMode() from its damage-application paths; drawGodModeBadge()
-// stamps a small HUD label so a forgotten flag is visible at a
-// glance.
+// Sandbox uses installGodModeToggle() to bind F1 directly. Rooms +
+// tutorial route the toggle through the dev-menu overlay instead
+// (F1 opens a menu with godmode + room teleport), so they call
+// setGodMode() from the menu callback rather than installing the
+// global F1 listener.
 
 let enabled = false;
 let installed = false;
 
 export function isGodMode(): boolean {
   return enabled;
+}
+
+export function setGodMode(value: boolean): void {
+  enabled = value;
 }
 
 export function installGodModeToggle(): void {

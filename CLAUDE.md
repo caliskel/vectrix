@@ -1235,3 +1235,32 @@ in `config.ts` under `IMPACT_*`.
   cross-mode lives in `lib/`.
 - **Keep `pnpm dev` running** during work; HMR catches broken imports
   and TS issues immediately, faster than running tsc on every save.
+
+## Dev tools
+
+`F1` in `rooms.html` and `tutorial.html` opens the dev menu — a DOM
+overlay (`src/lib/dev-menu.ts`) with two sections:
+
+- **GOD MODE** — toggle button reads / writes the same flag the
+  damage paths gate on (`isGodMode()` / `setGodMode()` in
+  `src/lib/god-mode.ts`). Toggle reflects live in the HUD via
+  `drawGodModeBadge`.
+- **TELEPORT** — one button per mode-specific room. Routes through
+  the existing `transitionToRoom()` so all the side effects
+  (camera snap, room rebuild, Sentinel intro, etc.) match a normal
+  door crossing. The button for the current room is highlighted +
+  disabled. While `runState !== "playing"` (failed / completed
+  overlays up) every teleport button is disabled so the dev tool
+  can't sneak past run state.
+
+Sandbox does not get the dev menu — no rooms to teleport to and
+god mode there is wired the old way (`installGodModeToggle()`,
+direct F1 listener in `src/lib/god-mode.ts`).
+
+Neither the menu's open-state nor the god-mode flag is persisted
+to `localStorage`. Every reload starts with the menu closed and
+god mode off, so dev tweaks can't leak into a built session.
+
+The frame loop short-circuits while the dev menu is open
+(`if (menu.isOpen() || devMenu.isOpen()) { render(); return; }`)
+so the world freezes behind the overlay.
