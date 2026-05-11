@@ -227,21 +227,39 @@ type DamagePoint = {
   // Outward unit normal (away from the wall body).
   nx: number;
   ny: number;
-  // Pre-computed crack polylines extending INWARD from (x,y). Each
-  // polyline is in world space; drawn live each frame as a thin dark
-  // stroke. Static — generated once at damage-point creation.
+  // Pre-computed crack polylines in DP-local coordinates (origin
+  // = the damage point on the wall edge). Static for the room's
+  // lifetime so we bake them into the `sprite` canvas once and
+  // blit per frame; eliminates ~20 strokes/frame at no visual
+  // cost.
   cracks: Vec2[][];
+  sprite: HTMLCanvasElement | null;
   // Time remaining until the next electric arc fires from this spot.
   nextArcAt: number;
 };
 
+// Square sprite used for cached cracks. Edge of the sprite gives a
+// generous buffer around the crack + glow halo + jitter so the
+// pre-render fits without clipping.
+const CRACK_SPRITE_SIZE = 100;
+const CRACK_SPRITE_HALF = CRACK_SPRITE_SIZE / 2;
+
 type ElectricArc = {
   origin: DamagePoint;
-  // World-space polylines fanning outward from the origin. Each
-  // branch starts at origin and zigzags along its own direction in
-  // the outward half-plane (+normal ±FAN_SPREAD). Reads as a
-  // multi-stream splash rather than a single bolt.
+  // World-space polylines fanning outward from the origin (kept for
+  // potential future per-frame perturbations / debug; the live
+  // render uses the baked sprite below).
   branches: Vec2[][];
+  // Pre-rendered halo + core passes. Built at spawn since the arc's
+  // shape is fixed for its short lifetime; on each frame we just
+  // drawImage with the age-driven alpha. Origin of both sprites
+  // corresponds to (spriteX, spriteY) in world coords.
+  haloSprite: HTMLCanvasElement | null;
+  coreSprite: HTMLCanvasElement | null;
+  spriteX: number;
+  spriteY: number;
+  spriteW: number;
+  spriteH: number;
   age: number;
   lifetime: number;
 };
@@ -362,8 +380,108 @@ function buildDamagePoint(wall: Wall): DamagePoint {
     nx,
     ny,
     cracks: buildCracks(nx, ny),
+    sprite: null,
     nextArcAt: pickInterval(0.5, ARC_INTERVAL_MAX),
   };
+}
+
+// Bake the lightning crack (halo + core, with glow) into a small
+// offscreen canvas. Called lazily the first time the crack is drawn;
+// the result is reused for the room's lifetime.
+function buildCrackSprite(dp: DamagePoint): HTMLCanvasElement | null {
+  if (typeof document === "undefined") return null;
+  const c = document.createElement("canvas");
+  c.width = CRACK_SPRITE_SIZE;
+  c.height = CRACK_SPRITE_SIZE;
+  const sctx = c.getContext("2d");
+  if (!sctx) return null;
+  // Damage-point origin sits at the sprite center.
+  sctx.translate(CRACK_SPRITE_HALF, CRACK_SPRITE_HALF);
+  sctx.lineCap = "round";
+  sctx.lineJoin = "round";
+  // Halo pass.
+  sctx.strokeStyle = DAMAGE_CRACK_HALO_COLOR;
+  sctx.shadowColor = ARC_COLOR;
+  sctx.shadowBlur = DAMAGE_CRACK_GLOW_BLUR;
+  for (const poly of dp.cracks) {
+    strokeTaperedPolyline(sctx, poly, DAMAGE_CRACK_HALO_BASE_LW, DAMAGE_CRACK_HALO_TIP_LW);
+  }
+  // Core pass.
+  sctx.strokeStyle = DAMAGE_CRACK_CORE_COLOR;
+  sctx.shadowColor = "#ffffff";
+  sctx.shadowBlur = 3;
+  for (const poly of dp.cracks) {
+    strokeTaperedPolyline(sctx, poly, DAMAGE_CRACK_CORE_BASE_LW, DAMAGE_CRACK_CORE_TIP_LW);
+  }
+  return c;
+}
+
+// Bake the splash arc (halo + core in separate canvases since they
+// fade out on independent curves) into offscreen canvases at spawn
+// time. Returns the world-space top-left where the sprites should
+// be drawn, plus the canvas dimensions.
+function buildArcSprites(
+  origin: DamagePoint,
+  branches: Vec2[][],
+): {
+  haloSprite: HTMLCanvasElement | null;
+  coreSprite: HTMLCanvasElement | null;
+  spriteX: number;
+  spriteY: number;
+  spriteW: number;
+  spriteH: number;
+} {
+  // Bounding box across all branches + glow padding.
+  let minX = origin.x;
+  let minY = origin.y;
+  let maxX = origin.x;
+  let maxY = origin.y;
+  for (const branch of branches) {
+    for (const p of branch) {
+      if (p.x < minX) minX = p.x;
+      if (p.x > maxX) maxX = p.x;
+      if (p.y < minY) minY = p.y;
+      if (p.y > maxY) maxY = p.y;
+    }
+  }
+  const pad = ARC_GLOW_BLUR + 6;
+  minX -= pad; minY -= pad; maxX += pad; maxY += pad;
+  const spriteW = Math.ceil(maxX - minX);
+  const spriteH = Math.ceil(maxY - minY);
+  if (typeof document === "undefined" || spriteW <= 0 || spriteH <= 0) {
+    return { haloSprite: null, coreSprite: null, spriteX: minX, spriteY: minY, spriteW, spriteH };
+  }
+  // Halo canvas
+  const halo = document.createElement("canvas");
+  halo.width = spriteW; halo.height = spriteH;
+  const hctx = halo.getContext("2d");
+  if (hctx) {
+    hctx.translate(-minX, -minY);
+    hctx.strokeStyle = ARC_COLOR;
+    hctx.shadowColor = ARC_COLOR;
+    hctx.shadowBlur = ARC_GLOW_BLUR;
+    hctx.lineCap = "round";
+    hctx.lineJoin = "round";
+    for (const branch of branches) {
+      strokeTaperedPolyline(hctx, branch, ARC_HALO_BASE_LW, ARC_HALO_TIP_LW);
+    }
+  }
+  // Core canvas
+  const core = document.createElement("canvas");
+  core.width = spriteW; core.height = spriteH;
+  const cctx = core.getContext("2d");
+  if (cctx) {
+    cctx.translate(-minX, -minY);
+    cctx.strokeStyle = ARC_CORE_COLOR;
+    cctx.shadowColor = "#ffffff";
+    cctx.shadowBlur = 6;
+    cctx.lineCap = "round";
+    cctx.lineJoin = "round";
+    for (const branch of branches) {
+      strokeTaperedPolyline(cctx, branch, ARC_CORE_BASE_LW, ARC_CORE_TIP_LW);
+    }
+  }
+  return { haloSprite: halo, coreSprite: core, spriteX: minX, spriteY: minY, spriteW, spriteH };
 }
 
 function buildCracks(nx: number, ny: number): Vec2[][] {
@@ -499,9 +617,17 @@ export function updateWallFx(fx: WallFx, dt: number, walls: Wall[]): void {
       dp.nextArcAt -= dt;
       if (dp.nextArcAt <= 0) {
         dp.nextArcAt = pickInterval(ARC_INTERVAL_MIN, ARC_INTERVAL_MAX);
+        const branches = buildSplash(dp);
+        const baked = buildArcSprites(dp, branches);
         fx.arcs.push({
           origin: dp,
-          branches: buildSplash(dp),
+          branches,
+          haloSprite: baked.haloSprite,
+          coreSprite: baked.coreSprite,
+          spriteX: baked.spriteX,
+          spriteY: baked.spriteY,
+          spriteW: baked.spriteW,
+          spriteH: baked.spriteH,
           age: 0,
           lifetime: pickInterval(ARC_LIFETIME_MIN_SEC, ARC_LIFETIME_MAX_SEC),
         });
@@ -798,71 +924,40 @@ export function drawWallOverlay(
   }
   if (hasDamage) {
     ctx.save();
-    // Clip to union of walls so any per-segment overshoot (e.g. round
+    // Clip to union of walls so any cached-sprite overshoot (round
     // cap at the base sitting on the wall edge) gets trimmed.
     ctx.beginPath();
     for (const w of solidWalls) ctx.rect(w.x, w.y, w.w, w.h);
     ctx.clip();
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
-    // Halo pass — wide cyan, with glow blur.
-    ctx.strokeStyle = DAMAGE_CRACK_HALO_COLOR;
-    ctx.shadowColor = ARC_COLOR;
-    ctx.shadowBlur = DAMAGE_CRACK_GLOW_BLUR;
-    drawTaperedCracks(
-      ctx,
-      solidWalls,
-      fx.damage,
-      DAMAGE_CRACK_HALO_BASE_LW,
-      DAMAGE_CRACK_HALO_TIP_LW,
-    );
-    // Core pass — thin bright white core on top.
-    ctx.strokeStyle = DAMAGE_CRACK_CORE_COLOR;
-    ctx.shadowColor = "#ffffff";
-    ctx.shadowBlur = 3;
-    drawTaperedCracks(
-      ctx,
-      solidWalls,
-      fx.damage,
-      DAMAGE_CRACK_CORE_BASE_LW,
-      DAMAGE_CRACK_CORE_TIP_LW,
-    );
-    ctx.restore();
-  }
-
-  // 5. Live splash arcs — multi-branch fans spurting outward from
-  // damage points, fading over ~220-380 ms. Two passes (halo + core)
-  // both per-segment tapered so each branch tapers thin at the tip.
-  if (fx.arcs.length > 0) {
-    // Halo pass.
-    ctx.save();
-    ctx.strokeStyle = ARC_COLOR;
-    ctx.shadowColor = ARC_COLOR;
-    ctx.shadowBlur = ARC_GLOW_BLUR;
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
-    for (const arc of fx.arcs) {
-      const u = arc.age / arc.lifetime;
-      const alpha = u < 0.35 ? 1 : Math.max(0, 1 - (u - 0.35) / 0.65);
-      ctx.globalAlpha = alpha;
-      for (const branch of arc.branches) {
-        strokeTaperedPolyline(ctx, branch, ARC_HALO_BASE_LW, ARC_HALO_TIP_LW);
+    for (const w of solidWalls) {
+      const dps = fx.damage.get(w);
+      if (!dps) continue;
+      for (const dp of dps) {
+        if (!dp.sprite) dp.sprite = buildCrackSprite(dp);
+        if (!dp.sprite) continue;
+        ctx.drawImage(dp.sprite, dp.x - CRACK_SPRITE_HALF, dp.y - CRACK_SPRITE_HALF);
       }
     }
     ctx.restore();
-    // White hot core pass — slightly longer-lived for an afterimage.
+  }
+
+  // 5. Live splash arcs — blit pre-baked halo + core sprites with
+  // age-driven alpha. Halo fades earlier; core lingers as an
+  // afterimage. The branches and glow are baked at spawn time, so
+  // each frame is just two drawImage calls per active arc.
+  if (fx.arcs.length > 0) {
     ctx.save();
-    ctx.strokeStyle = ARC_CORE_COLOR;
-    ctx.shadowColor = "#ffffff";
-    ctx.shadowBlur = 6;
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
     for (const arc of fx.arcs) {
       const u = arc.age / arc.lifetime;
-      const alpha = u < 0.45 ? 1 : Math.max(0, 1 - (u - 0.45) / 0.55);
-      ctx.globalAlpha = alpha;
-      for (const branch of arc.branches) {
-        strokeTaperedPolyline(ctx, branch, ARC_CORE_BASE_LW, ARC_CORE_TIP_LW);
+      const haloAlpha = u < 0.35 ? 1 : Math.max(0, 1 - (u - 0.35) / 0.65);
+      if (arc.haloSprite && haloAlpha > 0) {
+        ctx.globalAlpha = haloAlpha;
+        ctx.drawImage(arc.haloSprite, arc.spriteX, arc.spriteY);
+      }
+      const coreAlpha = u < 0.45 ? 1 : Math.max(0, 1 - (u - 0.45) / 0.55);
+      if (arc.coreSprite && coreAlpha > 0) {
+        ctx.globalAlpha = coreAlpha;
+        ctx.drawImage(arc.coreSprite, arc.spriteX, arc.spriteY);
       }
     }
     ctx.restore();
@@ -902,35 +997,6 @@ function strokeTaperedPolyline(
     ctx.moveTo(poly[i - 1].x, poly[i - 1].y);
     ctx.lineTo(poly[i].x, poly[i].y);
     ctx.stroke();
-  }
-}
-
-// Cracks variant — same tapering, but polylines are stored in
-// damage-point-local coordinates so we apply the dp offset inline.
-function drawTaperedCracks(
-  ctx: CanvasRenderingContext2D,
-  walls: Wall[],
-  damage: Map<Wall, DamagePoint[]>,
-  baseLw: number,
-  tipLw: number,
-): void {
-  for (const w of walls) {
-    const dps = damage.get(w);
-    if (!dps) continue;
-    for (const dp of dps) {
-      for (const poly of dp.cracks) {
-        const segments = poly.length - 1;
-        if (segments <= 0) continue;
-        for (let i = 1; i <= segments; i++) {
-          const u = (i - 0.5) / segments;
-          ctx.lineWidth = baseLw + (tipLw - baseLw) * u;
-          ctx.beginPath();
-          ctx.moveTo(dp.x + poly[i - 1].x, dp.y + poly[i - 1].y);
-          ctx.lineTo(dp.x + poly[i].x, dp.y + poly[i].y);
-          ctx.stroke();
-        }
-      }
-    }
   }
 }
 

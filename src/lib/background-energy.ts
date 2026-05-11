@@ -7,42 +7,82 @@
 // occasional horizontal lightning streak. Cyan + purple palette
 // fixed across all rooms / modes.
 
-const LINE_COUNT = 10;                 // 8..12 mid
-const LINE_LENGTH_MIN = 80;
-const LINE_LENGTH_MAX = 150;
-const LINE_THICKNESS_MIN = 1.0;
-const LINE_THICKNESS_MAX = 1.5;
-const LINE_SPEED_MIN = 20;
-const LINE_SPEED_MAX = 40;
-const LINE_PULSE_PERIOD_MIN_SEC = 3.0;
-const LINE_PULSE_PERIOD_MAX_SEC = 5.0;
-const LINE_ALPHA_MIN = 0.05;
-const LINE_ALPHA_MAX = 0.18;
-const LINE_GLOW_BLUR = 4;
+const LINE_COUNT = 16;                 // bumped from 10 for denser flow
+const LINE_LENGTH_MIN = 90;
+const LINE_LENGTH_MAX = 170;
+const LINE_THICKNESS_MIN = 1.2;
+const LINE_THICKNESS_MAX = 2.2;
+const LINE_SPEED_MIN = 25;
+const LINE_SPEED_MAX = 55;
+const LINE_PULSE_PERIOD_MIN_SEC = 2.5;
+const LINE_PULSE_PERIOD_MAX_SEC = 4.5;
+const LINE_ALPHA_MIN = 0.12;
+const LINE_ALPHA_MAX = 0.32;
+const LINE_GLOW_BLUR = 5;
 
-const PARTICLE_COUNT = 25;             // 20..30 mid
-const PARTICLE_SIZE_MIN = 1;
-const PARTICLE_SIZE_MAX = 2;
-const PARTICLE_SPEED_MIN = 30;
-const PARTICLE_SPEED_MAX = 60;
-const PARTICLE_SWAY_AMP_MIN = 8;
-const PARTICLE_SWAY_AMP_MAX = 15;
-const PARTICLE_SWAY_PERIOD_MIN_SEC = 2.0;
-const PARTICLE_SWAY_PERIOD_MAX_SEC = 4.0;
-const PARTICLE_ALPHA_MIN = 0.1;
-const PARTICLE_ALPHA_MAX = 0.25;
-const PARTICLE_GLOW_BLUR = 3;
+const PARTICLE_COUNT = 40;
+const PARTICLE_SIZE_MIN = 1.5;
+const PARTICLE_SIZE_MAX = 2.5;
+const PARTICLE_SPEED_MIN = 35;
+const PARTICLE_SPEED_MAX = 75;
+const PARTICLE_SWAY_AMP_MIN = 10;
+const PARTICLE_SWAY_AMP_MAX = 18;
+const PARTICLE_SWAY_PERIOD_MIN_SEC = 1.8;
+const PARTICLE_SWAY_PERIOD_MAX_SEC = 3.6;
+const PARTICLE_ALPHA_MIN = 0.18;
+const PARTICLE_ALPHA_MAX = 0.42;
+const PARTICLE_GLOW_BLUR = 6;
 
-const LIGHTNING_INTERVAL_MIN_SEC = 10;
-const LIGHTNING_INTERVAL_MAX_SEC = 20;
-const LIGHTNING_DURATION_SEC = 0.2;
-const LIGHTNING_THICKNESS = 2;
-const LIGHTNING_ALPHA = 0.4;
-const LIGHTNING_GLOW_BLUR = 10;
+const LIGHTNING_INTERVAL_MIN_SEC = 6;
+const LIGHTNING_INTERVAL_MAX_SEC = 12;
+const LIGHTNING_DURATION_SEC = 0.22;
+const LIGHTNING_THICKNESS = 2.4;
+const LIGHTNING_ALPHA = 0.55;
+const LIGHTNING_GLOW_BLUR = 14;
 
 const COLOR_CYAN = "#00e5ff";
 const COLOR_PURPLE = "#7a5fff";
 const COLOR_WHITE = "#ffffff";
+
+// Pre-rendered particle sprites — one per color. The particles in
+// the hot loop are tiny dots with a soft glow; baking the shadowBlur
+// into a small canvas turns 40 shadow-blur fillRects per frame into
+// 40 plain drawImage calls (no shadow state push per call).
+const PARTICLE_SPRITE_PAD = 7;
+const PARTICLE_SPRITE_SIZE =
+  Math.ceil(PARTICLE_SIZE_MAX) + PARTICLE_SPRITE_PAD * 2;
+const PARTICLE_SPRITE_HALF = PARTICLE_SPRITE_SIZE / 2;
+let particleSpriteCyan: HTMLCanvasElement | null = null;
+let particleSpriteWhite: HTMLCanvasElement | null = null;
+
+function buildParticleSprite(color: string): HTMLCanvasElement | null {
+  if (typeof document === "undefined") return null;
+  const c = document.createElement("canvas");
+  c.width = PARTICLE_SPRITE_SIZE;
+  c.height = PARTICLE_SPRITE_SIZE;
+  const ctx = c.getContext("2d");
+  if (!ctx) return null;
+  ctx.fillStyle = color;
+  ctx.shadowColor = color;
+  ctx.shadowBlur = PARTICLE_GLOW_BLUR;
+  const psize = PARTICLE_SIZE_MAX;
+  ctx.fillRect(
+    PARTICLE_SPRITE_HALF - psize * 0.5,
+    PARTICLE_SPRITE_HALF - psize * 0.5,
+    psize,
+    psize,
+  );
+  return c;
+}
+
+function getParticleSprite(color: string): HTMLCanvasElement | null {
+  if (color === COLOR_WHITE) {
+    if (!particleSpriteWhite) particleSpriteWhite = buildParticleSprite(color);
+    return particleSpriteWhite;
+  }
+  if (!particleSpriteCyan) particleSpriteCyan = buildParticleSprite(color);
+  return particleSpriteCyan;
+}
 
 type Line = {
   x: number;
@@ -272,14 +312,15 @@ export function drawEnergyBackground(
   }
 
   // --- Particles pass ---
-  ctx.shadowBlur = PARTICLE_GLOW_BLUR;
+  // Pre-baked sprites (with glow) blitted per particle — no shadow
+  // state push per draw, which was the dominant cost of this pass.
+  ctx.shadowBlur = 0;
   for (const p of state.particles) {
+    const sprite = getParticleSprite(p.color);
+    if (!sprite) continue;
     const x = p.baseX + Math.sin(p.swayPhase) * p.swayAmp;
     ctx.globalAlpha = p.alpha;
-    ctx.fillStyle = p.color;
-    ctx.shadowColor = p.color;
-    const s = p.size;
-    ctx.fillRect(x - s * 0.5, p.y - s * 0.5, s, s);
+    ctx.drawImage(sprite, x - PARTICLE_SPRITE_HALF, p.y - PARTICLE_SPRITE_HALF);
   }
 
   // --- Lightning pass ---
