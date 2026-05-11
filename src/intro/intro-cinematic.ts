@@ -11,6 +11,16 @@
 // room architecture, multi-shell capsule, full eye-orb hero, glass
 // crack propagation, volumetric beams, camera push-in.
 
+import { DASH_DURATION_MS, DASH_COOLDOWN_MS, PLAYER_SIZE } from "../lib/config";
+import {
+  createPlayer,
+  drawPlayerEye,
+  loadPlayerProfile,
+  updateEye,
+  type Player,
+  type PlayerProfile,
+} from "../lib/player";
+
 const CANVAS_W = 1200;
 const CANVAS_H = 800;
 
@@ -38,11 +48,15 @@ const HERO_PUPIL_R = 8;
 
 // ---- Wires ----
 const WIRES: WireSpec[] = [
-  // Three suspension cables to the ceiling brackets.
-  { ax: CAPSULE_CX - 22, ay: BRACKET_Y + 4, bx: 280,  by: CEILING_Y - 4, cpYOffset: -90, kind: "suspend" },
-  { ax: CAPSULE_CX,      ay: BRACKET_Y - 2, bx: 600,  by: CEILING_Y - 4, cpYOffset: -110, kind: "suspend" },
-  { ax: CAPSULE_CX + 22, ay: BRACKET_Y + 4, bx: 920,  by: CEILING_Y - 4, cpYOffset: -90, kind: "suspend" },
-  // Two network feeds dropping to/from the wall.
+  // Three suspension cables, anchored in the bottom edge of the
+  // ceiling hooks. Tension cables read as nearly straight — slight
+  // positive cpYOffset gives a barely-perceptible catenary sag from
+  // their own weight.
+  { ax: CAPSULE_CX - 22, ay: BRACKET_Y + 4, bx: 280,  by: CEILING_Y + 4, cpYOffset: 14, kind: "suspend" },
+  { ax: CAPSULE_CX,      ay: BRACKET_Y - 2, bx: 600,  by: CEILING_Y + 4, cpYOffset: 12, kind: "suspend" },
+  { ax: CAPSULE_CX + 22, ay: BRACKET_Y + 4, bx: 920,  by: CEILING_Y + 4, cpYOffset: 14, kind: "suspend" },
+  // Two network feeds dropping into the wall — these CAN sag because
+  // they're not load-bearing; positive cpYOffset gives the droop.
   { ax: CAPSULE_CX - CAPSULE_RX + 4, ay: CAPSULE_CY + 50, bx: WALL_LEFT_X - 4,  by: 500, cpYOffset: 70, kind: "feed" },
   { ax: CAPSULE_CX + CAPSULE_RX - 4, ay: CAPSULE_CY + 50, bx: WALL_RIGHT_X + 4, by: 500, cpYOffset: 70, kind: "feed" },
 ];
@@ -57,7 +71,9 @@ type PhaseId =
   | "cutting"
   | "shatter"
   | "merge"
+  | "blackout"
   | "awaken"
+  | "askname"
   | "fadeout";
 
 const PHASE_ORDER: PhaseId[] = [
@@ -69,7 +85,9 @@ const PHASE_ORDER: PhaseId[] = [
   "cutting",
   "shatter",
   "merge",
+  "blackout",
   "awaken",
+  "askname",
   "fadeout",
 ];
 
@@ -79,11 +97,20 @@ const PHASE_DURATIONS: Record<PhaseId, number> = {
   lightsdie: 2.0,
   silence: 1.5,
   sparkenters: 2.0,
-  cutting: 4.5,
-  shatter: 1.5,
+  // 5 wires × (0.5 travel + 0.32 sever + 0.2 rest) ≈ 5.1 s; bumped
+  // to 5.5 s so the final wire fully finishes severing before the
+  // shatter phase grabs the timeline.
+  cutting: 5.5,
+  shatter: 1.8,
   merge: 1.5,
-  awaken: 1.8,
-  fadeout: 0.6,
+  // Brief silence/blackout — the spark has merged, the room cuts to
+  // pure darkness for a beat before the hero stirs.
+  blackout: 0.9,
+  // Eye opens.
+  awaken: 1.6,
+  // "WHO AM I?" thought surfaces.
+  askname: 3.0,
+  fadeout: 0.7,
 };
 
 // ---- Types ----
@@ -138,11 +165,29 @@ type DustMote = {
 };
 
 type Shard = {
+  // Polygon vertices in local space (around 0,0).
+  verts: { x: number; y: number }[];
+  // World position + motion.
   x: number; y: number;
   vx: number; vy: number;
   rot: number; rotVel: number;
   age: number; lifetime: number;
+};
+
+type GlassMote = {
+  x: number; y: number;
+  vx: number; vy: number;
+  age: number; lifetime: number;
   size: number;
+};
+
+type SparkPath = {
+  startX: number; startY: number;
+  endX: number; endY: number;
+  // Bezier control point — placed perpendicular to the start→end
+  // segment so the motion curves rather than going in a straight line.
+  cpX: number; cpY: number;
+  duration: number;
 };
 
 type GlassCrack = {
@@ -187,12 +232,24 @@ export type IntroState = {
   sparkSpawnTimer: number;
   dust: DustMote[];
 
-  // Spark of light
+  // Spark of light. Moves along curved Bezier paths between
+  // waypoints so the motion feels organic rather than ruler-straight.
   sparkX: number;
   sparkY: number;
   sparkActive: boolean;
   sparkTrail: { x: number; y: number }[];
   sparkBrightness: number;
+  sparkPath: SparkPath | null;
+  sparkPathT: number; // 0..1 along the current path
+
+  // In-game hero (drawPlayerEye) — used from awaken phase onward so
+  // the reveal lands on the same body the player will inhabit.
+  hero: Player;
+  heroProfile: PlayerProfile;
+  // White "interior" glow when the spark merges with the body. Visible
+  // through the closed eye during blackout/early awaken, fades as the
+  // eye finishes opening.
+  interiorWhite: number;
 
   // Cutting sub-state. The sever phase replaces the previous instant
   // flag-flip + cut-flash combo — the wire visibly melts/severs over
@@ -201,8 +258,10 @@ export type IntroState = {
   cuttingSubPhase: "travel" | "sever" | "rest";
   cuttingSubAge: number;
 
-  // Capsule shatter
+  // Capsule shatter — large wedge chunks of the shell + smaller
+  // glass motes for chaos.
   shards: Shard[];
+  glassMotes: GlassMote[];
   shatterFlash: number;
 
   // Flashes
@@ -221,6 +280,15 @@ export type IntroState = {
 // ---- State builders ----
 
 export function createIntroState(): IntroState {
+  const heroProfile = loadPlayerProfile();
+  const hero = createPlayer();
+  hero.x = CAPSULE_CX;
+  hero.y = CAPSULE_CY;
+  // Eye starts closed — the body has been dormant. The closeAmount
+  // is animated back to 0 during the awaken phase via eyeStartClosing
+  // inversion (we just toggle isClosing).
+  hero.isClosing = true;
+  hero.closeAmount = 1;
   return {
     time: 0,
     phase: "fadein",
@@ -254,10 +322,16 @@ export function createIntroState(): IntroState {
     sparkActive: false,
     sparkTrail: [],
     sparkBrightness: 0,
+    sparkPath: null,
+    sparkPathT: 0,
+    hero,
+    heroProfile,
+    interiorWhite: 0,
     cuttingWireIndex: 0,
     cuttingSubPhase: "travel",
     cuttingSubAge: 0,
     shards: [],
+    glassMotes: [],
     shatterFlash: 0,
     mergeFlash: 0,
     finalFlash: 0,
@@ -432,37 +506,98 @@ function onPhaseEnter(state: IntroState): void {
       break;
     case "sparkenters":
       state.sparkActive = true;
-      state.sparkX = CANVAS_W + 60;
-      state.sparkY = -40;
+      state.sparkX = CANVAS_W + 80;
+      state.sparkY = -60;
       state.sparkBrightness = 0;
       state.sparkTrail = [];
+      // Curved entry path — starts off-screen, sweeps down-and-in
+      // toward a holding point above the capsule.
+      startSparkPath(
+        state,
+        state.sparkX,
+        state.sparkY,
+        CAPSULE_CX + 220,
+        CAPSULE_CY - 260,
+        PHASE_DURATIONS.sparkenters,
+        180,
+      );
       state.cameraTargetScale = 1.06;
       break;
     case "cutting":
       state.cuttingWireIndex = 0;
       state.cuttingSubPhase = "travel";
       state.cuttingSubAge = 0;
+      // Curved approach to the first wire.
+      startSparkPath(
+        state,
+        state.sparkX,
+        state.sparkY,
+        wireBezier(WIRES[0], CUT_T).x,
+        wireBezier(WIRES[0], CUT_T).y,
+        0.6,
+        70,
+      );
       state.cameraTargetScale = 1.1;
       break;
     case "shatter":
       state.shards = buildShatterShards();
+      state.glassMotes = buildGlassMotes();
       state.shatterFlash = 1;
       state.capsuleBroken = true;
-      state.crackProgress = 1; // freeze cracks at max for the flash moment
-      triggerShake(state, 16, 0.5);
+      state.crackProgress = 1;
+      triggerShake(state, 18, 0.55);
+      // Spark drifts up-and-over the wreckage — start a curved path
+      // toward a hold point just above the capsule.
+      startSparkPath(
+        state,
+        state.sparkX,
+        state.sparkY,
+        CAPSULE_CX + 40,
+        CAPSULE_CY - 90,
+        PHASE_DURATIONS.shatter,
+        90,
+      );
       state.cameraTargetScale = 1.15;
       break;
     case "merge":
+      // Curved descent into the body — the spark "spirals" the last
+      // distance into the empty shell.
+      startSparkPath(
+        state,
+        state.sparkX,
+        state.sparkY,
+        CAPSULE_CX,
+        CAPSULE_CY,
+        PHASE_DURATIONS.merge,
+        50,
+      );
       state.cameraTargetScale = 1.18;
       break;
+    case "blackout":
+      // Spark has merged with the body — the room cuts to pure
+      // darkness. Everything goes dim/invisible for a beat before
+      // the eye stirs. Spark itself is gone (it IS the body now).
+      state.sparkActive = false;
+      state.sparkBrightness = 0;
+      state.mergeFlash = 0;
+      // The body now glows white inside — this is the consciousness
+      // settling. Ramps up during blackout, holds bright, fades as
+      // the eye opens.
+      state.interiorWhite = 1;
+      state.cameraTargetScale = 1.05;
+      break;
     case "awaken":
-      state.mergeFlash = 1;
+      // Tell the game-engine eye to open. closeAmount animates back
+      // to 0 over CLOSE_DURATION; updateEye drives the transition.
+      state.hero.isClosing = false;
       state.cameraTargetScale = 1.0;
-      triggerShake(state, 8, 0.4);
+      break;
+    case "askname":
+      state.cameraTargetScale = 0.98;
       break;
     case "fadeout":
       state.finalFlash = 0;
-      state.cameraTargetScale = 0.98;
+      state.cameraTargetScale = 0.95;
       break;
   }
 }
@@ -473,24 +608,89 @@ function triggerShake(state: IntroState, amount: number, duration: number): void
 }
 
 function buildShatterShards(): Shard[] {
+  // Wedge chunks of the capsule shell. Each chunk is a curved-shell
+  // slice — outer rim arc + inner rim arc, closed at both ends so it
+  // reads as a thick fragment of the glass body, not a flat
+  // triangle. Chunks fly outward from the capsule center.
   const shards: Shard[] = [];
-  const count = 22;
+  const count = 7;
+  const baseStep = (Math.PI * 2) / count;
   for (let i = 0; i < count; i++) {
-    const angle = (i / count) * Math.PI * 2 + (Math.random() - 0.5) * 0.5;
-    const speed = 200 + Math.random() * 220;
+    const a1 = i * baseStep + (Math.random() - 0.5) * 0.25;
+    const a2 = a1 + baseStep + (Math.random() - 0.5) * 0.25;
+    const RX_OUT = CAPSULE_RX;
+    const RY_OUT = CAPSULE_RY;
+    const innerScale = 0.88 + Math.random() * 0.04;
+    const RX_IN = CAPSULE_RX * innerScale;
+    const RY_IN = CAPSULE_RY * innerScale;
+    const ARC_STEPS = 5;
+    const verts: { x: number; y: number }[] = [];
+    // Outer arc (a1 → a2)
+    for (let s = 0; s <= ARC_STEPS; s++) {
+      const a = a1 + (a2 - a1) * (s / ARC_STEPS);
+      verts.push({ x: Math.cos(a) * RX_OUT, y: Math.sin(a) * RY_OUT });
+    }
+    // Inner arc back (a2 → a1)
+    for (let s = ARC_STEPS; s >= 0; s--) {
+      const a = a1 + (a2 - a1) * (s / ARC_STEPS);
+      verts.push({ x: Math.cos(a) * RX_IN, y: Math.sin(a) * RY_IN });
+    }
+    // Polygon centroid → re-centre verts so rotation pivots on it.
+    let cx = 0;
+    let cy = 0;
+    for (const v of verts) {
+      cx += v.x;
+      cy += v.y;
+    }
+    cx /= verts.length;
+    cy /= verts.length;
+    for (const v of verts) {
+      v.x -= cx;
+      v.y -= cy;
+    }
+    // World position: chunk centroid expressed in capsule space.
+    const worldX = CAPSULE_CX + cx;
+    const worldY = CAPSULE_CY + cy;
+    // Outward velocity toward chunk centroid direction.
+    const dirAngle = Math.atan2(cy, cx);
+    const speed = 220 + Math.random() * 220;
     shards.push({
-      x: CAPSULE_CX + Math.cos(angle) * CAPSULE_RX * 0.85,
-      y: CAPSULE_CY + Math.sin(angle) * CAPSULE_RY * 0.85,
-      vx: Math.cos(angle) * speed,
-      vy: Math.sin(angle) * speed - 60,
-      rot: Math.random() * Math.PI * 2,
-      rotVel: (Math.random() - 0.5) * 12,
+      verts,
+      x: worldX,
+      y: worldY,
+      vx: Math.cos(dirAngle) * speed,
+      vy: Math.sin(dirAngle) * speed - 80, // upward bias
+      rot: 0,
+      rotVel: (Math.random() - 0.5) * 6,
       age: 0,
-      lifetime: 1.6 + Math.random() * 0.6,
-      size: 4 + Math.random() * 7,
+      // Long lifetime — chunks settle on the floor and stay visible
+      // through the rest of the cinematic instead of vanishing
+      // mid-fall. Fade is held off until the last 20% of the
+      // lifetime (handled in drawShards).
+      lifetime: 6.5 + Math.random() * 1.2,
     });
   }
   return shards;
+}
+
+function buildGlassMotes(): GlassMote[] {
+  // Smaller bright glass dust filling the gaps between chunks.
+  const motes: GlassMote[] = [];
+  for (let i = 0; i < 28; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const r = CAPSULE_RX * 0.4 + Math.random() * CAPSULE_RX * 0.6;
+    const speed = 260 + Math.random() * 320;
+    motes.push({
+      x: CAPSULE_CX + Math.cos(a) * r,
+      y: CAPSULE_CY + Math.sin(a) * r,
+      vx: Math.cos(a) * speed,
+      vy: Math.sin(a) * speed - 100,
+      age: 0,
+      lifetime: 1.6 + Math.random() * 0.9,
+      size: 1.2 + Math.random() * 1.4,
+    });
+  }
+  return motes;
 }
 
 function tickCamera(state: IntroState, dt: number): void {
@@ -527,15 +727,8 @@ function tickByPhase(state: IntroState, dt: number): void {
     }
     case "sparkenters": {
       const t = state.phaseTime / PHASE_DURATIONS.sparkenters;
-      const targetX = CAPSULE_CX + 240;
-      const targetY = CAPSULE_CY - 260;
-      const eased = easeOutCubic(t);
-      const prevX = state.sparkX;
-      const prevY = state.sparkY;
-      state.sparkX = (CANVAS_W + 60) + (targetX - (CANVAS_W + 60)) * eased;
-      state.sparkY = -40 + (targetY - -40) * eased;
       state.sparkBrightness = Math.min(1, t * 1.6);
-      pushTrail(state, prevX, prevY);
+      advanceSparkPath(state, dt, easeOutCubic);
       break;
     }
     case "cutting": {
@@ -546,39 +739,41 @@ function tickByPhase(state: IntroState, dt: number): void {
       tickShards(state, dt);
       state.shatterFlash = Math.max(0, state.shatterFlash - dt * 2.5);
       state.sparkBrightness = 1;
-      const t = state.phaseTime / PHASE_DURATIONS.shatter;
-      const eased = easeInOutCubic(t);
-      const prevX = state.sparkX;
-      const prevY = state.sparkY;
-      state.sparkX = lerp(state.sparkX, CAPSULE_CX + 50, eased * 0.7);
-      state.sparkY = lerp(state.sparkY, CAPSULE_CY - 30, eased * 0.7);
-      pushTrail(state, prevX, prevY);
+      advanceSparkPath(state, dt, easeInOutCubic);
       break;
     }
     case "merge": {
       tickShards(state, dt);
       const t = state.phaseTime / PHASE_DURATIONS.merge;
-      const eased = easeInOutCubic(t);
-      const prevX = state.sparkX;
-      const prevY = state.sparkY;
-      state.sparkX = lerp(state.sparkX, CAPSULE_CX, eased);
-      state.sparkY = lerp(state.sparkY, CAPSULE_CY, eased);
       state.sparkBrightness = 1 + t * 2.0;
-      pushTrail(state, prevX, prevY);
+      advanceSparkPath(state, dt, easeInOutCubic);
       if (t > 0.85) {
         state.mergeFlash = (t - 0.85) / 0.15;
       }
+      // As we near the body, ramp up the interior white so the
+      // crossover from "spark outside" → "consciousness inside" reads.
+      if (t > 0.7) {
+        state.interiorWhite = (t - 0.7) / 0.3;
+      }
+      break;
+    }
+    case "blackout": {
+      // Pure dark beat. Interior glow holds at full brightness.
+      state.interiorWhite = 1;
       break;
     }
     case "awaken": {
       tickShards(state, dt);
-      state.mergeFlash = Math.max(0, state.mergeFlash - dt * 1.6);
+      // Interior white glow fades as the eye opens — by the end of
+      // awaken the in-game iris/pupil are fully visible.
       const t = state.phaseTime / PHASE_DURATIONS.awaken;
-      // Eye opens with ease-out — slit → oval → full.
-      state.eyeOpen = easeOutCubic(Math.min(1, t * 1.3));
+      state.interiorWhite = Math.max(0, 1 - t * 1.4);
       state.sparkX = CAPSULE_CX;
       state.sparkY = CAPSULE_CY;
-      state.sparkBrightness = Math.max(0, 1.8 - t * 1.8);
+      break;
+    }
+    case "askname": {
+      state.interiorWhite = 0;
       break;
     }
     case "fadeout": {
@@ -608,21 +803,20 @@ function tickCutting(state: IntroState, dt: number): void {
   state.cuttingSubAge += dt;
   switch (state.cuttingSubPhase) {
     case "travel": {
-      const TRAVEL_SEC = 0.5;
-      const t = Math.min(1, state.cuttingSubAge / TRAVEL_SEC);
-      const eased = easeInOutCubic(t);
-      const prevX = state.sparkX;
-      const prevY = state.sparkY;
-      state.sparkX = lerp(state.sparkX, cp.x, eased);
-      state.sparkY = lerp(state.sparkY, cp.y, eased);
-      pushTrail(state, prevX, prevY);
-      // Pre-cut glow on the wire grows as the spark closes in.
+      const TRAVEL_SEC = 0.6;
+      // The path for this wire was set in the rest→travel transition
+      // (or in onPhaseEnter for the first one) — just advance it.
+      advanceSparkPath(state, dt, easeInOutCubic);
       state.wires[state.cuttingWireIndex].preCutGlowAge = state.cuttingSubAge;
       if (state.cuttingSubAge >= TRAVEL_SEC) {
         state.cuttingSubPhase = "sever";
         state.cuttingSubAge = 0;
         state.wires[state.cuttingWireIndex].cutMeltAge = 0;
-        // First wave of embers — the sever has begun.
+        // Snap spark exactly onto the cut point for the sever beat —
+        // any wobble accumulated during travel reads as misalignment.
+        state.sparkX = cp.x;
+        state.sparkY = cp.y;
+        state.sparkPath = null;
         spawnCutEmbers(state, cp, 5);
       }
       break;
@@ -652,11 +846,16 @@ function tickCutting(state: IntroState, dt: number): void {
       break;
     }
     case "rest": {
-      const REST_SEC = 0.2;
+      const REST_SEC = 0.22;
       if (state.cuttingSubAge >= REST_SEC) {
         state.cuttingWireIndex++;
         state.cuttingSubPhase = "travel";
         state.cuttingSubAge = 0;
+        // Set up a curved path to the next wire (if there is one).
+        if (state.cuttingWireIndex < WIRES.length) {
+          const next = wireBezier(WIRES[state.cuttingWireIndex], CUT_T);
+          startSparkPath(state, state.sparkX, state.sparkY, next.x, next.y, 0.6, 80);
+        }
       }
       break;
     }
@@ -681,16 +880,49 @@ function spawnCutEmbers(state: IntroState, origin: { x: number; y: number }, cou
   }
 }
 
+const SHARD_FLOOR_Y = FLOOR_Y - 12;
+const SHARD_GRAV = 520;
+const SHARD_BOUNCE = 0.32;
+const SHARD_FRICTION = 0.62;
+const SHARD_REST_VY = 35;
+
 function tickShards(state: IntroState, dt: number): void {
-  const GRAV = 380;
   for (const s of state.shards) {
     s.age += dt;
     s.x += s.vx * dt;
     s.y += s.vy * dt;
-    s.vy += GRAV * dt;
+    s.vy += SHARD_GRAV * dt;
     s.rot += s.rotVel * dt;
+    // Floor collision — bounce a couple times, then settle. Chunks
+    // pile up rather than vanish into the void.
+    if (s.y > SHARD_FLOOR_Y) {
+      s.y = SHARD_FLOOR_Y;
+      if (s.vy > SHARD_REST_VY) {
+        s.vy = -s.vy * SHARD_BOUNCE;
+        s.vx *= SHARD_FRICTION;
+        s.rotVel *= 0.6;
+      } else {
+        // Settled — let gravity press, kill micro-motion.
+        s.vy = 0;
+        s.vx *= 0.85;
+        s.rotVel *= 0.8;
+      }
+    }
   }
   state.shards = state.shards.filter((s) => s.age < s.lifetime);
+
+  for (const m of state.glassMotes) {
+    m.age += dt;
+    m.x += m.vx * dt;
+    m.y += m.vy * dt;
+    m.vy += SHARD_GRAV * dt;
+    if (m.y > SHARD_FLOOR_Y) {
+      m.y = SHARD_FLOOR_Y;
+      m.vy = -m.vy * 0.25;
+      m.vx *= 0.55;
+    }
+  }
+  state.glassMotes = state.glassMotes.filter((m) => m.age < m.lifetime);
 }
 
 const ROPE_NODES = 12;
@@ -894,9 +1126,86 @@ function pushTrail(state: IntroState, prevX: number, prevY: number): void {
   if (state.sparkTrail.length > 30) state.sparkTrail.shift();
 }
 
+function startSparkPath(
+  state: IntroState,
+  startX: number,
+  startY: number,
+  endX: number,
+  endY: number,
+  duration: number,
+  curl: number,
+): void {
+  // Drop a Bezier control point perpendicular to the straight line.
+  // Sign alternates per call so consecutive paths bend opposite
+  // directions, killing the "ruler tracks" feel of straight motion.
+  const dx = endX - startX;
+  const dy = endY - startY;
+  const len = Math.hypot(dx, dy) || 1;
+  const perpX = -dy / len;
+  const perpY = dx / len;
+  const sign = Math.random() < 0.5 ? -1 : 1;
+  const midX = (startX + endX) / 2 + perpX * curl * sign;
+  const midY = (startY + endY) / 2 + perpY * curl * sign;
+  state.sparkPath = {
+    startX,
+    startY,
+    endX,
+    endY,
+    cpX: midX,
+    cpY: midY,
+    duration,
+  };
+  state.sparkPathT = 0;
+}
+
+function advanceSparkPath(
+  state: IntroState,
+  dt: number,
+  easeFn: (t: number) => number,
+): boolean {
+  const path = state.sparkPath;
+  if (!path) return true;
+  state.sparkPathT += dt / path.duration;
+  const tRaw = Math.min(1, state.sparkPathT);
+  const t = easeFn(tRaw);
+  const u = 1 - t;
+  const prevX = state.sparkX;
+  const prevY = state.sparkY;
+  state.sparkX =
+    u * u * path.startX + 2 * u * t * path.cpX + t * t * path.endX;
+  state.sparkY =
+    u * u * path.startY + 2 * u * t * path.cpY + t * t * path.endY;
+  // Perpendicular wobble — small sinusoidal drift along the path
+  // normal so the spark "wavers" while travelling.
+  const tanX =
+    2 * u * (path.cpX - path.startX) + 2 * t * (path.endX - path.cpX);
+  const tanY =
+    2 * u * (path.cpY - path.startY) + 2 * t * (path.endY - path.cpY);
+  const tlen = Math.hypot(tanX, tanY) || 1;
+  const wpx = -tanY / tlen;
+  const wpy = tanX / tlen;
+  const wobble =
+    Math.sin(state.time * 5.5) * 2.5 +
+    Math.sin(state.time * 2.3 + 1.1) * 1.5;
+  state.sparkX += wpx * wobble;
+  state.sparkY += wpy * wobble;
+  pushTrail(state, prevX, prevY);
+  return tRaw >= 1;
+}
+
 function tickHero(state: IntroState, dt: number): void {
   state.heroBreath += dt;
   state.heroFlicker += dt;
+  // Drive the game-engine eye every frame so blink/idle-look/breath
+  // animations match in-game exactly during the awaken+ phases. The
+  // hero position is pinned at the capsule center.
+  state.hero.x = CAPSULE_CX;
+  state.hero.y = CAPSULE_CY;
+  updateEye(state.hero, dt, {
+    threat: null,
+    size: PLAYER_SIZE,
+    dashDurationSec: DASH_DURATION_MS / 1000,
+  });
 }
 
 // ---- Render ----
@@ -972,22 +1281,61 @@ export function drawIntro(
   // Final vignette → emphasises focal point.
   drawVignette(ctx);
 
-  // Merge / shatter / final flashes — overlay full canvas.
-  if (state.mergeFlash > 0) {
-    ctx.fillStyle = `rgba(255, 255, 255, ${0.85 * state.mergeFlash})`;
-    ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
-  }
+  // Bright flashes (mid-cinematic) — drawn before the stage-dark
+  // overlay so they don't get muted.
   if (state.shatterFlash > 0) {
     ctx.fillStyle = `rgba(255, 255, 255, ${0.55 * state.shatterFlash})`;
     ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
   }
+  if (state.mergeFlash > 0) {
+    ctx.fillStyle = `rgba(255, 255, 255, ${0.85 * state.mergeFlash})`;
+    ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+  }
+
+  // Stage-dark overlay — after the spark merges, the room cuts to
+  // near-pure darkness. Holds during blackout, partially lifts during
+  // awaken so the eye reads, holds dim through askname, fades to 0
+  // by the time the white fadeout takes over.
+  const stageDark = computeStageDark(state);
+  if (stageDark > 0) {
+    ctx.fillStyle = `rgba(0, 0, 0, ${stageDark})`;
+    ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+  }
+
+  // Hero — drawn AFTER the stage-dark overlay so the body stays
+  // visible through the blackout/awaken dim. Before the shatter the
+  // hero lives inside the capsule (drawn there); during/after shatter
+  // we render it here at the capsule center.
+  //   shatter / merge: empty shell (custom)
+  //   blackout / awaken / askname / fadeout: in-game hero via
+  //     drawPlayerEye, the same renderer used during gameplay.
+  if (state.capsuleBroken) {
+    if (state.phase === "shatter" || state.phase === "merge") {
+      drawHeroOrb(ctx, state);
+    } else {
+      drawGameHero(ctx, state);
+    }
+  }
+
+  // Interior white glow — visible from blackout onward as the spark
+  // settles into the body. Acts as the "consciousness filling the
+  // shell" beat that bridges the empty-shell hero with the awakened
+  // in-game hero.
+  if (state.interiorWhite > 0) {
+    drawInteriorWhite(ctx, state.interiorWhite);
+  }
+
+  // "WHO AM I?" — first thought, surfaces in the askname phase above
+  // the awakened eye.
+  if (state.phase === "askname") drawAskNameText(ctx, state);
+
+  // Final white fade just before redirect.
   if (state.finalFlash > 0) {
     ctx.fillStyle = `rgba(255, 255, 255, ${state.finalFlash})`;
     ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
   }
 
-  // Fade-in overlay during the very first phase (the room reveals
-  // out of black, not in).
+  // Initial fade-in from black during the very first phase.
   if (state.phase === "fadein") {
     const t = state.phaseTime / PHASE_DURATIONS.fadein;
     const a = 1 - smoothstep(t);
@@ -1583,12 +1931,9 @@ function drawSuspensionBracket(
 }
 
 function drawCapsule(ctx: CanvasRenderingContext2D, state: IntroState): void {
-  if (state.capsuleBroken && state.phase !== "shatter") {
-    // After shatter, render only the hero floating + a faint
-    // residual ring where the capsule used to be.
-    drawHeroOrb(ctx, state);
-    return;
-  }
+  // Once the capsule has shattered, the only remains are the chunks
+  // and the hero — both drawn elsewhere.
+  if (state.capsuleBroken) return;
 
   ctx.save();
   // Outer shell — translucent dark fill behind everything.
@@ -1634,21 +1979,6 @@ function drawCapsule(ctx: CanvasRenderingContext2D, state: IntroState): void {
   ctx.lineWidth = 1;
   ctx.beginPath();
   ctx.ellipse(CAPSULE_CX, CAPSULE_CY, CAPSULE_RX * 0.92, CAPSULE_RY * 0.95, 0, 0, Math.PI * 2);
-  ctx.stroke();
-
-  // Glass specular highlight — a curved white sliver on the upper-left.
-  ctx.strokeStyle = `rgba(255, 255, 255, ${0.12 + state.capsuleGlow * 0.2})`;
-  ctx.lineWidth = 3;
-  ctx.beginPath();
-  ctx.ellipse(
-    CAPSULE_CX - 18,
-    CAPSULE_CY - 30,
-    CAPSULE_RX * 0.6,
-    CAPSULE_RY * 0.7,
-    -0.3,
-    Math.PI * 0.85,
-    Math.PI * 1.25,
-  );
   ctx.stroke();
 
   // Holo readout strip at the bottom of the capsule — tiny ticks.
@@ -1775,31 +2105,55 @@ function drawHeroOrb(ctx: CanvasRenderingContext2D, state: IntroState): void {
 }
 
 function drawShards(ctx: CanvasRenderingContext2D, state: IntroState): void {
-  if (state.shards.length === 0) return;
-  ctx.save();
-  ctx.shadowBlur = 0;
-  for (const s of state.shards) {
-    const u = s.age / s.lifetime;
-    const alpha = 1 - u;
-    ctx.globalAlpha = alpha;
+  // Big shell chunks — curved glass slivers, polygon strokes + fills.
+  if (state.shards.length > 0) {
     ctx.save();
-    ctx.translate(s.x, s.y);
-    ctx.rotate(s.rot);
-    // Glass shard — triangular sliver with a bright outline and a
-    // faint cyan inner fill so it reads as a fragment of the capsule.
-    ctx.fillStyle = "rgba(125, 211, 252, 0.45)";
-    ctx.beginPath();
-    ctx.moveTo(0, -s.size);
-    ctx.lineTo(s.size * 0.55, s.size * 0.4);
-    ctx.lineTo(-s.size * 0.7, s.size * 0.55);
-    ctx.closePath();
-    ctx.fill();
-    ctx.strokeStyle = "rgba(255, 255, 255, 0.85)";
-    ctx.lineWidth = 0.8;
-    ctx.stroke();
+    for (const s of state.shards) {
+      const u = s.age / s.lifetime;
+      // Hold full opacity for 80% of the lifetime; fade only at the
+      // very end. Chunks settle and remain visible through askname
+      // rather than dissolving mid-fall.
+      const alpha = u < 0.8 ? 1 : Math.max(0, 1 - (u - 0.8) / 0.2);
+      if (alpha <= 0) continue;
+      ctx.globalAlpha = alpha;
+      ctx.save();
+      ctx.translate(s.x, s.y);
+      ctx.rotate(s.rot);
+      // Fill — translucent cyan glass with a subtle inner gradient.
+      ctx.fillStyle = "rgba(70, 140, 200, 0.35)";
+      ctx.shadowBlur = 0;
+      ctx.beginPath();
+      ctx.moveTo(s.verts[0].x, s.verts[0].y);
+      for (let i = 1; i < s.verts.length; i++) {
+        ctx.lineTo(s.verts[i].x, s.verts[i].y);
+      }
+      ctx.closePath();
+      ctx.fill();
+      // Outer rim — bright (this was the glowing capsule outline).
+      ctx.strokeStyle = `rgba(255, 255, 255, ${0.85})`;
+      ctx.shadowColor = "#7dd3fc";
+      ctx.shadowBlur = 8;
+      ctx.lineWidth = 1.4;
+      ctx.stroke();
+      ctx.restore();
+    }
     ctx.restore();
   }
-  ctx.restore();
+
+  // Smaller glass motes — fast little dust + sparkles.
+  if (state.glassMotes.length > 0) {
+    ctx.save();
+    ctx.shadowColor = "#a5f3fc";
+    ctx.shadowBlur = 8;
+    for (const m of state.glassMotes) {
+      const u = m.age / m.lifetime;
+      const alpha = 1 - u;
+      ctx.globalAlpha = alpha;
+      ctx.fillStyle = "rgba(255, 255, 255, 0.95)";
+      ctx.fillRect(m.x - m.size / 2, m.y - m.size / 2, m.size, m.size);
+    }
+    ctx.restore();
+  }
 }
 
 function drawCutFlashes(ctx: CanvasRenderingContext2D, state: IntroState): void {
@@ -1823,16 +2177,16 @@ function drawCutFlashes(ctx: CanvasRenderingContext2D, state: IntroState): void 
 }
 
 function drawSpark(ctx: CanvasRenderingContext2D, state: IntroState): void {
-  // Trail.
+  // Soft trail — softer alpha falloff, longer perceptual tail.
   if (state.sparkTrail.length > 1) {
     ctx.save();
-    ctx.shadowColor = "#ffffff";
-    ctx.shadowBlur = 10;
+    ctx.shadowColor = "#a5f3fc";
+    ctx.shadowBlur = 14;
     ctx.lineCap = "round";
     for (let i = 1; i < state.sparkTrail.length; i++) {
       const t = i / state.sparkTrail.length;
-      ctx.strokeStyle = `rgba(165, 243, 252, ${t * 0.65 * state.sparkBrightness})`;
-      ctx.lineWidth = 1.2 + t * 1.8;
+      ctx.strokeStyle = `rgba(180, 230, 255, ${t * 0.45 * state.sparkBrightness})`;
+      ctx.lineWidth = 0.8 + t * 2.6;
       const p0 = state.sparkTrail[i - 1];
       const p1 = state.sparkTrail[i];
       ctx.beginPath();
@@ -1849,63 +2203,163 @@ function drawSpark(ctx: CanvasRenderingContext2D, state: IntroState): void {
   ctx.save();
   ctx.globalCompositeOperation = "lighter";
 
-  // Outer halo (large additive glow).
-  const haloR = 36 * b;
-  const halo = ctx.createRadialGradient(
+  // Two soft halo layers — no hot core, no defined inner ring. The
+  // spark reads as a glowing wisp rather than a sharp pinpoint.
+  const haloBig = 70 * b;
+  const haloMid = 32 * b;
+  const big = ctx.createRadialGradient(
     state.sparkX,
     state.sparkY,
     0,
     state.sparkX,
     state.sparkY,
-    haloR,
+    haloBig,
   );
-  halo.addColorStop(0, `rgba(165, 243, 252, ${0.5 * b})`);
-  halo.addColorStop(0.5, `rgba(125, 211, 252, ${0.18 * b})`);
-  halo.addColorStop(1, "rgba(125, 211, 252, 0)");
-  ctx.fillStyle = halo;
+  big.addColorStop(0, `rgba(165, 243, 252, ${0.28 * b})`);
+  big.addColorStop(0.45, `rgba(125, 211, 252, ${0.12 * b})`);
+  big.addColorStop(1, "rgba(125, 211, 252, 0)");
+  ctx.fillStyle = big;
   ctx.beginPath();
-  ctx.arc(state.sparkX, state.sparkY, haloR, 0, Math.PI * 2);
+  ctx.arc(state.sparkX, state.sparkY, haloBig, 0, Math.PI * 2);
   ctx.fill();
 
-  // Crackling tendrils — short branching lightning bolts radiating
-  // out at random each frame.
-  ctx.strokeStyle = `rgba(165, 243, 252, ${0.7 * b})`;
+  const mid = ctx.createRadialGradient(
+    state.sparkX,
+    state.sparkY,
+    0,
+    state.sparkX,
+    state.sparkY,
+    haloMid,
+  );
+  mid.addColorStop(0, `rgba(220, 245, 255, ${0.55 * b})`);
+  mid.addColorStop(0.6, `rgba(165, 243, 252, ${0.2 * b})`);
+  mid.addColorStop(1, "rgba(165, 243, 252, 0)");
+  ctx.fillStyle = mid;
+  ctx.beginPath();
+  ctx.arc(state.sparkX, state.sparkY, haloMid, 0, Math.PI * 2);
+  ctx.fill();
+
+  // A handful of very soft, wispy filaments — short curls that drift
+  // organically (offsets keyed to time, not random per frame). They
+  // hint at energy without reading as sharp lightning.
+  ctx.strokeStyle = `rgba(200, 240, 255, ${0.32 * b})`;
   ctx.shadowColor = "#a5f3fc";
-  ctx.shadowBlur = 8;
-  ctx.lineWidth = 1.2;
-  const tendrilCount = 5;
-  for (let i = 0; i < tendrilCount; i++) {
-    const angle = (i / tendrilCount) * Math.PI * 2 + state.time * 1.2 + Math.random() * 0.4;
-    const len = 7 + Math.random() * 10;
+  ctx.shadowBlur = 10;
+  ctx.lineWidth = 0.9;
+  ctx.lineCap = "round";
+  const filaments = 3;
+  for (let i = 0; i < filaments; i++) {
+    const base = (i / filaments) * Math.PI * 2;
+    const angle = base + state.time * 0.8 + i * 0.7;
+    const len = 16 + Math.sin(state.time * 2 + i) * 4;
     let cx = state.sparkX;
     let cy = state.sparkY;
     ctx.beginPath();
     ctx.moveTo(cx, cy);
-    const segs = 3;
-    for (let s = 0; s < segs; s++) {
-      cx += Math.cos(angle) * (len / segs);
-      cy += Math.sin(angle) * (len / segs);
-      cx += (Math.random() - 0.5) * 3;
-      cy += (Math.random() - 0.5) * 3;
+    const segs = 5;
+    for (let s = 1; s <= segs; s++) {
+      const u = s / segs;
+      const swirl = Math.sin(u * Math.PI * 1.5 + state.time * 1.4) * 4;
+      cx = state.sparkX + Math.cos(angle) * len * u + Math.cos(angle + Math.PI / 2) * swirl;
+      cy = state.sparkY + Math.sin(angle) * len * u + Math.sin(angle + Math.PI / 2) * swirl;
       ctx.lineTo(cx, cy);
     }
     ctx.stroke();
   }
 
-  // Hot core.
-  ctx.shadowColor = "#ffffff";
-  ctx.shadowBlur = 18;
-  ctx.fillStyle = "#ffffff";
-  ctx.beginPath();
-  ctx.arc(state.sparkX, state.sparkY, 3.2, 0, Math.PI * 2);
-  ctx.fill();
-  // Inner glow ring.
-  ctx.strokeStyle = `rgba(255, 255, 255, ${0.9 * b})`;
-  ctx.lineWidth = 1.2;
-  ctx.beginPath();
-  ctx.arc(state.sparkX, state.sparkY, 6, 0, Math.PI * 2);
-  ctx.stroke();
+  ctx.restore();
+}
 
+function drawGameHero(ctx: CanvasRenderingContext2D, state: IntroState): void {
+  // Use the canonical in-game eye renderer so the awakened body
+  // matches gameplay 1:1. closeAmount on the Player struct drives the
+  // open/close animation; we toggle isClosing=false on awaken entry
+  // and updateEye handles the smooth ramp.
+  drawPlayerEye(ctx, state.hero, PLAYER_SIZE, {
+    ringColor: state.heroProfile.outerRing,
+    pupilColor: state.heroProfile.pupil,
+    ghostColor: state.heroProfile.outerRing,
+    dashDurationSec: DASH_DURATION_MS / 1000,
+    dashCooldownSec: DASH_COOLDOWN_MS / 1000,
+    profile: state.heroProfile,
+  });
+}
+
+function drawInteriorWhite(ctx: CanvasRenderingContext2D, alpha: number): void {
+  // Soft radial white glow sized to fit inside the hero outline. Acts
+  // as the "consciousness filling the body from inside" beat —
+  // visible through the closed eye during blackout, fades as the iris
+  // opens.
+  const r = HERO_OUTER_R * 1.4;
+  const grad = ctx.createRadialGradient(
+    CAPSULE_CX,
+    CAPSULE_CY,
+    0,
+    CAPSULE_CX,
+    CAPSULE_CY,
+    r,
+  );
+  grad.addColorStop(0, `rgba(255, 255, 255, ${0.95 * alpha})`);
+  grad.addColorStop(0.55, `rgba(255, 255, 255, ${0.45 * alpha})`);
+  grad.addColorStop(1, "rgba(255, 255, 255, 0)");
+  ctx.save();
+  ctx.globalCompositeOperation = "lighter";
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  ctx.arc(CAPSULE_CX, CAPSULE_CY, r, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+function computeStageDark(state: IntroState): number {
+  // Final dim level held through askname; awaken fades from full
+  // black into that dim level over its duration.
+  const HOLD_DARK = 0.62;
+  switch (state.phase) {
+    case "blackout":
+      return 1;
+    case "awaken": {
+      const t = state.phaseTime / PHASE_DURATIONS.awaken;
+      return 1 - (1 - HOLD_DARK) * smoothstep(t);
+    }
+    case "askname":
+      return HOLD_DARK;
+    case "fadeout": {
+      const t = state.phaseTime / PHASE_DURATIONS.fadeout;
+      return Math.max(0, HOLD_DARK - HOLD_DARK * t);
+    }
+    default:
+      return 0;
+  }
+}
+
+function drawAskNameText(ctx: CanvasRenderingContext2D, state: IntroState): void {
+  // Fade in over 0.6 s, hold, fade out at the tail of the phase.
+  const t = state.phaseTime / PHASE_DURATIONS.askname;
+  const fadeIn = 0.25;
+  const fadeOut = 0.85;
+  let alpha = 1;
+  if (t < fadeIn) alpha = t / fadeIn;
+  else if (t > fadeOut) alpha = Math.max(0, 1 - (t - fadeOut) / (1 - fadeOut));
+  if (alpha <= 0) return;
+  ctx.save();
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  // Centred above the eye. Letter-spacing-like effect through manual
+  // tracking — Orbitron with extra space reads as a cold internal
+  // voice rather than overlaid UI.
+  const text = "WHO AM I?";
+  ctx.font = "500 38px Orbitron, ui-monospace, monospace";
+  ctx.globalAlpha = alpha * 0.95;
+  // Soft glow pass.
+  ctx.shadowColor = "#a5f3fc";
+  ctx.shadowBlur = 18;
+  ctx.fillStyle = "#cbd5e1";
+  ctx.fillText(text, CAPSULE_CX, CAPSULE_CY - 140);
+  // Crisp pass.
+  ctx.shadowBlur = 6;
+  ctx.fillStyle = "#ffffff";
+  ctx.fillText(text, CAPSULE_CX, CAPSULE_CY - 140);
   ctx.restore();
 }
 
@@ -1925,10 +2379,6 @@ function drawVignette(ctx: CanvasRenderingContext2D): void {
 }
 
 // ---- Util ----
-
-function lerp(a: number, b: number, t: number): number {
-  return a + (b - a) * t;
-}
 
 function smoothstep(t: number): number {
   if (t <= 0) return 0;
