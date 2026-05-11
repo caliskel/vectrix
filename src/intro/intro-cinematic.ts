@@ -94,13 +94,23 @@ type WireSpec = {
   kind: "suspend" | "feed";
 };
 
+type RopeNode = {
+  x: number; y: number;
+  prevX: number; prevY: number;
+};
+
 type WireState = {
   cut: boolean;
+  // Sever animation: counts up during the on-the-wire melt, before the
+  // rope itself is released. -1 = inactive. While > 0 the wire renders
+  // intact but with a growing hot gap at the cut point.
+  cutMeltAge: number;
+  preCutGlowAge: number;
+  // Verlet chain spawned at the cut moment. Index 0 stays pinned to
+  // the capsule attach point; the last node is the free cut end.
+  looseNodes: RopeNode[] | null;
+  loosePieceSegLen: number;
   loosePieceAge: number;
-  loosePieceVy: number;
-  loosePieceYOffset: number;
-  loosePieceRot: number;
-  preCutGlowAge: number; // ramps up just before the cut
 };
 
 type FloorCrack = { pts: { x: number; y: number }[] };
@@ -184,9 +194,11 @@ export type IntroState = {
   sparkTrail: { x: number; y: number }[];
   sparkBrightness: number;
 
-  // Cutting sub-state
+  // Cutting sub-state. The sever phase replaces the previous instant
+  // flag-flip + cut-flash combo — the wire visibly melts/severs over
+  // its duration before the rope is released.
   cuttingWireIndex: number;
-  cuttingSubPhase: "travel" | "flash" | "rest";
+  cuttingSubPhase: "travel" | "sever" | "rest";
   cuttingSubAge: number;
 
   // Capsule shatter
@@ -221,11 +233,11 @@ export function createIntroState(): IntroState {
     heroFlicker: 0,
     wires: WIRES.map(() => ({
       cut: false,
-      loosePieceAge: -1,
-      loosePieceVy: 0,
-      loosePieceYOffset: 0,
-      loosePieceRot: 0,
+      cutMeltAge: -1,
       preCutGlowAge: -1,
+      looseNodes: null,
+      loosePieceSegLen: 0,
+      loosePieceAge: -1,
     })),
     capsuleCracks: buildGlassCracks(),
     crackProgress: 0,
@@ -586,15 +598,17 @@ function tickByPhase(state: IntroState, dt: number): void {
   }
 }
 
+const CUT_T = 0.42;
+const SEVER_DURATION_SEC = 0.32;
+
 function tickCutting(state: IntroState, dt: number): void {
   if (state.cuttingWireIndex >= WIRES.length) return;
   const wire = WIRES[state.cuttingWireIndex];
-  const cutT = 0.42;
-  const cp = wireBezier(wire, cutT);
+  const cp = wireBezier(wire, CUT_T);
   state.cuttingSubAge += dt;
   switch (state.cuttingSubPhase) {
     case "travel": {
-      const TRAVEL_SEC = 0.45;
+      const TRAVEL_SEC = 0.5;
       const t = Math.min(1, state.cuttingSubAge / TRAVEL_SEC);
       const eased = easeInOutCubic(t);
       const prevX = state.sparkX;
@@ -602,45 +616,43 @@ function tickCutting(state: IntroState, dt: number): void {
       state.sparkX = lerp(state.sparkX, cp.x, eased);
       state.sparkY = lerp(state.sparkY, cp.y, eased);
       pushTrail(state, prevX, prevY);
-      // Wire's "pre-cut glow" lights up as the spark approaches.
+      // Pre-cut glow on the wire grows as the spark closes in.
       state.wires[state.cuttingWireIndex].preCutGlowAge = state.cuttingSubAge;
       if (state.cuttingSubAge >= TRAVEL_SEC) {
-        state.cuttingSubPhase = "flash";
+        state.cuttingSubPhase = "sever";
         state.cuttingSubAge = 0;
-        const w = state.wires[state.cuttingWireIndex];
-        w.cut = true;
-        w.loosePieceAge = 0;
-        w.loosePieceVy = -20;
-        w.loosePieceYOffset = 0;
-        w.loosePieceRot = 0;
-        state.cutFlashes.push({ x: cp.x, y: cp.y, age: 0 });
-        triggerShake(state, 4, 0.18);
-        // Spawn 6-8 sparks from the cut point.
-        for (let k = 0; k < 7; k++) {
-          const angle = Math.random() * Math.PI * 2;
-          const speed = 80 + Math.random() * 160;
-          state.embers.push({
-            x: cp.x,
-            y: cp.y,
-            vx: Math.cos(angle) * speed,
-            vy: Math.sin(angle) * speed,
-            age: 0,
-            lifetime: 0.5 + Math.random() * 0.3,
-          });
-        }
+        state.wires[state.cuttingWireIndex].cutMeltAge = 0;
+        // First wave of embers — the sever has begun.
+        spawnCutEmbers(state, cp, 5);
       }
       break;
     }
-    case "flash": {
-      const FLASH_SEC = 0.25;
-      if (state.cuttingSubAge >= FLASH_SEC) {
+    case "sever": {
+      const meltT = state.cuttingSubAge / SEVER_DURATION_SEC;
+      state.wires[state.cuttingWireIndex].cutMeltAge = state.cuttingSubAge;
+      // Continuous embers throughout the sever — a few per tick.
+      if (Math.random() < dt * 22) spawnCutEmbers(state, cp, 1);
+      // Halfway through, the rope actually detaches and a bright cut
+      // flash blooms.
+      if (meltT >= 0.55 && !state.wires[state.cuttingWireIndex].cut) {
+        const w = state.wires[state.cuttingWireIndex];
+        w.cut = true;
+        w.looseNodes = initRope(WIRES[state.cuttingWireIndex]);
+        w.loosePieceSegLen = ropeSegmentLength(WIRES[state.cuttingWireIndex]);
+        w.loosePieceAge = 0;
+        state.cutFlashes.push({ x: cp.x, y: cp.y, age: 0 });
+        triggerShake(state, 4, 0.16);
+        spawnCutEmbers(state, cp, 6);
+      }
+      if (state.cuttingSubAge >= SEVER_DURATION_SEC) {
+        state.wires[state.cuttingWireIndex].cutMeltAge = -1;
         state.cuttingSubPhase = "rest";
         state.cuttingSubAge = 0;
       }
       break;
     }
     case "rest": {
-      const REST_SEC = 0.25;
+      const REST_SEC = 0.2;
       if (state.cuttingSubAge >= REST_SEC) {
         state.cuttingWireIndex++;
         state.cuttingSubPhase = "travel";
@@ -650,9 +662,23 @@ function tickCutting(state: IntroState, dt: number): void {
     }
   }
 
-  // Age cut flashes.
   for (const f of state.cutFlashes) f.age += dt;
-  state.cutFlashes = state.cutFlashes.filter((f) => f.age < 0.35);
+  state.cutFlashes = state.cutFlashes.filter((f) => f.age < 0.45);
+}
+
+function spawnCutEmbers(state: IntroState, origin: { x: number; y: number }, count: number): void {
+  for (let k = 0; k < count; k++) {
+    const angle = Math.random() * Math.PI * 2;
+    const speed = 80 + Math.random() * 180;
+    state.embers.push({
+      x: origin.x,
+      y: origin.y,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      age: 0,
+      lifetime: 0.55 + Math.random() * 0.4,
+    });
+  }
 }
 
 function tickShards(state: IntroState, dt: number): void {
@@ -667,13 +693,93 @@ function tickShards(state: IntroState, dt: number): void {
   state.shards = state.shards.filter((s) => s.age < s.lifetime);
 }
 
+const ROPE_NODES = 12;
+const ROPE_GRAVITY = 1200;
+const ROPE_DAMPING = 0.985;
+const ROPE_CONSTRAINT_ITERS = 5;
+
+function initRope(wire: WireSpec): RopeNode[] {
+  // Sample the wire from the capsule attach end (t=1) inward to the
+  // cut point (t=CUT_T). Index 0 is the anchor (capsule), last node
+  // is the cut end (free).
+  const nodes: RopeNode[] = [];
+  for (let i = 0; i < ROPE_NODES; i++) {
+    const t = 1 - (1 - CUT_T) * (i / (ROPE_NODES - 1));
+    const p = wireBezier(wire, t);
+    // Tiny initial kick perpendicular to the wire so the chain doesn't
+    // sit in perfect mathematical alignment.
+    const tan = wireBezierTangent(wire, t);
+    const nudgeX = -tan.y * 0.4 * (Math.random() - 0.5);
+    const nudgeY = tan.x * 0.4 * (Math.random() - 0.5);
+    nodes.push({
+      x: p.x,
+      y: p.y,
+      prevX: p.x - nudgeX,
+      prevY: p.y - nudgeY,
+    });
+  }
+  return nodes;
+}
+
+function ropeSegmentLength(wire: WireSpec): number {
+  // Compute total arc length between sampled nodes, divide by segments.
+  let total = 0;
+  let prev = wireBezier(wire, 1);
+  for (let i = 1; i < ROPE_NODES; i++) {
+    const t = 1 - (1 - CUT_T) * (i / (ROPE_NODES - 1));
+    const p = wireBezier(wire, t);
+    total += Math.hypot(p.x - prev.x, p.y - prev.y);
+    prev = p;
+  }
+  return total / (ROPE_NODES - 1);
+}
+
 function tickLoosePieces(state: IntroState, dt: number): void {
-  for (const w of state.wires) {
-    if (w.loosePieceAge < 0) continue;
+  for (let i = 0; i < state.wires.length; i++) {
+    const w = state.wires[i];
+    if (!w.looseNodes || w.loosePieceAge < 0) continue;
     w.loosePieceAge += dt;
-    w.loosePieceVy += 380 * dt;
-    w.loosePieceYOffset += w.loosePieceVy * dt;
-    w.loosePieceRot += dt * 1.2;
+    const wireSpec = WIRES[i];
+    const nodes = w.looseNodes;
+    const segLen = w.loosePieceSegLen;
+    // Verlet integrate non-anchor nodes.
+    for (let k = 1; k < nodes.length; k++) {
+      const n = nodes[k];
+      const vx = (n.x - n.prevX) * ROPE_DAMPING;
+      const vy = (n.y - n.prevY) * ROPE_DAMPING;
+      n.prevX = n.x;
+      n.prevY = n.y;
+      n.x += vx;
+      n.y += vy + 0.5 * ROPE_GRAVITY * dt * dt;
+    }
+    // Pin anchor at the capsule attach point.
+    nodes[0].x = wireSpec.ax;
+    nodes[0].y = wireSpec.ay;
+    nodes[0].prevX = wireSpec.ax;
+    nodes[0].prevY = wireSpec.ay;
+    // Constraint passes.
+    for (let iter = 0; iter < ROPE_CONSTRAINT_ITERS; iter++) {
+      for (let k = 0; k < nodes.length - 1; k++) {
+        const a = nodes[k];
+        const b = nodes[k + 1];
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist < 0.001) continue;
+        const diff = (dist - segLen) / dist;
+        if (k === 0) {
+          b.x -= dx * diff;
+          b.y -= dy * diff;
+        } else {
+          a.x += dx * diff * 0.5;
+          a.y += dy * diff * 0.5;
+          b.x -= dx * diff * 0.5;
+          b.y -= dy * diff * 0.5;
+        }
+      }
+      nodes[0].x = wireSpec.ax;
+      nodes[0].y = wireSpec.ay;
+    }
   }
 }
 
@@ -1145,55 +1251,205 @@ function drawEmbers(ctx: CanvasRenderingContext2D, state: IntroState): void {
 function drawWires(ctx: CanvasRenderingContext2D, state: IntroState): void {
   ctx.save();
   ctx.lineCap = "round";
+  ctx.lineJoin = "round";
   for (let i = 0; i < WIRES.length; i++) {
     const w = WIRES[i];
     const s = state.wires[i];
-    const endT = s.cut ? 0.42 : 1;
-    // Outer dark stroke (cable casing).
-    ctx.strokeStyle = "rgba(18, 25, 40, 0.95)";
-    ctx.lineWidth = 4;
-    ctx.shadowBlur = 0;
-    drawWireBezier(ctx, w, 0, endT);
-    // Inner highlight — slim lighter line, sells the cable depth.
-    ctx.strokeStyle = "rgba(70, 90, 130, 0.55)";
-    ctx.lineWidth = 1.2;
-    drawWireBezier(ctx, w, 0, endT);
-    // Pre-cut glow at the cut point as the spark approaches.
-    if (
-      !s.cut &&
-      state.phase === "cutting" &&
-      i === state.cuttingWireIndex &&
-      state.cuttingSubPhase === "travel"
-    ) {
-      const t = Math.min(1, state.cuttingSubAge / 0.45);
-      const cp = wireBezier(w, 0.42);
-      ctx.strokeStyle = `rgba(165, 243, 252, ${0.4 * t})`;
-      ctx.lineWidth = 2.5;
-      ctx.shadowColor = "#a5f3fc";
-      ctx.shadowBlur = 10 * t;
-      ctx.beginPath();
-      ctx.arc(cp.x, cp.y, 8 + t * 4, 0, Math.PI * 2);
-      ctx.stroke();
-    }
+    // The wire's visible range. When the rope is fully released
+    // (post-sever), only the anchor-side stub stays; we still draw
+    // it up to the cut point so the connector at the ceiling /
+    // sidewall reads as "leftover hardware".
+    const endT = s.cut ? CUT_T : 1;
+    drawWireSegment(ctx, w, 0, endT, s, i, state);
+    // Connector at the capsule attach point — only while the wire
+    // hasn't been cut.
+    if (!s.cut) drawCapsuleConnector(ctx, w);
+    // Connector stub at the anchor end (visible regardless of cut
+    // state — represents the bolt where the wire enters the wall /
+    // ceiling).
+    drawAnchorConnector(ctx, w);
   }
   ctx.restore();
 }
 
-function drawWireBezier(
+function drawWireSegment(
   ctx: CanvasRenderingContext2D,
   wire: WireSpec,
   startT: number,
   endT: number,
+  s: WireState,
+  wireIndex: number,
+  state: IntroState,
 ): void {
-  const samples = 18;
-  ctx.beginPath();
+  // Sample the wire once + cache tangents so the four passes (dark
+  // outer / mid / highlight / ribs) all use the same geometry.
+  const samples = 26;
+  type S = { p: { x: number; y: number }; t: { x: number; y: number } };
+  const pts: S[] = [];
   for (let i = 0; i <= samples; i++) {
     const t = startT + (endT - startT) * (i / samples);
-    const p = wireBezier(wire, t);
-    if (i === 0) ctx.moveTo(p.x, p.y);
-    else ctx.lineTo(p.x, p.y);
+    pts.push({ p: wireBezier(wire, t), t: wireBezierTangent(wire, t) });
+  }
+
+  // Outer casing — thick dark stroke.
+  ctx.shadowBlur = 0;
+  ctx.strokeStyle = "rgba(14, 20, 32, 0.97)";
+  ctx.lineWidth = 5;
+  ctx.beginPath();
+  ctx.moveTo(pts[0].p.x, pts[0].p.y);
+  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].p.x, pts[i].p.y);
+  ctx.stroke();
+
+  // Mid stroke — slightly lighter, narrower, sells depth.
+  ctx.strokeStyle = "rgba(48, 60, 84, 0.75)";
+  ctx.lineWidth = 2.6;
+  ctx.beginPath();
+  ctx.moveTo(pts[0].p.x, pts[0].p.y);
+  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].p.x, pts[i].p.y);
+  ctx.stroke();
+
+  // Highlight on the upper-left side (offset perpendicular to tangent).
+  // The "side" we pick is consistent across the curve so the highlight
+  // tracks a single edge.
+  ctx.strokeStyle = "rgba(125, 160, 200, 0.45)";
+  ctx.lineWidth = 1.1;
+  ctx.beginPath();
+  for (let i = 0; i < pts.length; i++) {
+    const px = pts[i].p.x + -pts[i].t.y * 1.4;
+    const py = pts[i].p.y + pts[i].t.x * 1.4;
+    if (i === 0) ctx.moveTo(px, py);
+    else ctx.lineTo(px, py);
   }
   ctx.stroke();
+
+  // Rib ticks at regular t-intervals — short perpendicular slashes
+  // that sell cable segmentation.
+  ctx.strokeStyle = "rgba(2, 6, 12, 0.85)";
+  ctx.lineWidth = 1;
+  const ribStep = Math.max(2, Math.floor(samples / 9));
+  for (let i = ribStep; i < pts.length - 1; i += ribStep) {
+    const { p, t } = pts[i];
+    const nx = -t.y;
+    const ny = t.x;
+    ctx.beginPath();
+    ctx.moveTo(p.x - nx * 3.2, p.y - ny * 3.2);
+    ctx.lineTo(p.x + nx * 3.2, p.y + ny * 3.2);
+    ctx.stroke();
+  }
+
+  // Pre-cut glow + sever visuals — only on the active wire.
+  const isActive =
+    state.phase === "cutting" && wireIndex === state.cuttingWireIndex;
+  if (isActive && state.cuttingSubPhase === "travel" && !s.cut) {
+    const t = Math.min(1, state.cuttingSubAge / 0.5);
+    const cp = wireBezier(wire, CUT_T);
+    ctx.shadowColor = "#a5f3fc";
+    ctx.shadowBlur = 14 * t;
+    ctx.strokeStyle = `rgba(165, 243, 252, ${0.5 * t})`;
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.arc(cp.x, cp.y, 6 + t * 5, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+  }
+  if (isActive && state.cuttingSubPhase === "sever" && !s.cut) {
+    drawSeverEffect(ctx, wire, state.cuttingSubAge / SEVER_DURATION_SEC);
+  }
+  // After cut, while sever animation is still active on the stub, keep
+  // the molten cut edge glowing for a moment more.
+  if (s.cut && s.cutMeltAge >= 0) {
+    const t = s.cutMeltAge / SEVER_DURATION_SEC;
+    drawSeverEffect(ctx, wire, t);
+  }
+}
+
+function drawSeverEffect(
+  ctx: CanvasRenderingContext2D,
+  wire: WireSpec,
+  meltT: number,
+): void {
+  // The molten cut: a hot blob centered on the cut point, plus a
+  // perpendicular sever line that grows then fades.
+  const cp = wireBezier(wire, CUT_T);
+  const tan = wireBezierTangent(wire, CUT_T);
+  const nx = -tan.y;
+  const ny = tan.x;
+  ctx.save();
+  ctx.globalCompositeOperation = "lighter";
+  // Hot blob — grows for 60% of the phase then fades.
+  const blobT = Math.min(1, meltT * 1.4);
+  const blobAlpha = meltT < 0.55 ? 1 : Math.max(0, 1 - (meltT - 0.55) / 0.45);
+  const blobR = 6 + blobT * 10;
+  const blob = ctx.createRadialGradient(cp.x, cp.y, 0, cp.x, cp.y, blobR);
+  blob.addColorStop(0, `rgba(255, 255, 255, ${0.95 * blobAlpha})`);
+  blob.addColorStop(0.45, `rgba(165, 243, 252, ${0.55 * blobAlpha})`);
+  blob.addColorStop(1, "rgba(0, 229, 255, 0)");
+  ctx.fillStyle = blob;
+  ctx.beginPath();
+  ctx.arc(cp.x, cp.y, blobR, 0, Math.PI * 2);
+  ctx.fill();
+  // Sever line — perpendicular to wire, ±10 px at peak, fades out.
+  const lineLen = 4 + meltT * 14;
+  const lineAlpha = meltT < 0.4 ? meltT / 0.4 : Math.max(0, 1 - (meltT - 0.4) / 0.6);
+  ctx.strokeStyle = `rgba(255, 255, 255, ${lineAlpha})`;
+  ctx.shadowColor = "#a5f3fc";
+  ctx.shadowBlur = 12;
+  ctx.lineWidth = 1.6;
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  ctx.moveTo(cp.x - nx * lineLen, cp.y - ny * lineLen);
+  ctx.lineTo(cp.x + nx * lineLen, cp.y + ny * lineLen);
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawCapsuleConnector(
+  ctx: CanvasRenderingContext2D,
+  wire: WireSpec,
+): void {
+  // A small metallic plug at the capsule attach point oriented along
+  // the wire's tangent.
+  const tan = wireBezierTangent(wire, 1);
+  ctx.save();
+  ctx.translate(wire.ax, wire.ay);
+  ctx.rotate(Math.atan2(tan.y, tan.x));
+  // Cylinder body
+  ctx.fillStyle = "rgba(48, 62, 88, 0.95)";
+  ctx.fillRect(-7, -5, 14, 10);
+  // Inner darker slot
+  ctx.fillStyle = "rgba(8, 12, 22, 0.95)";
+  ctx.fillRect(-5, -3, 4, 6);
+  // Bolt heads on either side
+  ctx.fillStyle = "rgba(140, 160, 190, 0.6)";
+  ctx.beginPath();
+  ctx.arc(3, -3, 1.4, 0, Math.PI * 2);
+  ctx.arc(3, 3, 1.4, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawAnchorConnector(
+  ctx: CanvasRenderingContext2D,
+  wire: WireSpec,
+): void {
+  // The anchor end already shows hooks (for suspend wires) drawn in
+  // the ceiling pass. For feeds going into the wall, draw a small
+  // bolt cap so the wire visibly "plugs in".
+  if (wire.kind === "feed") {
+    ctx.save();
+    ctx.fillStyle = "rgba(48, 62, 88, 0.95)";
+    const isLeft = wire.bx < CANVAS_W / 2;
+    const w = 12;
+    const h = 8;
+    const x = wire.bx - (isLeft ? w : 0);
+    const y = wire.by - h / 2;
+    ctx.fillRect(x, y, w, h);
+    ctx.fillStyle = "rgba(140, 160, 190, 0.55)";
+    ctx.beginPath();
+    ctx.arc(x + (isLeft ? 3 : w - 3), y + h / 2, 1.4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
 }
 
 function wireBezier(w: WireSpec, t: number): { x: number; y: number } {
@@ -1206,49 +1462,76 @@ function wireBezier(w: WireSpec, t: number): { x: number; y: number } {
   return { x, y };
 }
 
+function wireBezierTangent(w: WireSpec, t: number): { x: number; y: number } {
+  // Quadratic Bezier derivative, then normalised. P0 = (bx,by),
+  // P1 = control point, P2 = (ax,ay), with t=0 at P0 and t=1 at P2.
+  const cpX = (w.ax + w.bx) / 2;
+  const cpY = (w.ay + w.by) / 2 + w.cpYOffset;
+  const tx = 2 * (1 - t) * (cpX - w.bx) + 2 * t * (w.ax - cpX);
+  const ty = 2 * (1 - t) * (cpY - w.by) + 2 * t * (w.ay - cpY);
+  const len = Math.hypot(tx, ty) || 1;
+  return { x: tx / len, y: ty / len };
+}
+
 function drawLoosePieces(
   ctx: CanvasRenderingContext2D,
   state: IntroState,
 ): void {
   ctx.save();
   ctx.lineCap = "round";
-  for (let i = 0; i < WIRES.length; i++) {
-    const w = WIRES[i];
+  ctx.lineJoin = "round";
+  for (let i = 0; i < state.wires.length; i++) {
     const s = state.wires[i];
-    if (s.loosePieceAge < 0) continue;
-    const u = Math.min(1, s.loosePieceAge / 1.5);
+    if (!s.looseNodes || s.loosePieceAge < 0) continue;
+    const nodes = s.looseNodes;
+    // Fade across ~1.8 s so the wire visibly settles before vanishing.
+    const u = Math.min(1, s.loosePieceAge / 1.8);
     ctx.globalAlpha = 1 - u;
-    ctx.save();
-    ctx.translate(w.ax, w.ay + s.loosePieceYOffset);
-    ctx.rotate(s.loosePieceRot);
-    ctx.strokeStyle = "rgba(18, 25, 40, 0.95)";
-    ctx.lineWidth = 4;
-    ctx.beginPath();
-    const samples = 12;
-    for (let k = 0; k <= samples; k++) {
-      const t = 0.42 + (1 - 0.42) * (k / samples);
-      const p = wireBezier(w, t);
-      const lx = p.x - w.ax;
-      const ly = p.y - w.ay;
-      if (k === 0) ctx.moveTo(lx, ly);
-      else ctx.lineTo(lx, ly);
+    // Outer casing.
+    ctx.strokeStyle = "rgba(14, 20, 32, 0.97)";
+    ctx.lineWidth = 4.4;
+    ctx.shadowBlur = 0;
+    drawPolyline(ctx, nodes);
+    // Mid stroke.
+    ctx.strokeStyle = "rgba(48, 60, 84, 0.75)";
+    ctx.lineWidth = 2.3;
+    drawPolyline(ctx, nodes);
+    // Bright cut-end glow on the last node — fades quickly as the
+    // freshly severed end cools.
+    const cutEnd = nodes[nodes.length - 1];
+    const glowT = Math.max(0, 1 - s.loosePieceAge / 0.6);
+    if (glowT > 0) {
+      ctx.fillStyle = `rgba(255, 255, 255, ${0.7 * glowT})`;
+      ctx.shadowColor = "#a5f3fc";
+      ctx.shadowBlur = 10 * glowT;
+      ctx.beginPath();
+      ctx.arc(cutEnd.x, cutEnd.y, 2.4 + glowT * 1.6, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.shadowBlur = 0;
     }
-    ctx.stroke();
-    ctx.strokeStyle = "rgba(70, 90, 130, 0.55)";
-    ctx.lineWidth = 1.2;
-    ctx.beginPath();
-    for (let k = 0; k <= samples; k++) {
-      const t = 0.42 + (1 - 0.42) * (k / samples);
-      const p = wireBezier(w, t);
-      const lx = p.x - w.ax;
-      const ly = p.y - w.ay;
-      if (k === 0) ctx.moveTo(lx, ly);
-      else ctx.lineTo(lx, ly);
-    }
-    ctx.stroke();
-    ctx.restore();
   }
   ctx.restore();
+}
+
+function drawPolyline(
+  ctx: CanvasRenderingContext2D,
+  nodes: RopeNode[],
+): void {
+  if (nodes.length < 2) return;
+  ctx.beginPath();
+  ctx.moveTo(nodes[0].x, nodes[0].y);
+  // Use quadratic curve smoothing between adjacent nodes for a softer
+  // line — the verlet chain points are visibly polygonal otherwise.
+  for (let i = 1; i < nodes.length - 1; i++) {
+    const a = nodes[i];
+    const b = nodes[i + 1];
+    const mx = (a.x + b.x) / 2;
+    const my = (a.y + b.y) / 2;
+    ctx.quadraticCurveTo(a.x, a.y, mx, my);
+  }
+  // Last segment straight to the end node.
+  ctx.lineTo(nodes[nodes.length - 1].x, nodes[nodes.length - 1].y);
+  ctx.stroke();
 }
 
 function drawCapsuleLightBeam(ctx: CanvasRenderingContext2D, state: IntroState): void {
@@ -1411,74 +1694,73 @@ function drawCapsuleCracks(ctx: CanvasRenderingContext2D, state: IntroState): vo
 }
 
 function drawHeroOrb(ctx: CanvasRenderingContext2D, state: IntroState): void {
-  // Mirrors the in-game eye structure so the wake-up reads as the same
-  // hero. Outer white ring, iris, pupil. Eye open amount controls the
-  // vertical scale of the iris/pupil (closed = horizontal slit).
+  // Empty-shell hero. Dormant state shows only the outer ring with
+  // pure darkness inside — the body is a vessel, vacant. As the spark
+  // merges (eyeOpen rises), the inner darkness gives way to an iris
+  // and pupil; the body becomes the awakened eye-orb seen in-game.
   ctx.save();
   ctx.translate(CAPSULE_CX, CAPSULE_CY);
 
-  // Subtle breathing — applies to the whole orb when dormant.
-  const breath = state.eyeOpen < 0.05
-    ? 1 + Math.sin(state.heroBreath * 1.6) * 0.025
-    : 1;
+  // Subtle breathing only while fully dormant — the empty shell still
+  // pulses faintly under stasis.
+  const dormant = state.eyeOpen < 0.05;
+  const breath = dormant ? 1 + Math.sin(state.heroBreath * 1.6) * 0.025 : 1;
   ctx.scale(breath, breath);
 
-  // Dormant glow halo (fades out as the eye opens fully).
-  const dormantAlpha = 1 - state.eyeOpen;
-  if (dormantAlpha > 0) {
-    const halo = ctx.createRadialGradient(0, 0, 0, 0, 0, HERO_OUTER_R * 2.4);
-    halo.addColorStop(0, `rgba(125, 211, 252, ${0.25 * dormantAlpha})`);
-    halo.addColorStop(1, "rgba(125, 211, 252, 0)");
-    ctx.fillStyle = halo;
+  // Inner void — dark fill that occupies the shell interior when
+  // dormant. Fades out as the iris fills in.
+  const voidAlpha = 1 - state.eyeOpen;
+  if (voidAlpha > 0) {
+    ctx.fillStyle = `rgba(2, 4, 8, ${0.85 * voidAlpha})`;
+    ctx.shadowBlur = 0;
     ctx.beginPath();
-    ctx.arc(0, 0, HERO_OUTER_R * 2.4, 0, Math.PI * 2);
+    ctx.arc(0, 0, HERO_OUTER_R - 1.5, 0, Math.PI * 2);
     ctx.fill();
   }
 
-  // Outer ring (white) — always visible.
-  const ringAlpha = 0.6 + state.eyeOpen * 0.4;
+  // Outer ring — dim white outline when dormant, brightens on awaken.
+  const ringAlpha = 0.45 + state.eyeOpen * 0.55;
   ctx.strokeStyle = `rgba(255, 255, 255, ${ringAlpha})`;
   ctx.shadowColor = "#ffffff";
-  ctx.shadowBlur = state.eyeOpen > 0.5 ? 10 : 4;
+  ctx.shadowBlur = state.eyeOpen > 0.4 ? 12 : 3;
   ctx.lineWidth = 2.4;
   ctx.beginPath();
   ctx.arc(0, 0, HERO_OUTER_R, 0, Math.PI * 2);
   ctx.stroke();
 
-  // Iris — scale Y by open amount so closed = horizontal slit.
-  const irisYScale = 0.08 + state.eyeOpen * 0.92;
-  ctx.save();
-  ctx.scale(1, irisYScale);
-  // Iris fill.
-  const flicker = state.eyeOpen < 0.05
-    ? 0.3 + Math.sin(state.heroFlicker * 4) * 0.05
-    : 0.85;
-  ctx.fillStyle = state.eyeOpen > 0.4
-    ? `rgba(125, 211, 252, ${0.85})`
-    : `rgba(125, 211, 252, ${flicker})`;
-  ctx.shadowColor = "#7dd3fc";
-  ctx.shadowBlur = 8;
-  ctx.beginPath();
-  ctx.arc(0, 0, HERO_IRIS_R, 0, Math.PI * 2);
-  ctx.fill();
-  // Iris outline.
-  ctx.strokeStyle = `rgba(255, 255, 255, ${0.6 + state.eyeOpen * 0.4})`;
-  ctx.lineWidth = 1.4 / Math.max(0.1, irisYScale);
-  ctx.beginPath();
-  ctx.arc(0, 0, HERO_IRIS_R, 0, Math.PI * 2);
-  ctx.stroke();
-  // Pupil — only after eye is more than 40% open.
-  if (state.eyeOpen > 0.4) {
-    const pupilT = (state.eyeOpen - 0.4) / 0.6;
+  // Iris reveal — only once the spark has begun merging (eyeOpen > 0).
+  // The iris is drawn at full circular shape but with alpha tied to
+  // eyeOpen, so it FILLS IN rather than opening like an eyelid (which
+  // suited the previous design but didn't match "spark filling an
+  // empty shell").
+  if (state.eyeOpen > 0.02) {
+    const irisAlpha = Math.min(1, state.eyeOpen * 1.1);
+    ctx.fillStyle = `rgba(125, 211, 252, ${0.85 * irisAlpha})`;
+    ctx.shadowColor = "#7dd3fc";
+    ctx.shadowBlur = 10 * irisAlpha;
+    ctx.beginPath();
+    ctx.arc(0, 0, HERO_IRIS_R, 0, Math.PI * 2);
+    ctx.fill();
+    // Iris outline
+    ctx.strokeStyle = `rgba(255, 255, 255, ${0.4 * irisAlpha})`;
+    ctx.shadowBlur = 0;
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.arc(0, 0, HERO_IRIS_R, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
+  // Pupil — appears in the second half of the awakening, scales in.
+  if (state.eyeOpen > 0.45) {
+    const pupilT = (state.eyeOpen - 0.45) / 0.55;
     ctx.fillStyle = `rgba(10, 14, 26, ${pupilT})`;
     ctx.shadowBlur = 0;
     ctx.beginPath();
-    ctx.arc(0, 0, HERO_PUPIL_R * (0.6 + pupilT * 0.4), 0, Math.PI * 2);
+    ctx.arc(0, 0, HERO_PUPIL_R * (0.55 + pupilT * 0.45), 0, Math.PI * 2);
     ctx.fill();
   }
-  ctx.restore();
 
-  // Awaken halo — bright cyan glow on full open.
+  // Awaken halo — bright cyan glow once the eye is mostly filled.
   if (state.eyeOpen > 0.65) {
     const t = (state.eyeOpen - 0.65) / 0.35;
     const halo = ctx.createRadialGradient(0, 0, 0, 0, 0, HERO_OUTER_R * 3.5);
