@@ -1873,10 +1873,11 @@ export function start(canvas: HTMLCanvasElement): void {
     // Minimalist world-space grid. Clamped to the room's logical
     // bounds so it stops at the perimeter walls and never bleeds into
     // the letterbox.
-    const _gridW = currentRoom.width ?? ROOM_W_PX;
-    const _gridH = currentRoom.height ?? ROOM_H_PX;
-    drawRoomGrid(ctx, _gridW, _gridH);
-    bgFx.drawGridPulse(ctx, _gridW, _gridH);
+    drawRoomGrid(
+      ctx,
+      currentRoom.width ?? ROOM_W_PX,
+      currentRoom.height ?? ROOM_H_PX,
+    );
 
     drawWalls(ctx, currentRoom.walls);
     if (currentRoom.door) drawDoor(ctx, currentRoom.door);
@@ -1924,22 +1925,17 @@ export function start(canvas: HTMLCanvasElement): void {
       ctx.drawImage(bulletSprite, b.x - bulletOffset, b.y - bulletOffset);
     }
 
-    // particles — same hoisting pattern. Color changes per particle
-    // so we can't hoist fillStyle, but we drop the per-particle
-    // save/restore and the second drawNeon pass.
-    const useNeon = particles.length < 50;
+    // particles — flat path always; per-particle shadowBlur was a
+    // major frame-cost spike during combat. Particles are tiny and
+    // short-lived, the glow lift isn't worth the cost.
     ctx.save();
-    if (!useNeon) ctx.shadowBlur = 0;
+    ctx.shadowBlur = 0;
     for (const p of particles) {
       const t = p.age / p.lifetime;
       const alpha = t < 0.5 ? 1 : Math.max(0, 1 - (t - 0.5) * 2);
       const sz = Math.max(0.5, p.initialSize * (1 - t));
       ctx.globalAlpha = alpha;
       ctx.fillStyle = p.color;
-      if (useNeon) {
-        ctx.shadowColor = p.color;
-        ctx.shadowBlur = p.glowStrong;
-      }
       ctx.fillRect(p.x - sz / 2, p.y - sz / 2, sz, sz);
     }
     ctx.restore();

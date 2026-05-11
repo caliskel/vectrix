@@ -33,11 +33,17 @@ export interface PostOptions {
   caStrength: number;
 }
 
+// Post-processing currently disabled — bloom + CA each cost a fullscreen
+// drawImage with a GPU filter, and on a 2-megapixel canvas this was
+// eating 5–10 ms / frame on integrated GPUs once the rest of the scene
+// (enemies, bullets, walls with shadowBlur) was already heavy. We kept
+// the module wired so re-enabling is a one-line strength bump without
+// touching render order.
 export const DEFAULT_POST: PostOptions = {
-  bloomBlurPx: 6,
-  bloomStrength: 0.04,
-  caOffsetPx: 1.2,
-  caStrength: 0.06,
+  bloomBlurPx: 0,
+  bloomStrength: 0,
+  caOffsetPx: 0,
+  caStrength: 0,
 };
 
 export class PostProcessor {
@@ -53,6 +59,14 @@ export class PostProcessor {
   }
 
   apply(target: CanvasRenderingContext2D, opts: PostOptions = DEFAULT_POST): void {
+    // Early-out if both effects are off — saves one fullscreen
+    // drawImage to the scratch buffer per frame.
+    if (
+      (opts.bloomStrength <= 0 || opts.bloomBlurPx <= 0) &&
+      (opts.caStrength <= 0 || opts.caOffsetPx <= 0)
+    ) {
+      return;
+    }
     const canvas = target.canvas;
     const w = canvas.width;
     const h = canvas.height;

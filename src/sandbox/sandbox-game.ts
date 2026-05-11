@@ -40,6 +40,7 @@ import {
   type KeybindProfile,
 } from "../lib/keybinds";
 import { BackgroundFx } from "../lib/bg-fx";
+import { drawFpsOverlay, recordFrame } from "../lib/fps-meter";
 import { createSandboxPauseMenu } from "../lib/pause-menu";
 import { PostProcessor, DEFAULT_POST } from "../lib/postprocess";
 import { createMenu } from "../lib/settings-menu";
@@ -965,6 +966,7 @@ function endRun(reason: "timeout" | "ko") {
 let lastTime = performance.now();
 
 function frame(now: number) {
+  recordFrame(now);
   let dt = (now - lastTime) / 1000;
   lastTime = now;
   if (dt > 0.05) dt = 0.05;
@@ -1399,7 +1401,6 @@ function render() {
   if (gridCanvas) {
     ctx.drawImage(gridCanvas, 0, 0, viewW, viewH);
   }
-  bgFx.drawGridPulse(ctx, viewW, viewH);
   bgFx.drawFront(ctx);
 
   ctx.save();
@@ -1460,31 +1461,20 @@ function render() {
     );
   }
 
-  // particles — neon only when there's a manageable number on screen
-  const particlesGetNeon = particles.length < 50;
+  // particles — flat path always; shadowBlur per-particle was the
+  // single most expensive thing in the sandbox loop. Particles are
+  // small + short-lived so the glow lift is barely visible anyway.
+  ctx.save();
+  ctx.shadowBlur = 0;
   for (const p of particles) {
     const t = p.age / p.lifetime;
-    // first half stays at full alpha, then linearly fades to 0
     const alpha = t < 0.5 ? 1 : Math.max(0, 1 - (t - 0.5) * 2);
     const sz = Math.max(0.5, p.initialSize * (1 - t));
-    ctx.save();
     ctx.globalAlpha = alpha;
-    if (particlesGetNeon) {
-      drawNeon(
-        () => {
-          ctx.fillStyle = p.color;
-          ctx.fillRect(p.x - sz / 2, p.y - sz / 2, sz, sz);
-        },
-        p.color,
-        p.glowStrong,
-        p.glowSoft,
-      );
-    } else {
-      ctx.fillStyle = p.color;
-      ctx.fillRect(p.x - sz / 2, p.y - sz / 2, sz, sz);
-    }
-    ctx.restore();
+    ctx.fillStyle = p.color;
+    ctx.fillRect(p.x - sz / 2, p.y - sz / 2, sz, sz);
   }
+  ctx.restore();
 
   // player — eye-orb with pupil tracking the nearest bullet
   const pSize = PLAYER_SIZE;
@@ -1619,6 +1609,7 @@ function render() {
 
   drawHUD();
   drawGodModeBadge(ctx, viewW);
+  drawFpsOverlay(ctx, viewW);
 
   // bullet-breaker bottom progress bar — full-width "you're in power mode" cue
   if (state.effects.breaker) {

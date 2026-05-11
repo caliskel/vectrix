@@ -87,6 +87,7 @@ import {
   updateEye,
 } from "../lib/player";
 import { BackgroundFx } from "../lib/bg-fx";
+import { drawFpsOverlay, recordFrame } from "../lib/fps-meter";
 import { createPauseMenu } from "../lib/pause-menu";
 import { PostProcessor, DEFAULT_POST } from "../lib/postprocess";
 import { type Bounds, hitBounds } from "../lib/types";
@@ -1245,6 +1246,7 @@ export function start(canvas: HTMLCanvasElement): void {
   let lastTime = performance.now();
 
   function frame(now: number) {
+    recordFrame(now);
     let dt = (now - lastTime) / 1000;
     lastTime = now;
     if (dt > 0.05) dt = 0.05;
@@ -1937,10 +1939,11 @@ export function start(canvas: HTMLCanvasElement): void {
     // Minimalist world-space grid. Clamped to the room's logical
     // bounds so it stops at the perimeter walls and never bleeds into
     // the letterbox.
-    const _gridW = currentRoom.width ?? ROOM_W_PX;
-    const _gridH = currentRoom.height ?? ROOM_H_PX;
-    drawRoomGrid(ctx, _gridW, _gridH);
-    bgFx.drawGridPulse(ctx, _gridW, _gridH);
+    drawRoomGrid(
+      ctx,
+      currentRoom.width ?? ROOM_W_PX,
+      currentRoom.height ?? ROOM_H_PX,
+    );
 
     drawWalls(ctx, currentRoom.walls);
     if (currentRoom.door) drawDoor(ctx, currentRoom.door);
@@ -1998,31 +2001,20 @@ export function start(canvas: HTMLCanvasElement): void {
       );
     }
 
-    // particles
-    const useNeon = particles.length < 50;
+    // particles — flat path always; per-particle shadowBlur was a
+    // major frame-cost spike. Tutorial uses the same simplification
+    // as the rooms loop.
+    ctx.save();
+    ctx.shadowBlur = 0;
     for (const p of particles) {
       const t = p.age / p.lifetime;
       const alpha = t < 0.5 ? 1 : Math.max(0, 1 - (t - 0.5) * 2);
       const sz = Math.max(0.5, p.initialSize * (1 - t));
-      ctx.save();
       ctx.globalAlpha = alpha;
-      if (useNeon) {
-        drawNeon(
-          ctx,
-          () => {
-            ctx.fillStyle = p.color;
-            ctx.fillRect(p.x - sz / 2, p.y - sz / 2, sz, sz);
-          },
-          p.color,
-          p.glowStrong,
-          p.glowSoft,
-        );
-      } else {
-        ctx.fillStyle = p.color;
-        ctx.fillRect(p.x - sz / 2, p.y - sz / 2, sz, sz);
-      }
-      ctx.restore();
+      ctx.fillStyle = p.color;
+      ctx.fillRect(p.x - sz / 2, p.y - sz / 2, sz, sz);
     }
+    ctx.restore();
 
     // player
     const pSize = PLAYER_SIZE;
@@ -2178,6 +2170,7 @@ export function start(canvas: HTMLCanvasElement): void {
     drawHUD();
     drawTutorialHint();
     drawGodModeBadge(ctx, viewW);
+    drawFpsOverlay(ctx, viewW);
 
     if (state.runState === "failed") drawFailedOverlay();
     // The "completed" runState is rendered by a DOM overlay
