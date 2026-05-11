@@ -727,7 +727,7 @@ export function start(canvas: HTMLCanvasElement): void {
     syncRoomFx();
   }
 
-  function transitionToRoom(id: string) {
+  function transitionToRoom(id: string, viaBack = false) {
     const next = rooms.get(id);
     if (!next) return;
     currentRoom = next;
@@ -737,7 +737,24 @@ export function start(canvas: HTMLCanvasElement): void {
     lasers = [];
     currentKey = null;
     keyHeld = false;
-    spawnPlayerInCurrentRoom();
+    if (viaBack) {
+      // Returning to a previously-visited room — drop the player just
+      // inside the forward door rather than at the default spawn so
+      // they don't have to walk the full room again. The forward door
+      // sits on the right wall; back-spawn is 60 px to its left along
+      // its y, which clears both the door rect and the wall thickness.
+      const fwd = currentRoom.door;
+      if (fwd) {
+        player.x = fwd.x - 60;
+        player.y = fwd.y;
+        player.vx = 0;
+        player.vy = 0;
+      } else {
+        spawnPlayerInCurrentRoom();
+      }
+    } else {
+      spawnPlayerInCurrentRoom();
+    }
     applyInitialKey();
     snapCameraToRoom();
     syncRoomFx();
@@ -1279,6 +1296,9 @@ export function start(canvas: HTMLCanvasElement): void {
 
     if (currentRoom.door && currentRoom.door.state === "open") {
       currentRoom.door.pulse += dt;
+    }
+    if (currentRoom.backDoor && currentRoom.backDoor.state === "open") {
+      currentRoom.backDoor.pulse += dt;
     }
 
     if (state.runState === "failed" || state.runState === "completed") {
@@ -1991,6 +2011,15 @@ export function start(canvas: HTMLCanvasElement): void {
     ) {
       transitionToRoom(currentRoom.nextRoomId);
     }
+    // back-door overlap → return to previous room
+    if (
+      currentRoom.backDoor &&
+      currentRoom.backDoor.state === "open" &&
+      currentRoom.prevRoomId &&
+      playerOverlapsDoor(currentRoom.backDoor, player.x, player.y, half)
+    ) {
+      transitionToRoom(currentRoom.prevRoomId, true);
+    }
 
     // follow camera — always centred on the player. Runs even on
     // the failed-overlay branch since the eye still updates there
@@ -2074,6 +2103,7 @@ export function start(canvas: HTMLCanvasElement): void {
     drawWalls(ctx, currentRoom.walls);
     drawWallOverlay(ctx, wallFx, currentRoom.walls);
     if (currentRoom.door) drawDoor(ctx, currentRoom.door);
+    if (currentRoom.backDoor) drawDoor(ctx, currentRoom.backDoor);
 
     // detection rings (drawn under everything so they read as a
     // ground-level radar pulse, not an overlay on top of the enemy)

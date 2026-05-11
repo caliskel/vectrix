@@ -875,23 +875,47 @@ export function start(canvas: HTMLCanvasElement): void {
   let room4FadeOut = 0;
   let room4Redirected = false;
   const outroBg: VoidBgState = createVoidBg(ROOM_W_PX, ROOM_H_PX);
-  const OUTRO_BEATS: { text: string; typeStart: number; typeDuration: number; holdDuration: number; fadeDuration: number }[] = [
+  // Each beat now reverse-types itself out during the trailing
+  // `eraseDuration` window (chars removed from the end at a fixed
+  // pace, matching the in-arena background-text feel). The pause
+  // between beat 1's last-erased char and beat 2's first-typed char
+  // is now ~1.7 s of held darkness instead of an instant cut.
+  const OUTRO_BEAT_ERASE_SPEED_MS = 38;
+  type OutroBeat = {
+    text: string;
+    typeStart: number;
+    typeDuration: number;
+    holdDuration: number;
+    eraseDuration: number;
+  };
+  const OUTRO_BEATS: OutroBeat[] = [
     {
       text: "Well done. You handled the first task.",
       typeStart: 1.4,
       typeDuration: 2.5,
       holdDuration: 1.6,
-      fadeDuration: 0.45,
+      eraseDuration: 0,
     },
     {
       text: "Now go and kill the Sentinel.",
-      typeStart: 6.5,
+      typeStart: 8.6,
       typeDuration: 2.0,
       holdDuration: 1.8,
-      fadeDuration: 0.5,
+      eraseDuration: 0,
     },
   ];
-  const OUTRO_NARRATION_END_SEC = 11.5;
+  // Length-aware erase windows so each beat reverse-types itself at a
+  // consistent pace regardless of length.
+  for (const beat of OUTRO_BEATS) {
+    beat.eraseDuration = (beat.text.length * OUTRO_BEAT_ERASE_SPEED_MS) / 1000;
+  }
+  const OUTRO_NARRATION_END_SEC = 14.0;
+  // Black dim that ramps up over beat 1's erase, holds during the
+  // inter-beat pause, then lifts as beat 2 starts typing. Sells the
+  // pause as "the lights are dimming between thoughts" instead of an
+  // empty void interlude.
+  const OUTRO_DIM_MAX = 0.55;
+  const OUTRO_DIM_LIFT_SEC = 0.6;
   // Long, deliberate fade — the hand-off into /rooms.html should feel
   // like the camera slowly closing its eyes, not a cut. Paired with
   // rooms-game's own fade-in from black (gated on the
@@ -2182,6 +2206,15 @@ export function start(canvas: HTMLCanvasElement): void {
     const focalX = ROOM_W_PX / 2;
     const focalY = ROOM_H_PX / 2;
     drawVoidBg(ctx, outroBg, ROOM_W_PX, ROOM_H_PX, focalX, focalY);
+    // Inter-beat dim — black overlay between beat 1's erase and beat
+    // 2's typing-in so the pause feels like the lights are dimming.
+    const dim = computeOutroDim();
+    if (dim > 0) {
+      ctx.save();
+      ctx.fillStyle = `rgba(0, 0, 0, ${dim})`;
+      ctx.fillRect(0, 0, ROOM_W_PX, ROOM_H_PX);
+      ctx.restore();
+    }
     // Hero at spawn (room centre). Standard gameplay render so the
     // body stays consistent with what the player just saw in the
     // tutorial rooms.
@@ -2214,10 +2247,10 @@ export function start(canvas: HTMLCanvasElement): void {
     topY: number,
   ): void {
     const t = room4Age;
-    let active: typeof OUTRO_BEATS[number] | null = null;
+    let active: OutroBeat | null = null;
     for (const beat of OUTRO_BEATS) {
       const end =
-        beat.typeStart + beat.typeDuration + beat.holdDuration + beat.fadeDuration;
+        beat.typeStart + beat.typeDuration + beat.holdDuration + beat.eraseDuration;
       if (t >= beat.typeStart && t < end) {
         active = beat;
         break;
@@ -2226,28 +2259,37 @@ export function start(canvas: HTMLCanvasElement): void {
     if (!active) return;
 
     const rel = t - active.typeStart;
-    const typedT = Math.min(1, rel / active.typeDuration);
-    const charsVisible = Math.max(
-      0,
-      Math.min(active.text.length, Math.floor(active.text.length * typedT)),
-    );
+    const holdEnd = active.typeDuration + active.holdDuration;
+    let charsVisible: number;
+    if (rel < active.typeDuration) {
+      // typing in
+      const typedT = Math.min(1, rel / active.typeDuration);
+      charsVisible = Math.floor(active.text.length * typedT);
+    } else if (rel < holdEnd) {
+      // holding full text
+      charsVisible = active.text.length;
+    } else {
+      // reverse-typing out — chars dropped from the end at a fixed pace
+      const eraseRel = rel - holdEnd;
+      const erased = Math.floor(
+        eraseRel / (OUTRO_BEAT_ERASE_SPEED_MS / 1000),
+      );
+      charsVisible = Math.max(0, active.text.length - erased);
+      if (charsVisible <= 0) return;
+    }
     const partial = active.text.slice(0, charsVisible);
 
-    let alpha = 1;
+    // Soft fade-in still applies during the first 0.25 s of the beat
+    // so the line doesn't snap on. No alpha drop at the end — the
+    // erase is the disappear animation.
     const fadeInSec = 0.25;
-    if (rel < fadeInSec) alpha = rel / fadeInSec;
-    const holdEnd = active.typeDuration + active.holdDuration;
-    if (rel > holdEnd) {
-      alpha = Math.min(
-        alpha,
-        Math.max(0, 1 - (rel - holdEnd) / active.fadeDuration),
-      );
-    }
+    const alpha = rel < fadeInSec ? rel / fadeInSec : 1;
     if (alpha <= 0) return;
 
     const showCursor =
-      rel < holdEnd &&
-      (rel < active.typeDuration || Math.floor(rel * 2.5) % 2 === 0);
+      rel < holdEnd
+        ? rel < active.typeDuration || Math.floor(rel * 2.5) % 2 === 0
+        : true; // keep cursor visible during erase — reads as "writer's backspace"
     const display = partial + (showCursor ? "▍" : "");
 
     ctx2.save();
@@ -2261,6 +2303,28 @@ export function start(canvas: HTMLCanvasElement): void {
     ctx2.shadowBlur = 12;
     ctx2.fillText(display, centerX, topY);
     ctx2.restore();
+  }
+
+  // Black dim overlay alpha for the inter-beat pause. Lifts smoothly
+  // from the moment beat 1 starts erasing through to OUTRO_DIM_LIFT_SEC
+  // after beat 2 begins typing.
+  function computeOutroDim(): number {
+    const beat1 = OUTRO_BEATS[0];
+    const beat2 = OUTRO_BEATS[1];
+    const beat1HoldEnd = beat1.typeStart + beat1.typeDuration + beat1.holdDuration;
+    const beat1End = beat1HoldEnd + beat1.eraseDuration;
+    const beat2Settle = beat2.typeStart + OUTRO_DIM_LIFT_SEC;
+    const t = room4Age;
+    if (t <= beat1HoldEnd) return 0;
+    if (t >= beat2Settle) return 0;
+    // Ramp up over beat 1's erase window
+    if (t < beat1End) {
+      return OUTRO_DIM_MAX * ((t - beat1HoldEnd) / beat1.eraseDuration);
+    }
+    // Hold flat during the gap
+    if (t < beat2.typeStart) return OUTRO_DIM_MAX;
+    // Lift over the first OUTRO_DIM_LIFT_SEC of beat 2 typing
+    return OUTRO_DIM_MAX * (1 - (t - beat2.typeStart) / OUTRO_DIM_LIFT_SEC);
   }
 
   function render() {

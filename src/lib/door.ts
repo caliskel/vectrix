@@ -13,6 +13,10 @@ export type Door = {
   /** When true the door also requires the player to be holding a key
    *  to open. Combined with the existing "all enemies dead" gate. */
   requiresKey: boolean;
+  /** Flip the open-state arrow so it points left instead of right.
+   *  Used by back doors on the left wall of a room — same visual
+   *  language as the forward door, just mirrored. */
+  flipped?: boolean;
 };
 
 export function makeDoor(
@@ -22,8 +26,9 @@ export function makeDoor(
   h: number,
   initial: DoorState = "closed",
   requiresKey = false,
+  flipped = false,
 ): Door {
-  return { x, y, w, h, state: initial, pulse: 0, requiresKey };
+  return { x, y, w, h, state: initial, pulse: 0, requiresKey, flipped };
 }
 
 export function playerOverlapsDoor(
@@ -99,9 +104,11 @@ export function drawDoor(ctx: CanvasRenderingContext2D, door: Door): void {
     }
     ctx.restore();
   } else {
-    // pulsing arrow → toward next room
+    // pulsing arrow → toward the room this door leads to. Back doors
+    // flip horizontally so the arrow points left.
     const phase = (Math.sin(door.pulse * 5) + 1) / 2; // 0..1
     const alpha = 0.55 + 0.4 * phase;
+    const dir = door.flipped ? -1 : 1;
     drawNeon(
       ctx,
       () => {
@@ -115,9 +122,9 @@ export function drawDoor(ctx: CanvasRenderingContext2D, door: Door): void {
         const cy = door.y;
         const sz = 32;
         ctx.beginPath();
-        ctx.moveTo(cx - sz * 0.5, cy - sz * 0.55);
-        ctx.lineTo(cx + sz * 0.6, cy);
-        ctx.lineTo(cx - sz * 0.5, cy + sz * 0.55);
+        ctx.moveTo(cx - sz * 0.5 * dir, cy - sz * 0.55);
+        ctx.lineTo(cx + sz * 0.6 * dir, cy);
+        ctx.lineTo(cx - sz * 0.5 * dir, cy + sz * 0.55);
         ctx.stroke();
         ctx.restore();
       },

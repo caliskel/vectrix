@@ -23,7 +23,9 @@ export function buildRoom2(): Room {
     // perimeter
     { x: 0, y: 0, w: ROOM_W, h: WALL_T },
     { x: 0, y: ROOM_H - WALL_T, w: ROOM_W, h: WALL_T },
-    { x: 0, y: 0, w: WALL_T, h: ROOM_H },
+    // Left wall is split around the back-door gap.
+    { x: 0, y: 0, w: WALL_T, h: gapTop },
+    { x: 0, y: gapBottom, w: WALL_T, h: ROOM_H - gapBottom },
     { x: ROOM_W - WALL_T, y: 0, w: WALL_T, h: gapTop },
     {
       x: ROOM_W - WALL_T,
@@ -60,5 +62,15 @@ export function buildRoom2(): Room {
     width: ROOM_W,
     height: ROOM_H,
     useCamera: true,
+    backDoor: makeDoor(
+      WALL_T / 2,
+      DOOR_CENTER_Y,
+      DOOR_W,
+      DOOR_H,
+      "open",
+      false,
+      true,
+    ),
+    prevRoomId: "room3",
   };
 }

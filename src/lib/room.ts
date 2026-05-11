@@ -44,4 +44,11 @@ export type Room = {
    *  rooms-game seeds `currentKey` from this on entry, restart, or
    *  transition. */
   initialKey?: { x: number; y: number };
+  /** Optional back door on the left wall — always open, lets the
+   *  player retreat to `prevRoomId`. Skipped on the campaign's first
+   *  room and on the boss room. */
+  backDoor?: Door | null;
+  /** Id of the room this back door returns to. Required if backDoor
+   *  is set; unused otherwise. */
+  prevRoomId?: string | null;
 };
