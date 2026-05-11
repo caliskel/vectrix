@@ -366,9 +366,12 @@ function drawLaser(ctx: CanvasRenderingContext2D, l: Laser): void {
       ctx.fill();
     }
   } else {
-    // firing — full bright beam with a hot white core
+    // firing — full bright beam with a hot white core. shadowBlur
+    // values pulled down from (35 / 18 / 25) → (16 / 8 / 12) — on a
+    // 1400-px arena beam those halve the blur-radius cost without
+    // losing the bright halo read.
     ctx.shadowColor = PALETTE.bullet;
-    ctx.shadowBlur = 35;
+    ctx.shadowBlur = 16;
     ctx.strokeStyle = PALETTE.bullet;
     ctx.lineWidth = 14;
     ctx.beginPath();
@@ -377,7 +380,7 @@ function drawLaser(ctx: CanvasRenderingContext2D, l: Laser): void {
     ctx.stroke();
     ctx.strokeStyle = "#ffffff";
     ctx.lineWidth = 4;
-    ctx.shadowBlur = 18;
+    ctx.shadowBlur = 8;
     ctx.beginPath();
     ctx.moveTo(startX, startY);
     ctx.lineTo(l.endX, l.endY);
@@ -387,7 +390,7 @@ function drawLaser(ctx: CanvasRenderingContext2D, l: Laser): void {
     const pulse = 0.55 + Math.sin(l.age * 30) * 0.15;
     ctx.globalAlpha = pulse;
     ctx.fillStyle = PALETTE.bullet;
-    ctx.shadowBlur = 25;
+    ctx.shadowBlur = 12;
     ctx.beginPath();
     ctx.arc(l.endX, l.endY, LASER_IMPACT_RADIUS, 0, Math.PI * 2);
     ctx.fill();
@@ -423,6 +426,11 @@ type GameState = {
   screenFlashRemaining: number;
   screenFlashInitial: number;
   screenFlashOpacity: number;
+  /** Seconds remaining before door-overlap triggers re-arm after a
+   *  transition. Prevents the player from instantly re-triggering
+   *  either door when respawning right next to it (e.g. via back
+   *  transition spawn that lands close to the forward door). */
+  doorEnterCooldown: number;
   failedSnapshot: FailedSnapshot | null;
   /** Active when the player has just died and the death cinematic is
    *  playing. Drives the gating of the failed-overlay so the screen
@@ -553,6 +561,7 @@ export function start(canvas: HTMLCanvasElement): void {
     screenFlashRemaining: 0,
     screenFlashInitial: 0,
     screenFlashOpacity: 0,
+    doorEnterCooldown: 0,
     failedSnapshot: null,
     deathFx: null,
     elapsed: 0,
@@ -705,6 +714,7 @@ export function start(canvas: HTMLCanvasElement): void {
     state.screenFlashRemaining = 0;
     state.screenFlashInitial = 0;
     state.screenFlashOpacity = 0;
+    state.doorEnterCooldown = 0;
     state.failedSnapshot = null;
     state.deathFx = null;
     state.elapsed = 0;
@@ -735,6 +745,9 @@ export function start(canvas: HTMLCanvasElement): void {
     lasers = [];
     currentKey = null;
     keyHeld = false;
+    // Lock door triggers for a beat so the freshly-spawned player
+    // can't instantly re-enter the door they just came from.
+    state.doorEnterCooldown = 0.7;
     if (viaBack) {
       // Returning to a previously-visited room — drop the player just
       // inside the forward door rather than at the default spawn so
@@ -743,7 +756,10 @@ export function start(canvas: HTMLCanvasElement): void {
       // its y, which clears both the door rect and the wall thickness.
       const fwd = currentRoom.door;
       if (fwd) {
-        player.x = fwd.x - 60;
+        // Drop the player well clear of the door so they can't re-
+        // trigger it the moment they step in. Combined with the
+        // doorEnterCooldown above the back transition feels clean.
+        player.x = fwd.x - 140;
         player.y = fwd.y;
         player.vx = 0;
         player.vy = 0;
@@ -765,10 +781,13 @@ export function start(canvas: HTMLCanvasElement): void {
     // "rooms" track.
     if (currentRoom.id === "room5") {
       state.prevBossPhase = 1;
-      audio.playMusic("boss", 1.5);
+      // Long crossfade — rooms track lingers as boss starts up so the
+      // hand-off feels intentional, not a hard cut. Sentinel's own
+      // 3.3 s intro phase covers the overlap.
+      audio.playMusic("boss", 3.0);
     } else {
       state.prevBossPhase = 0;
-      audio.playMusic("rooms", 1.5);
+      audio.playMusic("rooms", 2.0);
     }
   }
 
@@ -1998,8 +2017,14 @@ export function start(canvas: HTMLCanvasElement): void {
       dashDurationSec: DASH_DURATION_MS / 1000,
     });
 
+    // Tick down door cooldown; while it's > 0 the player can't
+    // re-trigger any door (covers both directions of a transition).
+    if (state.doorEnterCooldown > 0) {
+      state.doorEnterCooldown = Math.max(0, state.doorEnterCooldown - dt);
+    }
     // door overlap → transition
     if (
+      state.doorEnterCooldown <= 0 &&
       currentRoom.door &&
       currentRoom.door.state === "open" &&
       currentRoom.nextRoomId &&
@@ -2009,6 +2034,7 @@ export function start(canvas: HTMLCanvasElement): void {
     }
     // back-door overlap → return to previous room
     if (
+      state.doorEnterCooldown <= 0 &&
       currentRoom.backDoor &&
       currentRoom.backDoor.state === "open" &&
       currentRoom.prevRoomId &&

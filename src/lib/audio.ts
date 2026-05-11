@@ -137,6 +137,35 @@ class AudioEngine {
     this.initialized = true;
     this.setupChain();
     this.applyMute();
+    this.setupVisibilityHandler();
+  }
+
+  // Drop the music gain to zero the moment the tab goes hidden, ramp
+  // it back up when it returns. Without this, browsers throttling
+  // background audio drain the Tone.js Player's buffer enough that
+  // resume produces a crackle / pop. Set once per audio instance.
+  private visibilityHandlerInstalled = false;
+  private setupVisibilityHandler(): void {
+    if (this.visibilityHandlerInstalled) return;
+    if (typeof document === "undefined") return;
+    this.visibilityHandlerInstalled = true;
+    document.addEventListener("visibilitychange", () => {
+      if (!this.music) return;
+      const ctx = getContext();
+      const now = ctx.now();
+      try {
+        if (document.hidden) {
+          this.music.gain.cancelScheduledValues(now);
+          this.music.gain.linearRampToValueAtTime(0.0001, now + 0.08);
+        } else {
+          this.music.gain.cancelScheduledValues(now);
+          this.music.gain.linearRampToValueAtTime(
+            this.masterVol === 0 ? 0 : this.musicVol,
+            now + 0.4,
+          );
+        }
+      } catch {}
+    });
   }
 
   isInitialized(): boolean {

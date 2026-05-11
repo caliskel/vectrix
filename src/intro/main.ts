@@ -4,6 +4,19 @@ import {
   trySkipIntro,
   updateIntro,
 } from "./intro-cinematic";
+import { audio } from "../lib/audio";
+
+// Audio init — needs a user gesture to start the AudioContext on
+// strict-autoplay browsers. Without this, drawNarration's per-char
+// typewriter tick never fires because the chain isn't built yet.
+audio.init();
+const kickAudio = (): void => {
+  audio.init();
+};
+window.addEventListener("keydown", kickAudio, { once: false });
+window.addEventListener("pointerdown", kickAudio, { once: false });
+window.addEventListener("click", kickAudio, { once: false });
+window.addEventListener("touchstart", kickAudio, { once: false });
 
 const canvas = document.getElementById("app") as HTMLCanvasElement | null;
 if (!canvas) {

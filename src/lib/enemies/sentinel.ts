@@ -606,6 +606,18 @@ const SWEEP_LASER_MID_PAUSE_SEC = 0.8;
 const SWEEP_LASER_FIRING_2_SEC = 1.2;
 const SWEEP_LASER_RECOVERY_SEC = 0.5;
 const SWEEP_LASER_BASE_COOLDOWN_SEC = 5.0;
+
+// Rush attack — phase 2+ "boss flies at the player" beat. Telegraph
+// captures the player position; firing interpolates the boss along
+// the line at an easeInOutQuad pace for RUSH_FIRING_SEC; body
+// contact during the firing window deals normal damage through the
+// existing requestPlayerHit pipeline (player still has i-frames).
+const RUSH_TELEGRAPH_SEC = 0.55;
+const RUSH_FIRING_SEC = 0.7;
+const RUSH_RECOVERY_SEC = 0.55;
+const RUSH_BASE_COOLDOWN_SEC = 7.5;
+const RUSH_TELEGRAPH_COLOR = "#ff5577";
+const RUSH_TELEGRAPH_DASH_PATTERN: [number, number] = [12, 10];
 const SWEEP_LASER_BEAM_HIT_HALF_ANGLE = 0.04; // ~2.3° each side
 const SWEEP_LASER_TELEGRAPH_DASH_PATTERN: [number, number] = [10, 8];
 const SWEEP_LASER_TELEGRAPH_DASH_RATE = 80;
@@ -876,6 +888,10 @@ type RingBurstPhase =
   | "reassemble"
   | "recovery";
 
+// Rush attack: boss telegraphs a line toward the player's current
+// position, holds for telegraph, then flies along it. Phase 2+ only.
+type RushPhase = "idle" | "telegraph" | "firing" | "recovery";
+
 type DyingFragment = {
   x: number;
   y: number;
@@ -1076,6 +1092,19 @@ export class Sentinel implements Enemy {
   private sweepLaserDashOffset = 0;
   private sweepLaserBeamParticleTimer = 0;
   private sweepTrail: SweepTrailEntry[] = [];
+
+  // === Rush attack (phase 2+) ===
+  // Boss telegraphs a charge, then flies straight at the player at
+  // RUSH_SPEED. Single contact deals normal body damage; doesn't
+  // pierce the player's i-frames. Returns to the figure-8 path on
+  // recovery via the standard movementTransition smoothing.
+  private rushPhase: RushPhase = "idle";
+  private rushTimer = 0;
+  private rushIdleTimer = 0;
+  private rushTargetX = 0;
+  private rushTargetY = 0;
+  private rushStartX = 0;
+  private rushStartY = 0;
 
   // === Phase 3 mine field ===
   /** Live mines on the floor. Each entry ages until detonation,
@@ -1317,7 +1346,8 @@ export class Sentinel implements Enemy {
     // Movement is owned by the active attack when Ring Burst is
     // non-idle — RB locks the boss position. Figure-8 only ticks
     // when the boss is "free" between attacks.
-    const movementOwnedByAttack = this.ringBurstPhase !== "idle";
+    const movementOwnedByAttack =
+      this.ringBurstPhase !== "idle" || this.rushPhase !== "idle";
     if (!movementOwnedByAttack) {
       const centerX = this.arenaW / 2;
       const centerY = this.arenaH / 2;
@@ -1404,6 +1434,7 @@ export class Sentinel implements Enemy {
     // branch when nothing is firing.
     this.tickRingBurst(ctxRoom, dt);
     this.tickSweepLaser(ctxRoom, dt);
+    this.tickRushAttack(ctxRoom, dt);
     this.tickRadialBurst(ctxRoom, dt);
     this.tickAimedShot(ctxRoom, dt);
 
@@ -1418,6 +1449,7 @@ export class Sentinel implements Enemy {
       if (this.radialPhase === "idle") this.radialIdleTimer += dt;
       if (this.aimedPhase === "idle") this.aimedIdleTimer += dt;
       if (this.sweepLaserPhase === "idle") this.sweepLaserIdleTimer += dt;
+      if (this.rushPhase === "idle") this.rushIdleTimer += dt;
       if (this.ringBurstPhase === "idle" && this.rbCooldownTimer > 0) {
         this.rbCooldownTimer = Math.max(0, this.rbCooldownTimer - dt);
       }
@@ -1432,6 +1464,7 @@ export class Sentinel implements Enemy {
     // Aimed is point threat. Radial is filler.
     this.tryStartRingBurst();
     this.tryStartSweepLaser(ctxRoom);
+    this.tryStartRushAttack(ctxRoom);
     this.tryStartAimedShot(ctxRoom);
     this.tryStartRadialBurst();
 
@@ -1593,6 +1626,118 @@ export class Sentinel implements Enemy {
       return;
     }
     this.beginSweepLaserTelegraph(ctxRoom);
+  }
+
+  // Phase 2+ rush. Captures the player's position at telegraph
+  // start, holds a dashed red line for the telegraph window, then
+  // flies the boss along that line over RUSH_FIRING_SEC. Damage
+  // routes through requestPlayerHit (same path as passive body
+  // contact) so the player's i-frames still apply.
+  private tryStartRushAttack(ctxRoom: EnemyContext): void {
+    if (this.isAnyAttackActive()) return;
+    if (this.bossPhase < 2) return;
+    const cadence = PHASE_CADENCE[this.bossPhase];
+    if (this.rushIdleTimer < RUSH_BASE_COOLDOWN_SEC * cadence) return;
+    this.rushPhase = "telegraph";
+    this.rushTimer = 0;
+    this.rushStartX = this.x;
+    this.rushStartY = this.y;
+    this.rushTargetX = ctxRoom.player.x;
+    this.rushTargetY = ctxRoom.player.y;
+  }
+
+  private tickRushAttack(ctxRoom: EnemyContext, dt: number): void {
+    if (this.rushPhase === "idle") return;
+    this.rushTimer += dt;
+    if (this.rushPhase === "telegraph") {
+      if (this.rushTimer >= RUSH_TELEGRAPH_SEC) {
+        // Re-snap target at lock moment — last-second move by the
+        // player has weight, the rush still commits at the locked
+        // angle (no in-flight tracking).
+        this.rushTargetX = ctxRoom.player.x;
+        this.rushTargetY = ctxRoom.player.y;
+        this.rushStartX = this.x;
+        this.rushStartY = this.y;
+        this.rushPhase = "firing";
+        this.rushTimer = 0;
+      }
+      return;
+    }
+    if (this.rushPhase === "firing") {
+      const u = Math.min(1, this.rushTimer / RUSH_FIRING_SEC);
+      // easeInOutQuad — boss accelerates out then settles into the
+      // strike, no abrupt linear motion.
+      const eased = u < 0.5 ? 2 * u * u : 1 - Math.pow(-2 * u + 2, 2) / 2;
+      const prevX = this.x;
+      const prevY = this.y;
+      this.x = this.rushStartX + (this.rushTargetX - this.rushStartX) * eased;
+      this.y = this.rushStartY + (this.rushTargetY - this.rushStartY) * eased;
+      this.vx = (this.x - prevX) / Math.max(dt, 0.0001);
+      this.vy = (this.y - prevY) / Math.max(dt, 0.0001);
+      // Body contact damage during the dash — same hitbox as normal
+      // body contact (SENTINEL_HITBOX_RADIUS).
+      const px = ctxRoom.player.x;
+      const py = ctxRoom.player.y;
+      const dx = px - this.x;
+      const dy = py - this.y;
+      const dist = Math.hypot(dx, dy);
+      if (dist < SENTINEL_HITBOX_RADIUS + ctxRoom.playerHalfSize) {
+        this.requestPlayerHit = true;
+      }
+      if (this.rushTimer >= RUSH_FIRING_SEC) {
+        this.rushPhase = "recovery";
+        this.rushTimer = 0;
+      }
+      return;
+    }
+    if (this.rushPhase === "recovery") {
+      this.vx = 0;
+      this.vy = 0;
+      if (this.rushTimer >= RUSH_RECOVERY_SEC) {
+        // Smooth lerp back to the figure-8 curve — same pattern Ring
+        // Burst uses on exit so the boss doesn't snap to the lemniscate
+        // point.
+        this.movementTransition = {
+          fromX: this.x,
+          fromY: this.y,
+          elapsedSec: 0,
+        };
+        this.rushPhase = "idle";
+        this.rushTimer = 0;
+        this.rushIdleTimer = 0;
+      }
+    }
+  }
+
+  private renderRushTelegraph(ctx: CanvasRenderingContext2D): void {
+    if (this.rushPhase !== "telegraph") return;
+    const u = this.rushTimer / RUSH_TELEGRAPH_SEC;
+    ctx.save();
+    ctx.strokeStyle = RUSH_TELEGRAPH_COLOR;
+    ctx.shadowColor = RUSH_TELEGRAPH_COLOR;
+    ctx.shadowBlur = 12 + u * 10;
+    ctx.globalAlpha = 0.4 + u * 0.5;
+    ctx.lineWidth = 3 + u * 3;
+    ctx.lineCap = "round";
+    ctx.setLineDash([...RUSH_TELEGRAPH_DASH_PATTERN]);
+    ctx.lineDashOffset = -(performance.now() / 1000) * 80;
+    ctx.beginPath();
+    ctx.moveTo(this.x, this.y);
+    ctx.lineTo(this.rushTargetX, this.rushTargetY);
+    ctx.stroke();
+    // Diamond marker on the target — locks visually where the boss
+    // will land.
+    ctx.setLineDash([]);
+    ctx.fillStyle = RUSH_TELEGRAPH_COLOR;
+    const sz = 8 + u * 6;
+    ctx.beginPath();
+    ctx.moveTo(this.rushTargetX, this.rushTargetY - sz);
+    ctx.lineTo(this.rushTargetX + sz, this.rushTargetY);
+    ctx.lineTo(this.rushTargetX, this.rushTargetY + sz);
+    ctx.lineTo(this.rushTargetX - sz, this.rushTargetY);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
   }
 
   private tryStartAimedShot(ctxRoom: EnemyContext): void {
@@ -2068,7 +2213,8 @@ export class Sentinel implements Enemy {
       this.radialPhase !== "idle" ||
       this.aimedPhase !== "idle" ||
       this.sweepLaserPhase !== "idle" ||
-      this.ringBurstPhase !== "idle"
+      this.ringBurstPhase !== "idle" ||
+      this.rushPhase !== "idle"
     );
   }
 
@@ -3016,6 +3162,9 @@ export class Sentinel implements Enemy {
     }
     if (this.sweepLaserPhase === "telegraph") {
       this.renderSweepLaserTelegraph(ctx);
+    }
+    if (this.rushPhase === "telegraph") {
+      this.renderRushTelegraph(ctx);
     }
     // Phase-3 mines — drawn under the body so the boss stays the
     // focal point. Mines are spawned with player + boss exclusion

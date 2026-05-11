@@ -874,6 +874,7 @@ export function start(canvas: HTMLCanvasElement): void {
   let room4FadeIn = 0;
   let room4FadeOut = 0;
   let room4Redirected = false;
+  let room4MusicFadeKicked = false;
   // Track last-rendered char count for the typewriter-tick audio cue.
   // Indexed by beat so jumping between beats doesn't burst-fire ticks.
   let outroNarratorBeatIdx = -1;
@@ -1036,6 +1037,7 @@ export function start(canvas: HTMLCanvasElement): void {
     room4Age = 0;
     room4FadeOut = 0;
     room4Redirected = false;
+    room4MusicFadeKicked = false;
     room4FadeIn = currentRoom.id === "room4" ? 1.0 : 0;
   }
 
@@ -1494,6 +1496,14 @@ export function start(canvas: HTMLCanvasElement): void {
       if (room4FadeIn > 0) room4FadeIn = Math.max(0, room4FadeIn - dt / 1.0);
       tickVoidBg(outroBg, dt, ROOM_W_PX, ROOM_H_PX, 1);
       if (room4Age >= OUTRO_NARRATION_END_SEC) {
+        // Fade gameplay music out on the same beat as the visual fade
+        // to black, so the hand-off into /rooms.html doesn't snap.
+        // Idempotent — only fires the first frame after crossing the
+        // narration end.
+        if (!room4MusicFadeKicked) {
+          room4MusicFadeKicked = true;
+          audio.stopMusic(OUTRO_FADEOUT_DURATION_SEC * 0.9);
+        }
         room4FadeOut = Math.min(
           1,
           room4FadeOut + dt / OUTRO_FADEOUT_DURATION_SEC,

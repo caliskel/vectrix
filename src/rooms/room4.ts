@@ -49,32 +49,62 @@ export function buildRoom4(): Room {
     walls.push({ x, y: 0, w: WALL_T, h: ROOM_H, dashable: true });
   }
 
-  // One Hunter per section — each spawns at the section's far end
-  // when the player crosses just inside the section's left edge.
-  // Section 1 (the spawn section) fires immediately at triggerX = 0.
-  // Spawn x sits ~1100 px past the trigger so the chase has room to
-  // build up. ignoresWalls keeps every Hunter able to converge across
-  // dividers regardless of where the player currently is.
-  const sections: { triggerX: number; spawnX: number }[] = [
-    { triggerX: 0, spawnX: 1100 },
-    { triggerX: 1340, spawnX: 2400 },
-    { triggerX: 2640, spawnX: 3700 },
-    { triggerX: 3940, spawnX: 5000 },
-    { triggerX: 5240, spawnX: 6300 },
-    { triggerX: 6540, spawnX: 7700 },
+  // Two Hunters per section, each spawning from a random off-arena
+  // edge (top / bottom / right of the section bounding box) so the
+  // pair "flies in" from different angles rather than parking
+  // directly in front of the player. ignoresWalls keeps each Hunter
+  // able to converge across dividers from the section it spawned
+  // for. Section 1 fires immediately on entry (triggerX = 0); later
+  // sections fire when the player crosses just inside their left
+  // edge.
+  const sections: { triggerX: number; xMin: number; xMax: number }[] = [
+    { triggerX: 0,    xMin: WALL_T + 100,   xMax: 1270 },
+    { triggerX: 1340, xMin: 1330 + 100,     xMax: 2570 },
+    { triggerX: 2640, xMin: 2630 + 100,     xMax: 3870 },
+    { triggerX: 3940, xMin: 3930 + 100,     xMax: 5170 },
+    { triggerX: 5240, xMin: 5230 + 100,     xMax: 6470 },
+    { triggerX: 6540, xMin: 6530 + 100,     xMax: 7770 },
   ];
   if (sections.length !== SECTION_COUNT) {
     throw new Error("Room 4: section descriptors out of sync with count");
   }
-  const pendingEnemies: PendingEnemy[] = sections.map((s) => ({
-    triggerX: s.triggerX,
-    spawned: false,
-    spawn: () =>
-      new Hunter(s.spawnX, DOOR_CENTER_Y, {
-        startsAggressive: true,
-        ignoresWalls: true,
-      }),
-  }));
+  function pickHunterSpawn(xMin: number, xMax: number): { x: number; y: number } {
+    // 0:top, 1:bottom, 2:right. Skipping "left" (behind the player)
+    // since the run-up direction shouldn't have ambush spawns.
+    const edge = Math.floor(Math.random() * 3);
+    if (edge === 0) {
+      return {
+        x: xMin + Math.random() * (xMax - xMin),
+        y: -60,
+      };
+    }
+    if (edge === 1) {
+      return {
+        x: xMin + Math.random() * (xMax - xMin),
+        y: ROOM_H + 60,
+      };
+    }
+    return {
+      x: xMax + 60,
+      y: 80 + Math.random() * (ROOM_H - 160),
+    };
+  }
+  const pendingEnemies: PendingEnemy[] = [];
+  for (const s of sections) {
+    for (let i = 0; i < 2; i++) {
+      pendingEnemies.push({
+        triggerX: s.triggerX,
+        spawned: false,
+        spawn: () => {
+          const p = pickHunterSpawn(s.xMin, s.xMax);
+          return new Hunter(p.x, p.y, {
+            startsAggressive: true,
+            ignoresWalls: true,
+          });
+        },
+      });
+    }
+  }
 
   return {
     id: "room4",
