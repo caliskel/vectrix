@@ -105,6 +105,73 @@ function drawTriangleUp(
   ctx.stroke();
 }
 
+// === Sprite cache ===
+// Each pickup type's shape + neon glow is baked into an offscreen
+// canvas once and blitted thereafter. drawPickup() used to be wrapped
+// in drawNeon (two shadowBlur passes), which is ~10× more expensive
+// in Safari/WebKit than in Chrome/Skia. With the sprite, per-frame
+// cost is a single drawImage regardless of how many pickups are on
+// screen at once.
+const PICKUP_GLOW_BLUR_STRONG = 22;
+const PICKUP_GLOW_BLUR_SOFT = 8;
+const PICKUP_SPRITE_PADDING = PICKUP_GLOW_BLUR_STRONG * 2;
+const pickupSpriteCache = new Map<PickupType, HTMLCanvasElement>();
+const pickupSpriteAnchor =
+  PICKUP_SPRITE_PADDING + PICKUP_HALF + 2; /* +2 stroke leeway */
+
+function buildPickupSprite(type: PickupType): HTMLCanvasElement {
+  const dim = (PICKUP_HALF + 2) * 2 + PICKUP_SPRITE_PADDING * 2;
+  const c = document.createElement("canvas");
+  c.width = dim;
+  c.height = dim;
+  const ctx = c.getContext("2d");
+  if (!ctx) return c;
+  const color = PICKUP_COLORS[type];
+  // Origin in sprite space — the shape's centre.
+  const cx = pickupSpriteAnchor;
+  const cy = pickupSpriteAnchor;
+  // Outer + inner glow stack, same recipe as drawNeon. Both passes
+  // burn shadowBlur ONCE here, then we forget about it.
+  ctx.shadowColor = color;
+  ctx.shadowBlur = PICKUP_GLOW_BLUR_STRONG;
+  drawPickupShape(ctx, type, cx, cy, color);
+  ctx.shadowBlur = PICKUP_GLOW_BLUR_SOFT;
+  drawPickupShape(ctx, type, cx, cy, color);
+  return c;
+}
+
+function drawPickupShape(
+  ctx: CanvasRenderingContext2D,
+  type: PickupType,
+  x: number,
+  y: number,
+  color: string,
+): void {
+  switch (type) {
+    case "hp":
+      drawCross(ctx, x, y, color);
+      return;
+    case "shield":
+      drawShieldShape(ctx, x, y, color);
+      return;
+    case "scoreBoost":
+      drawDiamond(ctx, x, y, color);
+      return;
+    case "breaker":
+      drawTriangleUp(ctx, x, y, color);
+      return;
+  }
+}
+
+function getPickupSprite(type: PickupType): HTMLCanvasElement {
+  let s = pickupSpriteCache.get(type);
+  if (!s) {
+    s = buildPickupSprite(type);
+    pickupSpriteCache.set(type, s);
+  }
+  return s;
+}
+
 export function drawPickup(
   ctx: CanvasRenderingContext2D,
   p: Pickup,
@@ -117,23 +184,14 @@ export function drawPickup(
     const phase = Math.sin(p.age * 6 * Math.PI * 2);
     alpha = phase > 0 ? 1 : 0.25;
   }
+  const sprite = getPickupSprite(p.type);
   ctx.save();
   ctx.globalAlpha = alpha;
-  const color = PICKUP_COLORS[p.type];
-  switch (p.type) {
-    case "hp":
-      drawCross(ctx, p.x, p.y, color);
-      break;
-    case "shield":
-      drawShieldShape(ctx, p.x, p.y, color);
-      break;
-    case "scoreBoost":
-      drawDiamond(ctx, p.x, p.y, color);
-      break;
-    case "breaker":
-      drawTriangleUp(ctx, p.x, p.y, color);
-      break;
-  }
+  ctx.drawImage(
+    sprite,
+    p.x - pickupSpriteAnchor,
+    p.y - pickupSpriteAnchor,
+  );
   ctx.restore();
 }
 

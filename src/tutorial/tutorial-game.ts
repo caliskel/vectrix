@@ -9,6 +9,10 @@ import {
 } from "../lib/god-mode";
 import { type Bullet, pushTrailSample } from "../lib/bullets";
 import {
+  getBulletSprite,
+  getBulletSpriteOffset,
+} from "../lib/bullet-sprite";
+import {
   createCamera,
   snapCamera,
   updateCamera,
@@ -2460,34 +2464,35 @@ export function start(canvas: HTMLCanvasElement): void {
     for (const e of currentRoom.enemies) e.draw(ctx);
 
 
-    // bullets (trail then live)
+    // bullets — same render pattern as rooms-game (one save/restore
+    // around the whole trail pass instead of per-sample; sprite-cached
+    // body blit instead of drawNeon). The old per-bullet drawNeon was
+    // firing two shadowBlur ops per bullet per frame — by far the
+    // dominant cost in tutorial Room 3 with multiple Hunters and a
+    // few dozen bullets in flight, especially in Safari/WebKit where
+    // shadowBlur is ~10× more expensive than Chrome.
     const bSize = settings.bullets.size;
     const bColor = settings.bullets.color;
+    ctx.save();
+    ctx.fillStyle = bColor;
+    ctx.shadowBlur = 0;
     for (const b of bullets) {
-      if (b.trailCount > 0) {
-        const start = b.trailCount === 5 ? b.trailIdx : 0;
-        for (let i = 0; i < b.trailCount; i++) {
-          const j = (start + i) % 5;
-          const t = b.trailCount === 1 ? 1 : i / (b.trailCount - 1);
-          const sz = bSize * (0.5 + 0.5 * t);
-          const alpha = 0.1 + 0.4 * t;
-          ctx.save();
-          ctx.globalAlpha = alpha;
-          ctx.fillStyle = bColor;
-          ctx.fillRect(b.trailX[j] - sz / 2, b.trailY[j] - sz / 2, sz, sz);
-          ctx.restore();
-        }
+      if (b.trailCount === 0) continue;
+      const start = b.trailCount === 5 ? b.trailIdx : 0;
+      for (let i = 0; i < b.trailCount; i++) {
+        const j = (start + i) % 5;
+        const t = b.trailCount === 1 ? 1 : i / (b.trailCount - 1);
+        const sz = bSize * (0.5 + 0.5 * t);
+        ctx.globalAlpha = 0.1 + 0.4 * t;
+        ctx.fillRect(b.trailX[j] - sz / 2, b.trailY[j] - sz / 2, sz, sz);
       }
-      drawNeon(
-        ctx,
-        () => {
-          ctx.fillStyle = bColor;
-          ctx.fillRect(b.x - bSize / 2, b.y - bSize / 2, bSize, bSize);
-        },
-        bColor,
-        20,
-        8,
-      );
+    }
+    ctx.globalAlpha = 1;
+    ctx.restore();
+    const bulletSprite = getBulletSprite(bColor, bSize);
+    const bulletOffset = getBulletSpriteOffset(bSize);
+    for (const b of bullets) {
+      ctx.drawImage(bulletSprite, b.x - bulletOffset, b.y - bulletOffset);
     }
 
     // particles — flat path always; per-particle shadowBlur was a
@@ -2529,7 +2534,8 @@ export function start(canvas: HTMLCanvasElement): void {
       });
     }
 
-    // rings
+    // rings — wide-dim outer + bright inner stroke replaces shadowBlur
+    // (10× cheaper in Safari / WebKit, near-identical look).
     for (const ring of rings) {
       const t = ring.age / ring.lifetime;
       const r = ring.startR + (ring.endR - ring.startR) * t;
@@ -2537,14 +2543,18 @@ export function start(canvas: HTMLCanvasElement): void {
       const lwStart = ring.startLineWidth ?? 2;
       const lwEnd = ring.endLineWidth ?? lwStart;
       const lineWidth = lwStart + (lwEnd - lwStart) * t;
+      const liveAlpha = Math.max(0, alpha);
       ctx.save();
-      ctx.globalAlpha = Math.max(0, alpha);
       ctx.strokeStyle = ring.color;
-      ctx.lineWidth = lineWidth;
-      if (ring.glowBlur) {
-        ctx.shadowColor = ring.color;
-        ctx.shadowBlur = ring.glowBlur;
+      if (ring.glowBlur && ring.glowBlur > 0) {
+        ctx.globalAlpha = liveAlpha * 0.25;
+        ctx.lineWidth = lineWidth + ring.glowBlur * 1.5;
+        ctx.beginPath();
+        ctx.arc(ring.x, ring.y, r, 0, Math.PI * 2);
+        ctx.stroke();
       }
+      ctx.globalAlpha = liveAlpha;
+      ctx.lineWidth = lineWidth;
       ctx.beginPath();
       ctx.arc(ring.x, ring.y, r, 0, Math.PI * 2);
       ctx.stroke();

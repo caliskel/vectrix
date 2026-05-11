@@ -183,23 +183,11 @@ function rebuildGrid() {
   gridCanvas = gc;
 }
 
-// Two-pass neon render: a strong outer halo + a sharp inner halo, both
-// using the canvas drop-shadow. Cheap when used per-object; for many
-// objects (particles) we fall back to a flat draw.
-function drawNeon(
-  drawFn: () => void,
-  color: string,
-  blurStrong: number,
-  blurSoft: number,
-) {
-  ctx.save();
-  ctx.shadowColor = color;
-  ctx.shadowBlur = blurStrong;
-  drawFn();
-  ctx.shadowBlur = blurSoft;
-  drawFn();
-  ctx.restore();
-}
+// (drawNeon was removed when every per-frame caller was migrated to a
+// sprite cache — bullets, pickups, walls, the player ring all bake
+// their glow into an offscreen canvas now. shadowBlur in the per-
+// frame path was the dominant cost in Safari/WebKit; this cleans up
+// the last instance from the sandbox loop.)
 
 resize();
 window.addEventListener("resize", resize);
@@ -1518,14 +1506,12 @@ function render() {
   }
   ctx.restore();
 
-  // pickups (each individually neon-glowed in its own table color)
+  // pickups — glow is now baked into a per-type sprite inside
+  // drawPickup (see lib/pickups.ts), so the outer drawNeon wrapper
+  // is gone and per-frame cost is one drawImage per pickup instead
+  // of two shadowBlur passes per pickup.
   for (const p of pickups) {
-    drawNeon(
-      () => drawPickup(ctx, p, settings.pickups.blinkDuration),
-      PICKUP_COLORS[p.type],
-      22,
-      8,
-    );
+    drawPickup(ctx, p, settings.pickups.blinkDuration);
   }
 
   // particles — flat path always; shadowBlur per-particle was the

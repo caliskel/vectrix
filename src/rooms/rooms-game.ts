@@ -2273,7 +2273,11 @@ export function start(canvas: HTMLCanvasElement): void {
       perfEnd("player");
     }
 
-    // rings
+    // rings — impact FX. Wide dim outer stroke + bright inner stroke
+    // is roughly 10× cheaper than shadowBlur in Safari / WebKit while
+    // looking nearly identical, especially during the rapid alpha
+    // fade. Boss attacks emit 10+ rings at once on radial bursts +
+    // mine detonations, so the shadow path was a real cost.
     perfBegin("rings");
     for (const ring of rings) {
       const t = ring.age / ring.lifetime;
@@ -2282,14 +2286,20 @@ export function start(canvas: HTMLCanvasElement): void {
       const lwStart = ring.startLineWidth ?? 2;
       const lwEnd = ring.endLineWidth ?? lwStart;
       const lineWidth = lwStart + (lwEnd - lwStart) * t;
+      const liveAlpha = Math.max(0, alpha);
       ctx.save();
-      ctx.globalAlpha = Math.max(0, alpha);
       ctx.strokeStyle = ring.color;
-      ctx.lineWidth = lineWidth;
-      if (ring.glowBlur) {
-        ctx.shadowColor = ring.color;
-        ctx.shadowBlur = ring.glowBlur;
+      if (ring.glowBlur && ring.glowBlur > 0) {
+        // Dim wide halo first — fakes the Gaussian fall-off cheaply.
+        ctx.globalAlpha = liveAlpha * 0.25;
+        ctx.lineWidth = lineWidth + ring.glowBlur * 1.5;
+        ctx.beginPath();
+        ctx.arc(ring.x, ring.y, r, 0, Math.PI * 2);
+        ctx.stroke();
       }
+      // Bright inner stroke on top.
+      ctx.globalAlpha = liveAlpha;
+      ctx.lineWidth = lineWidth;
       ctx.beginPath();
       ctx.arc(ring.x, ring.y, r, 0, Math.PI * 2);
       ctx.stroke();
