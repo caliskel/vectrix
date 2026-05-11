@@ -47,9 +47,11 @@ const COLOR_BG = 0x04060a;
 
 class SandboxScene extends Phaser.Scene {
   private player!: Phaser.GameObjects.Container;
+  private playerGlow!: Phaser.GameObjects.Arc;
   private playerRing!: Phaser.GameObjects.Arc;
   private playerIris!: Phaser.GameObjects.Arc;
   private playerPupil!: Phaser.GameObjects.Arc;
+  private playerHighlight!: Phaser.GameObjects.Arc;
   private playerVx = 0;
   private playerVy = 0;
   private dashTimeMs = 0;
@@ -126,21 +128,45 @@ class SandboxScene extends Phaser.Scene {
     border.lineStyle(2, COLOR_GRID, 0.18);
     border.strokeRect(0, 0, ARENA_W, ARENA_H);
 
-    // Player — Container with three nested Arcs (ring, iris, pupil),
-    // mirroring the most basic version of drawPlayerEye. Glow comes
-    // from Phaser's built-in postPipeline (Bloom filter) added below.
+    // Player — five-layer eye with a glow halo underneath. The
+    // Bloom filter on the camera (added below) spreads the bright
+    // ring + highlight into a soft neon halo automatically, so the
+    // glow circle is a deliberately faint base to seed the bloom.
     const ringR = PLAYER_SIZE / 2;
+    const glowR = ringR * 2.2;
     const irisR = PLAYER_SIZE * 0.42;
     const pupilR = PLAYER_SIZE * 0.18;
+    const highlightR = PLAYER_SIZE * 0.06;
+    this.playerGlow = this.add
+      .circle(0, 0, glowR, COLOR_PLAYER)
+      .setAlpha(0.15);
     this.playerRing = this.add.circle(0, 0, ringR, COLOR_PLAYER);
     this.playerIris = this.add.circle(0, 0, irisR, COLOR_BG);
     this.playerPupil = this.add.circle(0, 0, pupilR, COLOR_PLAYER);
+    this.playerHighlight = this.add
+      .circle(-pupilR * 0.4, -pupilR * 0.4, highlightR, 0xffffff)
+      .setAlpha(0.9);
     this.player = this.add.container(ARENA_W / 2, ARENA_H / 2, [
+      this.playerGlow,
       this.playerRing,
       this.playerIris,
       this.playerPupil,
+      this.playerHighlight,
     ]);
     this.player.setDepth(10);
+
+    // === Neon glow via Bloom filter on the camera ===
+    // This is Phaser 4's WebGL equivalent of the Canvas 2D shadowBlur
+    // double-shadow pass we use in drawNeon: brightness above the
+    // threshold gets blurred and blended back on top, giving every
+    // bright element (player ring, highlight, bullets) a soft halo.
+    Phaser.Actions.AddEffectBloom([cam], {
+      threshold: 0.35,
+      blurRadius: 4,
+      blurSteps: 5,
+      blurQuality: 1,
+      blendAmount: 1.0,
+    });
 
     // Cap the camera to the arena so it doesn't show the void around
     // smaller windows. Phaser handles letterboxing automatically when
@@ -248,10 +274,14 @@ class SandboxScene extends Phaser.Scene {
     if (this.player.y < half) { this.player.y = half; if (this.playerVy < 0) this.playerVy = 0; }
     if (this.player.y > ARENA_H - half) { this.player.y = ARENA_H - half; if (this.playerVy > 0) this.playerVy = 0; }
 
-    // Dash visual — flip ring colour during the dash window.
+    // Dash visual — flip ring + halo colour during the dash window,
+    // and pump up the glow circle so the bloom flares brighter on
+    // the dash pulse.
     const dashing = this.dashTimeMs > 0 || this.dashIframeMs > 0;
     this.playerRing.fillColor = dashing ? COLOR_PLAYER_DASH : COLOR_PLAYER;
     this.playerPupil.fillColor = dashing ? COLOR_PLAYER_DASH : COLOR_PLAYER;
+    this.playerGlow.fillColor = dashing ? COLOR_PLAYER_DASH : COLOR_PLAYER;
+    this.playerGlow.setAlpha(dashing ? 0.35 : 0.15);
 
     // Bullet hit i-frame blink — alpha pulse during the 1 s window
     // after a hit, same cue the Canvas sandbox uses.
@@ -399,6 +429,9 @@ class SandboxScene extends Phaser.Scene {
     }
     const spread = (Math.random() - 0.5) * (Math.PI / 3 * 2);
     const angle = baseAngle + spread;
+    // Bullet body — small bright circle that the Bloom filter on the
+    // camera will halo into a soft red glow. No per-object filter is
+    // needed; the camera-wide bloom does the work for ~free on WebGL.
     const b = this.add.circle(x, y, BULLET_SIZE, COLOR_BULLET);
     b.setDepth(5);
     this.bullets.push(b);
