@@ -40,8 +40,10 @@ import {
   type KeybindProfile,
 } from "../lib/keybinds";
 import { BackgroundFx } from "../lib/bg-fx";
+import { getBulletSprite, getBulletSpriteOffset } from "../lib/bullet-sprite";
 import { drawFpsOverlay, recordFrame } from "../lib/fps-meter";
 import { createSandboxPauseMenu } from "../lib/pause-menu";
+import { drawFloatingTexts } from "../lib/particles";
 import { PostProcessor, DEFAULT_POST } from "../lib/postprocess";
 import { createMenu } from "../lib/settings-menu";
 import {
@@ -1416,9 +1418,17 @@ function render() {
   );
   ctx.restore();
 
-  // bullets (trail first as a flat alpha-faded ramp, then live bullet with neon)
+  // bullets — trail uses flat fillRect with hoisted state; live pass
+  // blits the cached sprite (hot-core + halo baked in). Replaces the
+  // per-bullet drawNeon path that was firing 2 shadow ops × bullet
+  // count in heavy showers.
   const bSize = settings.bullets.size;
   const bColor = settings.bullets.color;
+  const bSprite = getBulletSprite(bColor, bSize);
+  const bSpriteOff = getBulletSpriteOffset(bSize);
+  ctx.save();
+  ctx.fillStyle = bColor;
+  ctx.shadowBlur = 0;
   for (const b of bullets) {
     if (b.trailCount > 0) {
       const start =
@@ -1427,29 +1437,21 @@ function render() {
         const j = (start + i) % BULLET_TRAIL;
         const t = b.trailCount === 1 ? 1 : i / (b.trailCount - 1);
         const sz = bSize * (0.5 + 0.5 * t);
-        const alpha = 0.1 + 0.4 * t;
-        ctx.save();
-        ctx.globalAlpha = alpha;
-        ctx.fillStyle = bColor;
+        ctx.globalAlpha = 0.1 + 0.4 * t;
         ctx.fillRect(
           b.trailX[j] - sz / 2,
           b.trailY[j] - sz / 2,
           sz,
           sz,
         );
-        ctx.restore();
       }
     }
-    drawNeon(
-      () => {
-        ctx.fillStyle = bColor;
-        ctx.fillRect(b.x - bSize / 2, b.y - bSize / 2, bSize, bSize);
-      },
-      bColor,
-      20,
-      8,
-    );
   }
+  ctx.globalAlpha = 1;
+  for (const b of bullets) {
+    ctx.drawImage(bSprite, b.x - bSpriteOff, b.y - bSpriteOff);
+  }
+  ctx.restore();
 
   // pickups (each individually neon-glowed in its own table color)
   for (const p of pickups) {
@@ -1549,24 +1551,7 @@ function render() {
   }
 
   // floating texts (score numbers glow, all texts get a soft halo)
-  for (const ft of floatingTexts) {
-    const alpha = 1 - ft.age / ft.lifetime;
-    ctx.save();
-    ctx.globalAlpha = Math.max(0, alpha);
-    ctx.font = `600 ${ft.size}px ui-monospace, SFMono-Regular, Menlo, monospace`;
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    drawNeon(
-      () => {
-        ctx.fillStyle = ft.color;
-        ctx.fillText(ft.text, ft.x, ft.y);
-      },
-      ft.color,
-      15,
-      4,
-    );
-    ctx.restore();
-  }
+  drawFloatingTexts(ctx, floatingTexts);
 
   // ambient corner vignette — focuses attention toward the play field
   {

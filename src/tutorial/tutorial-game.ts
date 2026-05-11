@@ -71,6 +71,7 @@ import {
   type Particle,
   type Ring,
   addFloatingText,
+  drawFloatingTexts,
 } from "../lib/particles";
 import {
   type PlayerProfile,
@@ -2064,26 +2065,7 @@ export function start(canvas: HTMLCanvasElement): void {
     // key pickup (drawn above bullets / particles, below HUD)
     if (currentKey && !currentKey.collected) drawKey(ctx, currentKey);
 
-    // floating texts
-    for (const ft of floatingTexts) {
-      const alpha = 1 - ft.age / ft.lifetime;
-      ctx.save();
-      ctx.globalAlpha = Math.max(0, alpha);
-      ctx.font = `600 ${ft.size}px ui-monospace, SFMono-Regular, Menlo, monospace`;
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      drawNeon(
-        ctx,
-        () => {
-          ctx.fillStyle = ft.color;
-          ctx.fillText(ft.text, ft.x, ft.y);
-        },
-        ft.color,
-        15,
-        4,
-      );
-      ctx.restore();
-    }
+    drawFloatingTexts(ctx, floatingTexts);
 
     if (useCamera) ctx.restore();
 
