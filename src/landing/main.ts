@@ -45,17 +45,38 @@ const previewPlayer = createPlayer();
 previewPlayer.x = PREVIEW_CANVAS_SIZE / 2;
 previewPlayer.y = PREVIEW_CANVAS_SIZE / 2;
 
-// === Tutorial gate ===
+// === Tutorial / Intro gate ===
 //
-// ROOMS button stays locked until the tutorial is completed; TUTORIAL
-// button changes its desc text after completion.
+// Two flags drive the main entry button:
+//   - dash-proto:has-seen-intro — set after the intro cinematic plays.
+//     Absent on first visit → button reads PLAY and routes to /intro.html.
+//   - dash-proto:tutorial-completed — set on tutorial completion. Once
+//     present (which implies has-seen-intro is also set), the button
+//     switches to TUTORIAL replay mode and the ROOMS button unlocks.
 function applyTutorialState(): void {
+  const hasSeenIntro =
+    localStorage.getItem("dash-proto:has-seen-intro") === "true";
   const completed =
     localStorage.getItem("dash-proto:tutorial-completed") === "true";
+
+  const tutBtn = document.getElementById("btn-tutorial") as HTMLAnchorElement | null;
+  const tutLabel = document.getElementById("btn-tutorial-label");
   const tutDesc = document.getElementById("btn-tutorial-desc");
-  if (tutDesc) {
-    tutDesc.textContent = completed ? "Replay tutorial" : "Learn the basics";
+
+  if (!hasSeenIntro) {
+    // First-time visitor — replace TUTORIAL with the PLAY entry into
+    // the intro cinematic.
+    if (tutLabel) tutLabel.textContent = "PLAY";
+    if (tutDesc) tutDesc.textContent = "Begin your story";
+    if (tutBtn) tutBtn.setAttribute("href", "./intro.html");
+  } else {
+    if (tutLabel) tutLabel.textContent = "TUTORIAL";
+    if (tutDesc) {
+      tutDesc.textContent = completed ? "Replay tutorial" : "Learn the basics";
+    }
+    if (tutBtn) tutBtn.setAttribute("href", "./tutorial.html");
   }
+
   const roomsBtn = document.getElementById("btn-rooms");
   const roomsDesc = document.getElementById("btn-rooms-desc");
   if (roomsBtn && roomsDesc) {
