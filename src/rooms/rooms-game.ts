@@ -1572,7 +1572,14 @@ export function start(canvas: HTMLCanvasElement): void {
         ? player.y > door.y - door.h / 2 - half &&
           player.y < door.y + door.h / 2 + half
         : false;
-    if (player.x < minX) {
+    const backDoor = currentRoom.backDoor;
+    const backDoorOpen = backDoor?.state === "open";
+    const inBackDoorY =
+      backDoorOpen && backDoor
+        ? player.y > backDoor.y - backDoor.h / 2 - half &&
+          player.y < backDoor.y + backDoor.h / 2 + half
+        : false;
+    if (player.x < minX && !inBackDoorY) {
       player.x = minX;
       if (player.vx < 0) {
         const s = triggerPlayerSmash(player, 1, 0, -player.vx);

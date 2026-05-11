@@ -15,7 +15,8 @@ import {
   HUNTER_TRAIL_MAX_SCALE,
   HUNTER_TRAIL_MIN_SCALE,
 } from "../config";
-import { audio } from "../audio";
+// Hunter audio temporarily silenced — see comment above the snarl call.
+// import { audio } from "../audio";
 import { resolveEntityWallCollisions } from "../walls";
 import { applyAwarenessJitter, initAwareness } from "./awareness";
 import { applyEnemyKnockback, drawEnemyHitFlash } from "./fx";
@@ -476,9 +477,9 @@ export class Hunter implements Enemy {
     this.vx *= CONTACT_BOUNCE_FACTOR;
     this.vy *= CONTACT_BOUNCE_FACTOR;
     this.contactSquashTime = CONTACT_SQUASH_SEC;
-    // Short angry growl on the bounce — sells the Hunter as a
-    // creature, not just kinetic geometry.
-    audio.play.hunterSnarl();
+    // Snarl removed — Hunter is fully silent on approach + bounce.
+    // The squash and bounce-back still carry the contact read.
+    // audio.play.hunterSnarl();
   }
 
   private drawTrail(ctx: CanvasRenderingContext2D): void {

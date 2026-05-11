@@ -269,12 +269,15 @@ class AudioEngine {
         fadeOut: 0.5,
         onload: () => {
           this.musicLoadingKeys.delete(key);
-          // Skip MP3 encoder-delay priming (~576 samples ≈ 12 ms at 48 kHz)
-          // so the loop seam doesn't click and the very first samples after
-          // start aren't garbage. Safe for non-MP3 sources too — a few ms
-          // of head trim is inaudible.
+          // Trim BOTH ends of the loop so the seam doesn't click on
+          // MP3 sources. The head trim (15 ms) skips the encoder
+          // priming samples; the tail trim (40 ms) skips the encoder
+          // gap + any final-block decay so the loop boundary lands on
+          // similar amplitudes. Audible loss is sub-frame.
           try {
             player.loopStart = 0.015;
+            const dur = player.buffer?.duration ?? 0;
+            if (dur > 0.1) player.loopEnd = Math.max(0.1, dur - 0.04);
           } catch {}
           this.tryStartMusic();
         },

@@ -1105,6 +1105,11 @@ export class Sentinel implements Enemy {
   private rushTargetY = 0;
   private rushStartX = 0;
   private rushStartY = 0;
+  /** Spin angle accumulated during the rush firing phase, applied as
+   *  an extra ctx.rotate in renderBody so the hex shells visibly
+   *  twist while the boss flies at the player. Decays back to 0 over
+   *  the recovery phase. */
+  private rushSpinAngle = 0;
 
   // === Phase 3 mine field ===
   /** Live mines on the floor. Each entry ages until detonation,
@@ -1674,6 +1679,8 @@ export class Sentinel implements Enemy {
       this.y = this.rushStartY + (this.rushTargetY - this.rushStartY) * eased;
       this.vx = (this.x - prevX) / Math.max(dt, 0.0001);
       this.vy = (this.y - prevY) / Math.max(dt, 0.0001);
+      // Whole-body spin during the dive — ~2 turns/sec at peak.
+      this.rushSpinAngle += dt * 14;
       // Body contact damage during the dash — same hitbox as normal
       // body contact (SENTINEL_HITBOX_RADIUS).
       const px = ctxRoom.player.x;
@@ -1693,7 +1700,12 @@ export class Sentinel implements Enemy {
     if (this.rushPhase === "recovery") {
       this.vx = 0;
       this.vy = 0;
+      // Wind down the spin so the eye / hex align back to upright
+      // before the figure-8 resumes.
+      const decay = Math.exp(-6 * dt);
+      this.rushSpinAngle *= decay;
       if (this.rushTimer >= RUSH_RECOVERY_SEC) {
+        this.rushSpinAngle = 0;
         // Smooth lerp back to the figure-8 curve — same pattern Ring
         // Burst uses on exit so the boss doesn't snap to the lemniscate
         // point.
@@ -3938,6 +3950,10 @@ export class Sentinel implements Enemy {
         (BODY_SCALE_MAX - BODY_SCALE_MIN);
     const totalScale = scale * breathScale;
     if (totalScale !== 1) ctx.scale(totalScale, totalScale);
+    // Rush spin — only non-zero during a rush attack. Eye + hex
+    // shells inherit the rotation so the whole boss reads as
+    // tumbling at the player.
+    if (this.rushSpinAngle !== 0) ctx.rotate(this.rushSpinAngle);
 
     // Telegraph jitter — small random offset while charging the
     // radial burst. Aimed-shot telegraph doesn't shake the body
