@@ -103,11 +103,19 @@ window.addEventListener("touchstart", kickMenuMusic, { once: false });
 // periodically from JS — toggling the `.glitch` class on #logo
 // activates the ::before/::after pseudo-elements baked into CSS.
 const logoEl = document.getElementById("logo");
+const logoLetterEls: HTMLElement[] = [];
 if (logoEl) {
-  logoEl.querySelectorAll<HTMLElement>(".logo-letter").forEach((el, i) => {
+  logoLetterEls.push(
+    ...logoEl.querySelectorAll<HTMLElement>(".logo-letter"),
+  );
+  logoLetterEls.forEach((el, i) => {
     el.style.animationDelay = `${i * 80}ms`;
   });
   scheduleLogoGlitch();
+  // Letters finish their cascade entrance at index*80 + 280 ms. The
+  // last letter (idx 6) lands at ~840 ms; wait an extra 600 ms before
+  // the first flicker so the entrance reads cleanly.
+  window.setTimeout(scheduleLetterFlicker, 1500);
 }
 
 function scheduleLogoGlitch(): void {
@@ -125,6 +133,99 @@ function scheduleLogoGlitch(): void {
       isLong ? 200 : 60,
     );
   }, delay);
+}
+
+// === Per-letter neon flicker ===
+//
+// Picks a random VECTRIX letter every 1.5–4.5 s and runs a flicker
+// sequence on it via inline `style.opacity`. Opacity affects the
+// rendered text AND the text-shadow glow proportionally, so dimming
+// reads as "this bulb is losing power." Two modes — most are short
+// blinks, ~25 % are sustained brownouts where the letter goes mostly
+// dark for ~1–2 s, then stutters back to full.
+//
+// Inline opacity wins over the CSS `.logo` breathing and the
+// `letter-enter` keyframe (which has long since completed by the
+// time the first flicker fires), so the sequences don't fight other
+// animations. Final step clears the inline value so CSS takes over
+// again until the next flicker.
+
+const FLICKER_SHORT_SEQ: { o: number; at: number }[] = [
+  { o: 0.2, at: 0 },
+  { o: 1, at: 40 },
+  { o: 0.1, at: 90 },
+  { o: 1, at: 140 },
+  { o: 0.45, at: 200 },
+  { o: 1, at: 270 },
+];
+const FLICKER_LONG_DIM = 0.12;
+const FLICKER_LONG_REIGNITE: { o: number; at: number }[] = [
+  // Tail-end stutter that reignites the bulb. Offsets are added to
+  // the brown-out hold's end timestamp inside runLetterFlicker.
+  { o: 1, at: 40 },
+  { o: 0.2, at: 90 },
+  { o: 1, at: 150 },
+  { o: 0.35, at: 220 },
+  { o: 1, at: 300 },
+];
+
+function scheduleLetterFlicker(): void {
+  const delay = 1500 + Math.random() * 3000;
+  window.setTimeout(() => {
+    if (logoLetterEls.length === 0) {
+      scheduleLetterFlicker();
+      return;
+    }
+    const letter =
+      logoLetterEls[Math.floor(Math.random() * logoLetterEls.length)];
+    const isLong = Math.random() < 0.25;
+    if (isLong) runLongFlicker(letter);
+    else runShortFlicker(letter);
+    scheduleLetterFlicker();
+  }, delay);
+}
+
+// Set opacity with !important. The `letter-enter` CSS animation runs
+// with `animation-fill-mode: forwards`, which keeps `opacity: 1` at
+// the "Animations" cascade origin — that origin outranks regular
+// author-inline styles, so a plain `letter.style.opacity = "0.2"`
+// is silently ignored. !important inline lands at the "important
+// author" origin which beats the animation.
+function setOpacityImportant(letter: HTMLElement, value: number): void {
+  letter.style.setProperty("opacity", String(value), "important");
+}
+function clearOpacity(letter: HTMLElement): void {
+  letter.style.removeProperty("opacity");
+}
+
+function runShortFlicker(letter: HTMLElement): void {
+  for (const step of FLICKER_SHORT_SEQ) {
+    window.setTimeout(() => {
+      setOpacityImportant(letter, step.o);
+    }, step.at);
+  }
+  const total =
+    FLICKER_SHORT_SEQ[FLICKER_SHORT_SEQ.length - 1].at + 80;
+  window.setTimeout(() => {
+    clearOpacity(letter);
+  }, total);
+}
+
+function runLongFlicker(letter: HTMLElement): void {
+  const holdMs = 800 + Math.random() * 1400;
+  // Drop to brown-out immediately.
+  setOpacityImportant(letter, FLICKER_LONG_DIM);
+  // Then the reignite stutter after the hold.
+  for (const step of FLICKER_LONG_REIGNITE) {
+    window.setTimeout(() => {
+      setOpacityImportant(letter, step.o);
+    }, holdMs + step.at);
+  }
+  const total =
+    holdMs + FLICKER_LONG_REIGNITE[FLICKER_LONG_REIGNITE.length - 1].at + 100;
+  window.setTimeout(() => {
+    clearOpacity(letter);
+  }, total);
 }
 
 // === Button entrance + hover/click sounds + flash ===
