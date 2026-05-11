@@ -47,15 +47,13 @@ previewPlayer.y = PREVIEW_CANVAS_SIZE / 2;
 
 // === Tutorial / Intro gate ===
 //
-// Two flags drive the main entry button:
-//   - dash-proto:has-seen-intro — set after the intro cinematic plays.
-//     Absent on first visit → button reads PLAY and routes to /intro.html.
-//   - dash-proto:tutorial-completed — set on tutorial completion. Once
-//     present (which implies has-seen-intro is also set), the button
-//     switches to TUTORIAL replay mode and the ROOMS button unlocks.
+// The intro cinematic plays every time the PLAY/TUTORIAL button is
+// clicked — both before AND after the tutorial has been completed —
+// because that's the only place the player gets to (re)experience
+// the awakening sequence. A skip prompt appears 2 s into the
+// cinematic for repeat viewings. The dash-proto:tutorial-completed
+// flag still gates the ROOMS button.
 function applyTutorialState(): void {
-  const hasSeenIntro =
-    localStorage.getItem("dash-proto:has-seen-intro") === "true";
   const completed =
     localStorage.getItem("dash-proto:tutorial-completed") === "true";
 
@@ -63,19 +61,14 @@ function applyTutorialState(): void {
   const tutLabel = document.getElementById("btn-tutorial-label");
   const tutDesc = document.getElementById("btn-tutorial-desc");
 
-  if (!hasSeenIntro) {
-    // First-time visitor — replace TUTORIAL with the PLAY entry into
-    // the intro cinematic.
+  if (!completed) {
     if (tutLabel) tutLabel.textContent = "PLAY";
     if (tutDesc) tutDesc.textContent = "Begin your story";
-    if (tutBtn) tutBtn.setAttribute("href", "./intro.html");
   } else {
     if (tutLabel) tutLabel.textContent = "TUTORIAL";
-    if (tutDesc) {
-      tutDesc.textContent = completed ? "Replay tutorial" : "Learn the basics";
-    }
-    if (tutBtn) tutBtn.setAttribute("href", "./tutorial.html");
+    if (tutDesc) tutDesc.textContent = "Replay the awakening";
   }
+  if (tutBtn) tutBtn.setAttribute("href", "./intro.html");
 
   const roomsBtn = document.getElementById("btn-rooms");
   const roomsDesc = document.getElementById("btn-rooms-desc");
