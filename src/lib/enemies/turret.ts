@@ -1,14 +1,19 @@
 import { makeBullet } from "../bullets";
 import { ENEMY_TURRET_DETECTION } from "../config";
-import { drawNeon } from "../neon";
 import { PALETTE } from "../palette";
 import { applyAwarenessJitter, initAwareness } from "./awareness";
 import { applyEnemyKnockback, drawEnemyHitFlash } from "./fx";
+import {
+  BARREL_ANCHOR_X,
+  BARREL_ANCHOR_Y,
+  BODY_ANCHOR,
+  getTurretBarrelSprite,
+  getTurretBodySprite,
+} from "./turret-sprite";
 import type { AwarenessState, Enemy, EnemyContext, EnemyType } from "./types";
 
 const TURRET_RADIUS = 25;
 const TURRET_BARREL_LEN = 28;
-const TURRET_BARREL_WIDTH = 12;
 const SHOOT_INTERVAL = 1.0;
 const TELEGRAPH_WINDOW = 0.3;
 const AIM_LERP_RATE = 10; // frame-rate-independent (1 - exp(-rate*dt))
@@ -218,61 +223,22 @@ export class Turret implements Enemy {
       ctx.translate(-this.x, -this.y);
     }
 
-    // body: double-stroke ring
-    drawNeon(
-      ctx,
-      () => {
-        ctx.strokeStyle = col;
-        ctx.lineWidth = 2.5;
-        ctx.beginPath();
-        ctx.arc(this.x, this.y, TURRET_RADIUS, 0, Math.PI * 2);
-        ctx.stroke();
-        ctx.lineWidth = 1.5;
-        ctx.beginPath();
-        ctx.arc(this.x, this.y, TURRET_RADIUS - 6, 0, Math.PI * 2);
-        ctx.stroke();
-      },
-      col,
-      22,
-      8,
-    );
+    // body + core — cached as a single sprite with the layered glow
+    // baked in. Replaces two drawNeon calls (4 shadowBlur ops) with
+    // one drawImage per turret per frame.
+    const body = getTurretBodySprite();
+    ctx.drawImage(body, this.x - BODY_ANCHOR, this.y - BODY_ANCHOR);
 
-    // core
-    drawNeon(
-      ctx,
-      () => {
-        ctx.fillStyle = col;
-        ctx.beginPath();
-        ctx.arc(this.x, this.y, 6, 0, Math.PI * 2);
-        ctx.fill();
-      },
-      col,
-      14,
-      5,
-    );
-
-    // barrel — triangle pointing along aimAngle
+    // barrel — same trick, plus a separate cached sprite for the
+    // telegraph variant so the brighter glow flashes in without a
+    // live shadowBlur cost.
     const telegraph =
       this.shootTimer > 0 && this.shootTimer < TELEGRAPH_WINDOW;
+    const barrel = getTurretBarrelSprite(telegraph);
     ctx.save();
     ctx.translate(this.x, this.y);
     ctx.rotate(this.aimAngle);
-    drawNeon(
-      ctx,
-      () => {
-        ctx.fillStyle = col;
-        ctx.globalAlpha = telegraph ? 1.0 : 0.78;
-        ctx.beginPath();
-        ctx.moveTo(TURRET_RADIUS, -TURRET_BARREL_WIDTH / 2);
-        ctx.lineTo(TURRET_RADIUS + TURRET_BARREL_LEN, 0);
-        ctx.lineTo(TURRET_RADIUS, TURRET_BARREL_WIDTH / 2);
-        ctx.closePath();
-        ctx.fill();
-      },
-      col,
-      telegraph ? 30 : 18,
-      telegraph ? 12 : 7,
-    );
+    ctx.drawImage(barrel, -BARREL_ANCHOR_X, -BARREL_ANCHOR_Y);
     ctx.restore();
 
     // HP pips above the turret

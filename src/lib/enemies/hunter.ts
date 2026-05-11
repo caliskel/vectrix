@@ -1,7 +1,6 @@
 import {
   ENEMY_HUNTER_DETECTION,
   HUNTER_IDLE_ANGLE_LERP,
-  HUNTER_IDLE_GLOW_BLUR,
   HUNTER_IDLE_LERP_FACTOR,
   HUNTER_IDLE_PATH_SIZE_MAX,
   HUNTER_IDLE_PATH_SIZE_MIN,
@@ -17,10 +16,10 @@ import {
   HUNTER_TRAIL_MIN_SCALE,
 } from "../config";
 import { audio } from "../audio";
-import { drawNeon } from "../neon";
 import { resolveEntityWallCollisions } from "../walls";
 import { applyAwarenessJitter, initAwareness } from "./awareness";
 import { applyEnemyKnockback, drawEnemyHitFlash } from "./fx";
+import { getHunterSprite, HUNTER_SPRITE_ANCHOR } from "./hunter-sprite";
 import type { AwarenessState, Enemy, EnemyContext, EnemyType } from "./types";
 
 // Hunter — fast inertial chaser. Accelerates toward the player but
@@ -39,8 +38,6 @@ const SPEED_LINE_THRESHOLD = 200;
 const CONTACT_BOUNCE_FACTOR = -0.5;
 const CONTACT_SQUASH_SEC = 0.1;
 const CONTACT_SQUASH_AMOUNT = 0.25;    // perpendicular squeeze 1 → 0.75 → 1
-const GLOW_BLUR_MIN = 12;
-const GLOW_BLUR_MAX = 20;
 
 // Body polygon (in local space, pointing along +X axis). Rendered both
 // as outer stroke (neon) and translucent inner fill.
@@ -72,8 +69,6 @@ const HUNTER_TRAIL_MAX_AGE_SEC =
   (HUNTER_TRAIL_BUFFER_SIZE + 2) * HUNTER_TRAIL_INTERVAL_SEC;
 // Inner translucent fill alpha relative to the outer stroke alpha,
 // matching the body's 0.4 fill / 1.0 stroke ratio.
-const HUNTER_TRAIL_FILL_RATIO = 0.4;
-const HUNTER_TRAIL_STROKE_WIDTH = 2;
 
 type TrailSample = {
   x: number;
@@ -293,11 +288,6 @@ export class Hunter implements Enemy {
     const isAggro = this.awarenessState === "aggro";
     if (this.contactSquashTime <= 0) this.drawTrail(ctx);
     const speed = Math.hypot(this.vx, this.vy);
-    const speedNorm =
-      this.maxSpeed > 0 ? Math.min(1, speed / this.maxSpeed) : 0;
-    const glowBlur = isAggro
-      ? GLOW_BLUR_MIN + (GLOW_BLUR_MAX - GLOW_BLUR_MIN) * speedNorm
-      : HUNTER_IDLE_GLOW_BLUR;
 
     ctx.save();
     applyAwarenessJitter(ctx, this);
@@ -315,10 +305,9 @@ export class Hunter implements Enemy {
       ctx.scale(1, 1 - CONTACT_SQUASH_AMOUNT * t);
     }
 
-    // Speed lines behind the polygon (negative X in local space).
-    // Aggro uses the variable-density layout based on speed; idle
-    // always uses a thin 2-line variant at lower opacity so the
-    // chase is still visually louder.
+    // Speed lines — kept live (small, no glow needed for the read).
+    // shadowBlur removed: at 6 px on 4-line strokes the cost wasn't
+    // matched by visible glow once the sprite glow already paints.
     {
       const lines = isAggro
         ? speed > SPEED_LINE_THRESHOLD
@@ -329,8 +318,6 @@ export class Hunter implements Enemy {
       ctx.save();
       ctx.strokeStyle = HUNTER_COLOR;
       ctx.lineWidth = 2;
-      ctx.shadowColor = HUNTER_COLOR;
-      ctx.shadowBlur = 6;
       ctx.globalAlpha = alpha;
       for (const [yOff, len] of lines) {
         ctx.beginPath();
@@ -341,27 +328,13 @@ export class Hunter implements Enemy {
       ctx.restore();
     }
 
-    // Inner translucent fill
-    ctx.save();
-    ctx.globalAlpha = 0.4;
-    ctx.fillStyle = HUNTER_COLOR;
-    polyPath(ctx);
-    ctx.fill();
-    ctx.restore();
-
-    // Outer neon stroke — glow scales with speed
-    drawNeon(
-      ctx,
-      () => {
-        polyPath(ctx);
-        ctx.strokeStyle = HUNTER_COLOR;
-        ctx.lineWidth = 2;
-        ctx.stroke();
-      },
-      HUNTER_COLOR,
-      glowBlur,
-      4,
-    );
+    // Body — fill + neon stroke baked into one sprite. Replaces a
+    // drawNeon (2 shadowBlur ops) + a translucent fill with one
+    // drawImage. Per-speed glow ramp is gone — the sprite is baked
+    // at the midpoint blur and the stretch transform already carries
+    // the "going fast" read.
+    const sprite = getHunterSprite();
+    ctx.drawImage(sprite, -HUNTER_SPRITE_ANCHOR, -HUNTER_SPRITE_ANCHOR);
 
     drawEnemyHitFlash(ctx, this, () => polyPath(ctx));
     ctx.restore();
@@ -513,8 +486,11 @@ export class Hunter implements Enemy {
     if (len === 0) return;
     // Iterate old → new so freshly-emitted ghosts overlay older ones,
     // matching the alpha ramp of i / len (0 = old / faint, 1 = fresh).
-    // Per-sample maxAlpha / glowBlur let an idle → aggro transition
-    // fade dim ghosts while new bright ones overlay them.
+    // Each ghost is one drawImage of the cached hunter sprite —
+    // replaces N × shadowBlur fills/strokes per frame (one per sample)
+    // with N × drawImage. With trail length ≥ 6 and ≥1 hunter per
+    // room, that's a dominant chunk of the rooms render budget gone.
+    const sprite = getHunterSprite();
     for (let i = 0; i < len; i++) {
       const s = this.trailSamples[i];
       const t = i / len;
@@ -526,19 +502,8 @@ export class Hunter implements Enemy {
       ctx.translate(s.x, s.y);
       ctx.rotate(s.angle);
       ctx.scale(scale, scale);
-      ctx.shadowColor = HUNTER_COLOR;
-      ctx.shadowBlur = s.glowBlur * scale;
-      // Inner translucent fill at the same fill / stroke ratio as the
-      // live body. Stroke at full alpha for the ghost.
-      ctx.fillStyle = HUNTER_COLOR;
-      ctx.globalAlpha = alpha * HUNTER_TRAIL_FILL_RATIO;
-      polyPath(ctx);
-      ctx.fill();
       ctx.globalAlpha = alpha;
-      ctx.strokeStyle = HUNTER_COLOR;
-      ctx.lineWidth = HUNTER_TRAIL_STROKE_WIDTH;
-      polyPath(ctx);
-      ctx.stroke();
+      ctx.drawImage(sprite, -HUNTER_SPRITE_ANCHOR, -HUNTER_SPRITE_ANCHOR);
       ctx.restore();
     }
   }
