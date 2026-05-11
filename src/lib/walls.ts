@@ -89,29 +89,63 @@ export function bulletInsideWall(
   return false;
 }
 
+const WALL_FILL = "rgba(28, 35, 60, 0.85)";
+const WALL_STROKE = "#7dd3fc";
+const WALL_STROKE_ALPHA = 0.6;
+const WALL_GLOW_BLUR = 12;
+const DASHABLE_GLOW_BLUR = 14;
+
 export function drawWalls(
   ctx: CanvasRenderingContext2D,
   walls: Wall[],
 ): void {
+  if (walls.length === 0) return;
+
+  // Single fill pass for all walls — same colour, batch as one path.
   ctx.save();
-  ctx.fillStyle = PALETTE.bgGrid;
+  ctx.fillStyle = WALL_FILL;
+  ctx.shadowBlur = 0;
   for (const w of walls) {
     ctx.fillRect(w.x, w.y, w.w, w.h);
   }
-  ctx.lineWidth = 1;
-  for (const w of walls) {
-    if (w.dashable) {
-      // Dashable walls get a cyan dashed outline so the player
-      // associates them with the dash colour and reads "phase
-      // through" without copy.
-      ctx.strokeStyle = PALETTE.playerDash;
-      ctx.setLineDash([6, 6]);
-      ctx.strokeRect(w.x + 0.5, w.y + 0.5, w.w - 1, w.h - 1);
-      ctx.setLineDash([]);
-    } else {
-      ctx.strokeStyle = `rgba(168, 85, 247, 0.3)`; // PALETTE.player at alpha 0.3
-      ctx.strokeRect(w.x + 0.5, w.y + 0.5, w.w - 1, w.h - 1);
-    }
-  }
   ctx.restore();
+
+  // Stroke passes grouped by style so shadowBlur is set once per group
+  // (one expensive shadow render per category, not per wall).
+  const solidWalls: Wall[] = [];
+  const dashableWalls: Wall[] = [];
+  for (const w of walls) {
+    if (w.dashable) dashableWalls.push(w);
+    else solidWalls.push(w);
+  }
+
+  if (solidWalls.length > 0) {
+    ctx.save();
+    ctx.globalAlpha = WALL_STROKE_ALPHA;
+    ctx.strokeStyle = WALL_STROKE;
+    ctx.shadowColor = WALL_STROKE;
+    ctx.shadowBlur = WALL_GLOW_BLUR;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    for (const w of solidWalls) {
+      ctx.rect(w.x + 0.5, w.y + 0.5, w.w - 1, w.h - 1);
+    }
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  if (dashableWalls.length > 0) {
+    ctx.save();
+    ctx.strokeStyle = PALETTE.playerDash;
+    ctx.shadowColor = PALETTE.playerDash;
+    ctx.shadowBlur = DASHABLE_GLOW_BLUR;
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([6, 6]);
+    ctx.beginPath();
+    for (const w of dashableWalls) {
+      ctx.rect(w.x + 0.5, w.y + 0.5, w.w - 1, w.h - 1);
+    }
+    ctx.stroke();
+    ctx.restore();
+  }
 }

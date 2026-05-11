@@ -1,14 +1,13 @@
-// Cheap ambient background — dust drift + slow radial pulse — so the
-// arena reads as a living place instead of a flat sheet of grid lines.
-// Two render slots:
-//   drawBack(ctx, w, h) — paints under everything (call right after the
-//     bg fill / before the grid blit). Currently the slow synthwave
-//     pulse: a radial gradient that breathes between cyan and magenta
-//     so the screen has a "horizon" that crossfades hue.
-//   drawFront(ctx, w, h) — paints over the grid but under entities, so
-//     dust feels close to the play surface without obscuring bullets.
-// Both are screen-space; pass in the viewport size each frame. Caller
-// owns the time advance via update(dt) so pause-state can freeze the
+// Cheap ambient background — drifting dust so the arena reads as a
+// living place instead of a flat sheet of grid lines. Two render slots:
+//   drawBack(ctx, w, h) — currently a no-op (reserved for future
+//     static / non-centered atmosphere layers; a centered radial
+//     pulse used to live here but read as a spotlight following the
+//     camera and was removed).
+//   drawFront(ctx) — dust over the grid but under entities, so motes
+//     feel close to the play surface without obscuring bullets.
+// Screen-space; pass viewport size to drawBack each frame. Caller
+// owns time advance via update(dt) so pause-state freezes the
 // background without a separate clock.
 
 const DUST_COUNT = 36;
@@ -16,13 +15,9 @@ const DUST_MIN_SPEED = 6;
 const DUST_MAX_SPEED = 22;
 const DUST_MIN_SIZE = 0.6;
 const DUST_MAX_SIZE = 1.8;
-const DUST_MIN_ALPHA = 0.10;
-const DUST_MAX_ALPHA = 0.32;
+const DUST_MIN_ALPHA = 0.06;
+const DUST_MAX_ALPHA = 0.18;
 
-// Hue cycle for the radial pulse — cyan → magenta → cyan over PULSE_PERIOD_SEC.
-const PULSE_PERIOD_SEC = 8.0;
-const PULSE_ALPHA_BASE = 0.05;
-const PULSE_ALPHA_SWING = 0.05;
 
 interface DustParticle {
   x: number;
@@ -79,40 +74,10 @@ export class BackgroundFx {
     }
   }
 
-  drawBack(ctx: CanvasRenderingContext2D, viewW: number, viewH: number): void {
-    // Slow cool↔warm radial pulse, two superimposed gradients out of
-    // phase so the centre "breathes" through the cyan / magenta axis.
-    const cx = viewW * 0.5;
-    const cy = viewH * 0.5;
-    const r = Math.max(viewW, viewH) * 0.7;
-    const phase = (this.time / PULSE_PERIOD_SEC) * Math.PI * 2;
-
-    const aCyan =
-      PULSE_ALPHA_BASE + PULSE_ALPHA_SWING * (0.5 + 0.5 * Math.sin(phase));
-    const aMagenta =
-      PULSE_ALPHA_BASE +
-      PULSE_ALPHA_SWING * (0.5 + 0.5 * Math.sin(phase + Math.PI));
-
-    ctx.save();
-    const gCyan = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
-    gCyan.addColorStop(0, `rgba(0, 229, 255, ${aCyan.toFixed(3)})`);
-    gCyan.addColorStop(1, "rgba(0, 0, 0, 0)");
-    ctx.fillStyle = gCyan;
-    ctx.fillRect(0, 0, viewW, viewH);
-
-    const gMag = ctx.createRadialGradient(
-      cx + viewW * 0.15,
-      cy - viewH * 0.1,
-      0,
-      cx + viewW * 0.15,
-      cy - viewH * 0.1,
-      r * 0.9,
-    );
-    gMag.addColorStop(0, `rgba(255, 60, 180, ${aMagenta.toFixed(3)})`);
-    gMag.addColorStop(1, "rgba(0, 0, 0, 0)");
-    ctx.fillStyle = gMag;
-    ctx.fillRect(0, 0, viewW, viewH);
-    ctx.restore();
+  drawBack(_ctx: CanvasRenderingContext2D, _viewW: number, _viewH: number): void {
+    // Reserved slot — nothing drawn here right now. Kept on the API so
+    // callers don't shuffle render order when a future atmosphere layer
+    // gets added.
   }
 
   drawFront(ctx: CanvasRenderingContext2D): void {
@@ -132,6 +97,48 @@ export class BackgroundFx {
         p.size,
       );
     }
+    ctx.restore();
+  }
+
+  // Diagonal energy pulse — a single bright line travelling from the
+  // upper-right corner to the lower-left of the supplied bounds once
+  // every GRID_PULSE_PERIOD_SEC. One stroke + glow per frame; cheap
+  // enough to call inside large rooms (cost dwarfed by enemy bullets).
+  // Caller picks the coordinate space — pass roomW/roomH inside a
+  // camera transform for rooms, or viewW/viewH for sandbox.
+  drawGridPulse(
+    ctx: CanvasRenderingContext2D,
+    width: number,
+    height: number,
+  ): void {
+    const PERIOD = 6.0;
+    const total = width + height;
+    const phase = (this.time % PERIOD) / PERIOD;
+    const wavePos = phase * total;
+
+    // Line x + y = wavePos, clipped to [0..width] × [0..height].
+    const x1 = Math.max(0, wavePos - height);
+    const y1 = wavePos - x1;
+    const x2 = Math.min(width, wavePos);
+    const y2 = wavePos - x2;
+    if (x1 === x2 && y1 === y2) return;
+
+    // Fade in/out at the path ends so the pulse doesn't snap on/off.
+    const fadeWindow = 0.08;
+    let fade = 1.0;
+    if (phase < fadeWindow) fade = phase / fadeWindow;
+    else if (phase > 1 - fadeWindow) fade = (1 - phase) / fadeWindow;
+
+    ctx.save();
+    ctx.globalAlpha = 0.55 * fade;
+    ctx.strokeStyle = "#7dd3fc";
+    ctx.shadowColor = "#7dd3fc";
+    ctx.shadowBlur = 14;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x2, y2);
+    ctx.stroke();
     ctx.restore();
   }
 }

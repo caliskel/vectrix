@@ -34,10 +34,10 @@ export interface PostOptions {
 }
 
 export const DEFAULT_POST: PostOptions = {
-  bloomBlurPx: 14,
-  bloomStrength: 0.45,
-  caOffsetPx: 2,
-  caStrength: 0.35,
+  bloomBlurPx: 6,
+  bloomStrength: 0.04,
+  caOffsetPx: 1.2,
+  caStrength: 0.06,
 };
 
 export class PostProcessor {

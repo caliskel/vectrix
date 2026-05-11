@@ -1399,10 +1399,13 @@ function render() {
   if (gridCanvas) {
     ctx.drawImage(gridCanvas, 0, 0, viewW, viewH);
   }
+  bgFx.drawGridPulse(ctx, viewW, viewH);
   bgFx.drawFront(ctx);
 
   ctx.save();
-  ctx.strokeStyle = "rgba(255,255,255,0.6)";
+  ctx.strokeStyle = "rgba(125, 211, 252, 0.7)";
+  ctx.shadowColor = "#7dd3fc";
+  ctx.shadowBlur = 14;
   ctx.lineWidth = WALL_THICKNESS;
   ctx.strokeRect(
     WALL_THICKNESS / 2,

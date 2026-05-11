@@ -1873,11 +1873,10 @@ export function start(canvas: HTMLCanvasElement): void {
     // Minimalist world-space grid. Clamped to the room's logical
     // bounds so it stops at the perimeter walls and never bleeds into
     // the letterbox.
-    drawRoomGrid(
-      ctx,
-      currentRoom.width ?? ROOM_W_PX,
-      currentRoom.height ?? ROOM_H_PX,
-    );
+    const _gridW = currentRoom.width ?? ROOM_W_PX;
+    const _gridH = currentRoom.height ?? ROOM_H_PX;
+    drawRoomGrid(ctx, _gridW, _gridH);
+    bgFx.drawGridPulse(ctx, _gridW, _gridH);
 
     drawWalls(ctx, currentRoom.walls);
     if (currentRoom.door) drawDoor(ctx, currentRoom.door);
