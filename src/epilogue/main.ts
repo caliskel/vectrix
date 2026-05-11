@@ -1,6 +1,10 @@
 import {
   createEpilogueState,
   drawEpilogue,
+  epilogueClearKeys,
+  epilogueIsInRoom,
+  epilogueOnKeyDown,
+  epilogueOnKeyUp,
   trySkipEpilogue,
   updateEpilogue,
 } from "./epilogue-cinematic";
@@ -57,20 +61,33 @@ function start(canvas: HTMLCanvasElement): void {
   }
   requestAnimationFrame(frame);
 
-  // Input handling: during void scene any input skips to the room
-  // scene; once we're in the room scene, any input returns to main
-  // menu. A 600 ms grace window after entering the room scene gates
-  // the menu nav so a stray key from the cinematic skip doesn't
-  // immediately bounce out.
-  const ROOM_INPUT_GRACE_SEC = 0.6;
-  function handleInput(): void {
-    if (state.phase === "roompresent") {
-      if (state.profanityStart < ROOM_INPUT_GRACE_SEC) return;
+  // Input model: during the void cinematic, any key/click skips
+  // straight to the room scene. Once we're in the room, WASD/Shift
+  // drive the hero, and Enter/Escape return to the main menu. The
+  // gameplay keybinds (loadKeybinds) drive movement, so a rebound
+  // player's keys work here too without further wiring.
+  window.addEventListener("keydown", (e) => {
+    if (!epilogueIsInRoom(state)) {
+      // Still in the void scene — any keydown is "skip cinematic".
+      trySkipEpilogue(state);
+      return;
+    }
+    // Menu nav — gated to keys that don't collide with movement.
+    if (e.code === "Enter" || e.code === "Escape") {
+      e.preventDefault();
       returnToMenu();
       return;
     }
-    trySkipEpilogue(state);
-  }
-  window.addEventListener("keydown", handleInput);
-  window.addEventListener("pointerdown", handleInput);
+    epilogueOnKeyDown(state, e.code);
+  });
+  window.addEventListener("keyup", (e) => {
+    epilogueOnKeyUp(state, e.code);
+  });
+  window.addEventListener("blur", () => epilogueClearKeys(state));
+  window.addEventListener("pointerdown", () => {
+    // Pointer click only acts as a skip during the cinematic. In the
+    // room scene, clicks do nothing — menu nav is keyboard-only so
+    // an accidental mouse press doesn't bounce the player out.
+    if (!epilogueIsInRoom(state)) trySkipEpilogue(state);
+  });
 }

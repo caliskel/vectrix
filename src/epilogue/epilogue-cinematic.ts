@@ -1,28 +1,40 @@
 // Epilogue cinematic — played after the Sentinel death sequence.
 // Two acts:
-//   1. Void scene: narrator speaks three lines over the same drifting
-//      vector grid + dust we use in the intro, so the cinematic reads
+//   1. Void scene: narrator speaks three English lines over the same
+//      drifting grid + dust used in the intro, so the cinematic reads
 //      as a bookend to the opening.
-//   2. "To be continued" scene: hero recentres in a tutorial-sized
-//      room with "продолжение следует" in the middle and a row of
-//      six random profanity glyphs vibrating under the hero — comic
-//      grumble after a hard win.
+//   2. Playable "to be continued" room (tutorial-sized): the hero can
+//      walk around with the same physics they used in-game. A turquoise
+//      "TO BE CONTINUED" headline resolves in via the same scramble-
+//      text effect the intro used for "who am i?", and six random
+//      profanity glyphs vibrate just below the hero — comic grumble
+//      after a hard fight. Movement only, no enemies, no exit; the
+//      footer hint tells the player to press a key to return to menu.
 //
-// Pure canvas 2D. Reuses void-bg, drawPlayerEye, and the typewriter
-// pattern from intro-cinematic.ts.
+// Pure canvas 2D. Reuses void-bg, drawPlayerEye, the typewriter pattern
+// from intro-cinematic.ts, and the scramble-text helper.
 
 import {
   BLINK_CLOSE_DURATION_MS,
   DASH_DURATION_MS,
+  PLAYER_MAX_SPEED,
+  PLAYER_SIZE,
+  PLAYER_WALK_FACTOR,
 } from "../lib/config";
 import {
   createPlayer,
   drawPlayerEye,
+  inputDirection,
   loadPlayerProfile,
   updateEye,
   type Player,
   type PlayerProfile,
 } from "../lib/player";
+import {
+  isActionPressed,
+  loadKeybinds,
+  type KeybindProfile,
+} from "../lib/keybinds";
 import {
   createVoidBg,
   drawVoidBg,
@@ -30,15 +42,22 @@ import {
   tickVoidBg,
   type VoidBgState,
 } from "../lib/void-bg";
+import {
+  drawScrambleText,
+  makeScrambleSchedule,
+  type ScrambleSchedule,
+} from "../lib/scramble-text";
 import { audio } from "../lib/audio";
 
 const CANVAS_W = 1200;
 const CANVAS_H = 800;
 const EYE_CX = 600;
 const EYE_CY = 420;
-const HERO_SIZE = 60;
-const HERO_SCALE_VOID = 0.85;
-const HERO_SCALE_ROOM = 0.95;
+const HERO_SIZE = PLAYER_SIZE;
+const HERO_SCALE_VOID = 1.8; // void render scales the hero up so the
+                             // tiny in-game size still reads cinematic
+const ACCEL_FACTOR = 9;
+const FRICTION = 8.0;
 
 type PhaseId =
   | "fadein"
@@ -55,12 +74,11 @@ const PHASE_ORDER: PhaseId[] = [
   "roompresent",
 ];
 
-// The first three sentences together run ~18 s with reverse-type
-// erase between beats. The "roompresent" phase has no auto-exit —
-// it sits until the player clicks or presses any key.
 const PHASE_DURATIONS: Record<PhaseId, number> = {
   fadein: 1.5,
   settle: 1.5,
+  // Three English beats with reverse-type erase between them — total
+  // ~18.5 s, sized to match the intro's narration pacing.
   narration: 18.5,
   voidfade: 1.5,
   // Sentinel for "stays until input"; never reached by the auto-
@@ -78,29 +96,30 @@ type NarrationBeat = {
   eraseDuration: number;
 };
 
-// Three beats, total length ~18 s. The third beat ends right before
-// the voidfade phase begins, so the line is fully off screen before
-// the curtain drops.
+// English narrator beats. Pacing follows the intro: typing speed
+// roughly tracks ~70 ms/char, holdDuration covers the legibility
+// window before reverse-type erase kicks in. typeStarts retimed so
+// later beats begin AFTER the previous one fully erases.
 const NARRATION_BEATS: NarrationBeat[] = [
   {
-    text: "Ого! Не ожидал твоего успеха.",
+    text: "Oh? I didn't expect you to win.",
     typeStart: 0.8,
-    typeDuration: 2.1,
+    typeDuration: 2.4,
     holdDuration: 1.6,
     eraseDuration: 0,
   },
   {
-    text: "Может с твоим появлением что-то изменится?",
-    typeStart: 6.6,
+    text: "Maybe your arrival will change something?",
+    typeStart: 6.8,
     typeDuration: 3.0,
     holdDuration: 1.6,
     eraseDuration: 0,
   },
   {
-    text: "Удачи Искра, она тебе понадобится.",
+    text: "Good luck, Spark. You'll need it.",
     typeStart: 13.4,
     typeDuration: 2.5,
-    holdDuration: 1.8,
+    holdDuration: 1.9,
     eraseDuration: 0,
   },
 ];
@@ -108,10 +127,27 @@ for (const beat of NARRATION_BEATS) {
   beat.eraseDuration = (beat.text.length * NARRATION_ERASE_SPEED_MS) / 1000;
 }
 
-// Profanity glyphs — 6 chars drawn under the hero in the room scene,
+// Profanity glyphs — six chars drawn under the hero in the room scene,
 // vibrating in place. Set picked to read as cartoon-profanity.
 const PROFANITY_GLYPHS = "!@#$%&*?^~+=";
 const PROFANITY_COUNT = 6;
+
+// "TO BE CONTINUED" scramble schedule. Sized for a 15-char title at a
+// slightly slower settle than the askname so the resolution reads as
+// considered, not snappy.
+const TBC_TEXT = "TO BE CONTINUED";
+const TBC_SCRAMBLE_SCHEDULE: ScrambleSchedule = makeScrambleSchedule({
+  appearStart: 0.4,
+  fadeInDuration: 0.6,
+  settleDuration: 1.9,
+  // Long hold — this is the final beat of the game, not a transient
+  // thought. Big honking total totalDuration so the scramble never
+  // fades back out while the player is exploring the room.
+  holdDuration: 9_000,
+  fadeOutDuration: 0.4,
+});
+const TBC_COLOR = "#22d3ee"; // turquoise / bright cyan
+const TBC_SHADOW = "#06b6d4";
 
 export type EpilogueState = {
   time: number;
@@ -121,14 +157,19 @@ export type EpilogueState = {
 
   hero: Player;
   heroProfile: PlayerProfile;
+  // Input — bound to the player's saved keybinds (same global profile
+  // as gameplay). Movement uses the same accel/friction model as the
+  // tutorial / sandbox loops so the feel carries over.
+  keybinds: KeybindProfile;
+  keys: Set<string>;
 
   bg: VoidBgState;
 
   narratorBeatIdx: number;
   narratorCharsLast: number;
 
-  // "Room scene" props — 6 fixed glyphs chosen once on entry, plus
-  // a random per-glyph phase so the vibration looks individual.
+  // "Room scene" props — 6 fixed glyphs chosen once on entry, plus a
+  // random per-glyph phase so the vibration looks individual.
   profanity: { ch: string; phase: number; speed: number }[];
   profanityStart: number;
 };
@@ -136,8 +177,8 @@ export type EpilogueState = {
 export function createEpilogueState(): EpilogueState {
   const heroProfile = loadPlayerProfile();
   const hero = createPlayer();
-  hero.x = EYE_CX;
-  hero.y = EYE_CY;
+  hero.x = CANVAS_W / 2;
+  hero.y = CANVAS_H / 2 + 40;
   hero.isClosing = false;
   hero.closeAmount = 0;
   hero.blinkActive = false;
@@ -162,6 +203,8 @@ export function createEpilogueState(): EpilogueState {
     done: false,
     hero,
     heroProfile,
+    keybinds: loadKeybinds(),
+    keys: new Set<string>(),
     bg: createVoidBg(CANVAS_W, CANVAS_H),
     narratorBeatIdx: -1,
     narratorCharsLast: 0,
@@ -184,9 +227,11 @@ export function updateEpilogue(state: EpilogueState, dt: number): void {
   }
   if (state.phase === "roompresent") {
     state.profanityStart += dt;
+    tickRoomScene(state, dt);
   }
   // Idle hero animation — same engine sandbox/rooms use, so blinks
-  // and breath read the same.
+  // and breath read the same. Drives pupil / breath even during the
+  // playable room (the eye still tracks dash cooldown etc.).
   updateEye(state.hero, dt, {
     threat: null,
     size: HERO_SIZE,
@@ -197,8 +242,7 @@ export function updateEpilogue(state: EpilogueState, dt: number): void {
 
 function onPhaseEnter(state: EpilogueState): void {
   if (state.phase === "roompresent") {
-    // Re-roll the profanity once the room scene starts — gives the
-    // appearance some control even if the cinematic restarts.
+    // Re-roll the profanity once the room scene starts.
     for (const p of state.profanity) {
       p.ch =
         PROFANITY_GLYPHS[
@@ -207,16 +251,91 @@ function onPhaseEnter(state: EpilogueState): void {
       p.phase = Math.random() * Math.PI * 2;
     }
     state.profanityStart = 0;
+    // Reset player velocity so the room starts still even if a stray
+    // accel slipped through from the void scene (it shouldn't, but
+    // belt-and-braces).
+    state.hero.vx = 0;
+    state.hero.vy = 0;
+    state.hero.x = CANVAS_W / 2;
+    state.hero.y = CANVAS_H / 2 + 60;
   }
 }
 
 /** Player-driven skip: fast-forward the void cinematic to the room
- *  scene. Called by the page entry on any key / pointer event. */
+ *  scene. Called by the page entry on any key / pointer event during
+ *  the void. */
 export function trySkipEpilogue(state: EpilogueState): void {
   if (state.phase === "roompresent") return;
   state.phase = "roompresent";
   state.phaseTime = 0;
   onPhaseEnter(state);
+}
+
+/** Input plumbing — the page entry registers keydown/keyup at window
+ *  level and forwards into these. Mirrors the gameplay loops so a
+ *  rebound key works here too. */
+export function epilogueOnKeyDown(state: EpilogueState, code: string): void {
+  state.keys.add(code);
+}
+export function epilogueOnKeyUp(state: EpilogueState, code: string): void {
+  state.keys.delete(code);
+}
+export function epilogueClearKeys(state: EpilogueState): void {
+  state.keys.clear();
+}
+export function epilogueIsInRoom(state: EpilogueState): boolean {
+  return state.phase === "roompresent";
+}
+
+function tickRoomScene(state: EpilogueState, dt: number): void {
+  const player = state.hero;
+  // Same accel/friction model as sandbox + tutorial: ramp into the
+  // input direction, exponential damping, then cap speed to the walk
+  // factor when WALK is held.
+  const input = inputDirection(state.keys, state.keybinds);
+  if (input.x !== 0 || input.y !== 0) {
+    player.facingX = input.x;
+    player.facingY = input.y;
+  }
+  const accel = PLAYER_MAX_SPEED * ACCEL_FACTOR;
+  player.vx += input.x * accel * dt;
+  player.vy += input.y * accel * dt;
+  const damp = Math.exp(-FRICTION * dt);
+  player.vx *= damp;
+  player.vy *= damp;
+  const cap = isActionPressed("walk", state.keys, state.keybinds)
+    ? PLAYER_MAX_SPEED * PLAYER_WALK_FACTOR
+    : PLAYER_MAX_SPEED;
+  const sp = Math.hypot(player.vx, player.vy);
+  if (sp > cap) {
+    const k = cap / sp;
+    player.vx *= k;
+    player.vy *= k;
+  }
+  player.x += player.vx * dt;
+  player.y += player.vy * dt;
+  // Perimeter clamp — same 30 px wall thickness as the in-game rooms
+  // so the hero stops at the same visual edge they're used to.
+  const half = PLAYER_SIZE / 2;
+  const WALL_T = 30;
+  const minX = WALL_T + half;
+  const maxX = CANVAS_W - WALL_T - half;
+  const minY = WALL_T + half;
+  const maxY = CANVAS_H - WALL_T - half;
+  if (player.x < minX) {
+    player.x = minX;
+    if (player.vx < 0) player.vx = 0;
+  } else if (player.x > maxX) {
+    player.x = maxX;
+    if (player.vx > 0) player.vx = 0;
+  }
+  if (player.y < minY) {
+    player.y = minY;
+    if (player.vy < 0) player.vy = 0;
+  } else if (player.y > maxY) {
+    player.y = maxY;
+    if (player.vy > 0) player.vy = 0;
+  }
 }
 
 export function drawEpilogue(
@@ -257,6 +376,8 @@ function drawVoidScene(
   ctx.translate(EYE_CX, EYE_CY);
   ctx.scale(HERO_SCALE_VOID, HERO_SCALE_VOID);
   ctx.translate(-EYE_CX, -EYE_CY);
+  state.hero.x = EYE_CX;
+  state.hero.y = EYE_CY;
   drawPlayerEye(ctx, state.hero, HERO_SIZE, {
     ringColor: state.heroProfile.outerRing,
     pupilColor: state.heroProfile.pupil,
@@ -292,15 +413,15 @@ function drawRoomScene(
   ctx: CanvasRenderingContext2D,
   state: EpilogueState,
 ): void {
-  // Match the tutorial / rooms canonical stage so the screen reads
-  // as "a room we know." Dark backplate + faint cyan grid + perimeter
+  // Match the tutorial / rooms canonical stage so the screen reads as
+  // "a room we know." Dark backplate + faint cyan grid + perimeter
   // wall outline, lifted from the rooms-game render path but pared
   // down to the static essentials.
   ctx.fillStyle = "#04060a";
   ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
   // Faint grid.
   ctx.save();
-  ctx.strokeStyle = "rgba(0, 229, 255, 0.04)";
+  ctx.strokeStyle = "rgba(0, 229, 255, 0.05)";
   ctx.lineWidth = 1;
   const step = 60;
   ctx.beginPath();
@@ -314,48 +435,43 @@ function drawRoomScene(
   }
   ctx.stroke();
   ctx.restore();
-  // Perimeter wall outline — same look as room walls in the game.
+  // Perimeter wall — same 30 px wall thickness used everywhere else.
   const WALL_T = 30;
   ctx.save();
-  ctx.fillStyle = "rgba(20, 25, 43, 0.85)";
+  ctx.fillStyle = "rgba(20, 25, 43, 0.9)";
   ctx.fillRect(0, 0, CANVAS_W, WALL_T);
   ctx.fillRect(0, CANVAS_H - WALL_T, CANVAS_W, WALL_T);
   ctx.fillRect(0, 0, WALL_T, CANVAS_H);
   ctx.fillRect(CANVAS_W - WALL_T, 0, WALL_T, CANVAS_H);
-  ctx.strokeStyle = "rgba(255, 255, 255, 0.06)";
+  ctx.strokeStyle = "rgba(255, 255, 255, 0.08)";
   ctx.lineWidth = 1;
   ctx.strokeRect(WALL_T / 2, WALL_T / 2, CANVAS_W - WALL_T, CANVAS_H - WALL_T);
   ctx.restore();
 
-  // "Продолжение следует" — bright Orbitron-styled headline near the
-  // top, slow shimmer so it doesn't feel static.
-  const u = Math.min(1, state.profanityStart / 0.8);
-  const headlineAlpha = u;
-  if (headlineAlpha > 0) {
-    const shimmer =
-      0.85 + 0.15 * Math.sin(state.profanityStart * Math.PI * 1.2);
-    ctx.save();
-    ctx.globalAlpha = headlineAlpha * shimmer;
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.font =
-      "700 64px Orbitron, ui-monospace, 'SF Mono', Consolas, monospace";
-    ctx.fillStyle = "#ffffff";
-    ctx.shadowColor = "rgba(0, 229, 255, 0.85)";
-    ctx.shadowBlur = 24;
-    ctx.fillText("продолжение следует", CANVAS_W / 2, 230);
-    ctx.restore();
-  }
+  // "TO BE CONTINUED" — turquoise scramble headline near the top,
+  // resolves left-to-right via the same drawScrambleText helper the
+  // intro uses for "who am i?". Held indefinitely (long holdDuration
+  // in the schedule) so the title stays legible while the player
+  // wanders the room.
+  drawScrambleText(
+    ctx,
+    TBC_TEXT,
+    state.profanityStart,
+    TBC_SCRAMBLE_SCHEDULE,
+    CANVAS_W / 2,
+    180,
+    {
+      color: TBC_COLOR,
+      shadowColor: TBC_SHADOW,
+      shadowBlur: 14,
+      font:
+        "500 56px ui-monospace, 'SF Mono', Consolas, 'Liberation Mono', monospace",
+    },
+  );
 
-  // Hero — centred a bit below the headline. Pure idle render via
-  // the same engine the in-game player uses.
-  const heroY = CANVAS_H / 2 + 40;
+  // Hero — drawn at his live (x, y) from the movement physics. Same
+  // engine the in-game player uses.
   ctx.save();
-  ctx.translate(CANVAS_W / 2, heroY);
-  ctx.scale(HERO_SCALE_ROOM, HERO_SCALE_ROOM);
-  ctx.translate(-CANVAS_W / 2, -heroY);
-  state.hero.x = CANVAS_W / 2;
-  state.hero.y = heroY;
   drawPlayerEye(ctx, state.hero, HERO_SIZE, {
     ringColor: state.heroProfile.outerRing,
     pupilColor: state.heroProfile.pupil,
@@ -365,18 +481,21 @@ function drawRoomScene(
   });
   ctx.restore();
 
-  // Profanity glyphs — six chars under the hero. Each glyph
-  // vibrates in place (sin offset + alpha jitter) so the row reads
-  // as comic cursing, not a static label.
-  const glyphY = heroY + 90;
-  const glyphSpacing = 38;
+  // Profanity glyphs — six chars under the hero, vibrating in place.
+  // Anchored to the hero's live position so the cursing follows him
+  // around the room.
+  const glyphAnchorY = state.hero.y + HERO_SIZE * 1.7;
+  const glyphSpacing = 30;
   const rowWidth = (PROFANITY_COUNT - 1) * glyphSpacing;
-  const rowLeft = CANVAS_W / 2 - rowWidth / 2;
+  const rowLeft = state.hero.x - rowWidth / 2;
+  // Fade in over the first 0.8 s so the line doesn't snap on the
+  // moment the room appears.
+  const glyphFade = Math.min(1, state.profanityStart / 0.8);
   ctx.save();
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   ctx.font =
-    "700 42px ui-monospace, 'SF Mono', Consolas, 'Liberation Mono', monospace";
+    "700 32px ui-monospace, 'SF Mono', Consolas, 'Liberation Mono', monospace";
   for (let i = 0; i < state.profanity.length; i++) {
     const p = state.profanity[i];
     const t = state.profanityStart * p.speed + p.phase;
@@ -385,20 +504,23 @@ function drawRoomScene(
     const rot = Math.sin(t * 0.8) * 0.18;
     const flicker = 0.7 + Math.abs(Math.sin(t * 2.2)) * 0.3;
     const x = rowLeft + i * glyphSpacing + dx;
-    const y = glyphY + dy;
+    const y = glyphAnchorY + dy;
     ctx.save();
     ctx.translate(x, y);
     ctx.rotate(rot);
-    ctx.globalAlpha = headlineAlpha * flicker;
+    ctx.globalAlpha = glyphFade * flicker;
     ctx.fillStyle = "#ff2d55";
     ctx.shadowColor = "#ff5577";
-    ctx.shadowBlur = 12;
+    ctx.shadowBlur = 10;
     ctx.fillText(p.ch, 0, 0);
     ctx.restore();
   }
   ctx.restore();
 
-  // Footer hint — "ANY KEY → MENU" so the player has a clear exit.
+  // Footer hint — "PRESS ENTER → MAIN MENU" so the player has a clear
+  // exit that doesn't collide with movement keys. WASD / Shift /
+  // Space (the gameplay bindings) are owned by the room movement
+  // here, so the menu nav is gated to Enter / Escape.
   ctx.save();
   ctx.globalAlpha = Math.min(1, state.profanityStart / 1.6) * 0.55;
   ctx.textAlign = "center";
@@ -406,9 +528,9 @@ function drawRoomScene(
   ctx.font = "500 12px ui-monospace, SFMono-Regular, Menlo, monospace";
   ctx.fillStyle = "#7d8590";
   ctx.fillText(
-    "PRESS ANY KEY — RETURN TO MAIN MENU",
+    "PRESS ENTER — RETURN TO MAIN MENU",
     CANVAS_W / 2,
-    CANVAS_H - 32,
+    CANVAS_H - 50,
   );
   ctx.restore();
 }
