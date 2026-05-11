@@ -515,7 +515,10 @@ export const FLOATING_TEXT_MAX_CONCURRENT = 4;
 export const FLOATING_TEXT_TYPING_SPEED_MS = 50;
 export const FLOATING_TEXT_STABLE_DURATION_MIN_MS = 3000;
 export const FLOATING_TEXT_STABLE_DURATION_MAX_MS = 5000;
-export const FLOATING_TEXT_FADEOUT_MS = 800;
+// Reverse-type speed for the disappear phase. A touch faster than
+// typing so the erase feels like a decisive backspace pass rather
+// than a slow tail.
+export const FLOATING_TEXT_ERASING_SPEED_MS = 35;
 export const FLOATING_TEXT_FONT_SIZE_MIN = 11;
 export const FLOATING_TEXT_FONT_SIZE_MAX = 16;
 export const FLOATING_TEXT_CURSOR_BLINK_MS = 400;

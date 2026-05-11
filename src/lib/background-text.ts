@@ -7,7 +7,7 @@
 
 import {
   FLOATING_TEXT_CURSOR_BLINK_MS,
-  FLOATING_TEXT_FADEOUT_MS,
+  FLOATING_TEXT_ERASING_SPEED_MS,
   FLOATING_TEXT_FONT_SIZE_MAX,
   FLOATING_TEXT_FONT_SIZE_MIN,
   FLOATING_TEXT_MAX_CONCURRENT,
@@ -86,7 +86,7 @@ const WORD_POOL: string[] = [
   "glass cascade",
 ];
 
-type WordPhase = "typing" | "stable" | "fadeout";
+type WordPhase = "typing" | "stable" | "erasing";
 
 type Word = {
   text: string;
@@ -102,6 +102,7 @@ type Word = {
   phaseTime: number;    // seconds elapsed in current phase
   typingDurationSec: number;
   stableDurationSec: number;
+  erasingDurationSec: number;
   cursorPhase: number;  // 0..1 cycle (50% on, 50% off)
   charWidth: number;    // pre-measured advance per character
 };
@@ -148,11 +149,11 @@ export function updateBackgroundTexts(
       w.phase = "stable";
       w.phaseTime = 0;
     } else if (w.phase === "stable" && w.phaseTime >= w.stableDurationSec) {
-      w.phase = "fadeout";
+      w.phase = "erasing";
       w.phaseTime = 0;
     } else if (
-      w.phase === "fadeout" &&
-      w.phaseTime >= FLOATING_TEXT_FADEOUT_MS / 1000
+      w.phase === "erasing" &&
+      w.phaseTime >= w.erasingDurationSec
     ) {
       state.words.splice(i, 1);
     }
@@ -226,6 +227,7 @@ function trySpawnWord(
         FLOATING_TEXT_STABLE_DURATION_MIN_MS / 1000,
         FLOATING_TEXT_STABLE_DURATION_MAX_MS / 1000,
       ),
+      erasingDurationSec: (text.length * FLOATING_TEXT_ERASING_SPEED_MS) / 1000,
       cursorPhase: 0,
       charWidth: sampleWidth,
     });
@@ -267,18 +269,23 @@ export function drawBackgroundTexts(
   ctx.textBaseline = "top";
 
   for (const w of state.words) {
-    const charsShown =
-      w.phase === "typing"
-        ? Math.min(
-            w.text.length,
-            Math.floor(w.phaseTime / (FLOATING_TEXT_TYPING_SPEED_MS / 1000)),
-          )
-        : w.text.length;
-    let alpha = w.maxAlpha;
-    if (w.phase === "fadeout") {
-      alpha = w.maxAlpha * Math.max(0, 1 - w.phaseTime / (FLOATING_TEXT_FADEOUT_MS / 1000));
+    let charsShown: number;
+    if (w.phase === "typing") {
+      charsShown = Math.min(
+        w.text.length,
+        Math.floor(w.phaseTime / (FLOATING_TEXT_TYPING_SPEED_MS / 1000)),
+      );
+    } else if (w.phase === "erasing") {
+      charsShown = Math.max(
+        0,
+        w.text.length - Math.floor(w.phaseTime / (FLOATING_TEXT_ERASING_SPEED_MS / 1000)),
+      );
+    } else {
+      charsShown = w.text.length;
     }
-    const cursorOn = w.phase !== "fadeout" && w.cursorPhase < 0.5;
+    if (charsShown <= 0 && w.phase === "erasing") continue;
+    const alpha = w.maxAlpha;
+    const cursorOn = w.cursorPhase < 0.5;
     let renderText = w.text.substring(0, charsShown);
     if (cursorOn) renderText += "_";
 
@@ -287,8 +294,7 @@ export function drawBackgroundTexts(
     ctxAny.letterSpacing = "2px";
     ctx.globalAlpha = alpha;
     ctx.fillStyle = w.color;
-    ctx.shadowColor = w.color;
-    ctx.shadowBlur = 4;
+    ctx.shadowBlur = 0;
     ctx.fillText(renderText, w.x, w.y);
   }
   ctx.restore();
@@ -296,10 +302,11 @@ export function drawBackgroundTexts(
 
 function pickColor(): { color: string; maxAlpha: number } {
   const r = Math.random();
-  // ~70 % cyan, ~15 % red, ~15 % white. Alpha caps from the spec.
-  if (r < 0.7) return { color: "#00e5ff", maxAlpha: 0.35 };
-  if (r < 0.85) return { color: "#ff2d55", maxAlpha: 0.30 };
-  return { color: "#ffffff", maxAlpha: 0.25 };
+  // Cyan dominant with the occasional white. Red dropped — at low
+  // alphas against the navy bg it either read as broken pink fuzz
+  // or invisible, no useful middle ground.
+  if (r < 0.8) return { color: "#00e5ff", maxAlpha: 0.06 };
+  return { color: "#ffffff", maxAlpha: 0.06 };
 }
 
 function pickIntervalSec(minSec: number, maxSec: number): number {
