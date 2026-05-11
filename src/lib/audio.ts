@@ -140,28 +140,83 @@ class AudioEngine {
     this.setupVisibilityHandler();
   }
 
-  // Drop the music gain to zero the moment the tab goes hidden, ramp
-  // it back up when it returns. Without this, browsers throttling
-  // background audio drain the Tone.js Player's buffer enough that
-  // resume produces a crackle / pop. Set once per audio instance.
+  // Crackle-free tab switching. Three failure paths conspire to
+  // produce the pop on resume:
+  //   1. SFX synths with in-flight envelopes — when the audio thread
+  //      pauses mid-decay, the resumed sample jumps to a stale value.
+  //   2. The music Player's buffer position can desync from the
+  //      context clock when the thread is throttled.
+  //   3. Gain ramps scheduled before suspend land on the wrong audio
+  //      time after resume.
+  // Fix: silence MASTER (covers every audio path) over a longer ramp,
+  // suspend the entire context, and on return resume + set master
+  // back instantly to the configured volume — no ramp on the way up
+  // because the context just started, there's nothing in flight.
+  // The music gain stays at its configured value the whole time;
+  // we don't touch it. Set once per audio instance.
   private visibilityHandlerInstalled = false;
+  private visibilitySuspendTimer: number | null = null;
   private setupVisibilityHandler(): void {
     if (this.visibilityHandlerInstalled) return;
     if (typeof document === "undefined") return;
     this.visibilityHandlerInstalled = true;
     document.addEventListener("visibilitychange", () => {
-      if (!this.music) return;
+      if (!this.initialized) return;
+      if (!this.master) return;
       const ctx = getContext();
-      const now = ctx.now();
+      const raw = ctx.rawContext as unknown as AudioContext;
       try {
         if (document.hidden) {
-          this.music.gain.cancelScheduledValues(now);
-          this.music.gain.linearRampToValueAtTime(0.0001, now + 0.08);
+          // Cancel any pending resume work — we're going hidden again.
+          if (this.visibilitySuspendTimer !== null) {
+            clearTimeout(this.visibilitySuspendTimer);
+            this.visibilitySuspendTimer = null;
+          }
+          // Step 1: ramp master to a true zero over 200ms. Longer ramp
+          // gives the audio thread time to flush whatever envelope /
+          // buffer state is in flight before the suspend hits.
+          const now = ctx.now();
+          this.master.gain.cancelScheduledValues(now);
+          // Anchor the ramp at the current value so the linear ramp
+          // is well-defined regardless of prior automation state.
+          this.master.gain.setValueAtTime(this.master.gain.value, now);
+          this.master.gain.linearRampToValueAtTime(0, now + 0.2);
+          // Step 2: suspend the whole context AFTER the ramp fully
+          // plays out. 250 ms covers the 200 ms ramp + a small margin
+          // so the suspend point lands on a silent sample.
+          this.visibilitySuspendTimer = window.setTimeout(() => {
+            this.visibilitySuspendTimer = null;
+            try {
+              if (raw.state === "running") void raw.suspend?.();
+            } catch {}
+          }, 250);
         } else {
-          this.music.gain.cancelScheduledValues(now);
-          this.music.gain.linearRampToValueAtTime(
-            this.masterVol === 0 ? 0 : this.musicVol,
-            now + 0.4,
+          if (this.visibilitySuspendTimer !== null) {
+            clearTimeout(this.visibilitySuspendTimer);
+            this.visibilitySuspendTimer = null;
+          }
+          // Step 1: snap master back to silence so the resume can't
+          // bleed any stale ramp value into the first audible samples.
+          // Done BEFORE resume so the discontinuity is processed in
+          // the suspended context and the post-resume thread starts
+          // at 0.
+          const now0 = ctx.now();
+          this.master.gain.cancelScheduledValues(now0);
+          this.master.gain.setValueAtTime(0, now0);
+          // Step 2: resume the audio context. Skip if applyMute()
+          // owns the suspend (masterVol == 0).
+          if (this.masterVol > 0 && raw.state === "suspended") {
+            void raw.resume?.();
+          }
+          // Step 3: ramp master back to its configured volume over
+          // 400 ms. The longer fade-in here is also a defence against
+          // any wake-up artefacts in the underlying nodes.
+          const now1 = ctx.now();
+          this.master.gain.cancelScheduledValues(now1);
+          this.master.gain.setValueAtTime(0, now1);
+          this.master.gain.linearRampToValueAtTime(
+            this.masterVol,
+            now1 + 0.4,
           );
         }
       } catch {}

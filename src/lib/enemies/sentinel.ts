@@ -5,7 +5,7 @@
 // uncommenting; the import is dropped for now so tsc doesn't flag
 // the unused symbol.
 // import { audio } from "../audio";
-import { isGodMode } from "../god-mode";
+import { isInstakill } from "../god-mode";
 import { makeBullet } from "../bullets";
 import { initAwareness } from "./awareness";
 import type {
@@ -621,11 +621,7 @@ const RUSH_TELEGRAPH_DASH_PATTERN: [number, number] = [12, 10];
 const SWEEP_LASER_BEAM_HIT_HALF_ANGLE = 0.04; // ~2.3° each side
 const SWEEP_LASER_TELEGRAPH_DASH_PATTERN: [number, number] = [10, 8];
 const SWEEP_LASER_TELEGRAPH_DASH_RATE = 80;
-const SWEEP_LASER_ARC_ALPHA_MIN = 0.1;
-const SWEEP_LASER_ARC_ALPHA_MAX = 0.2;
 const SWEEP_LASER_ARC_PULSE_PERIOD_SEC = 0.4;
-const SWEEP_LASER_DIR_TRIANGLE_OFFSET = 100;
-const SWEEP_LASER_DIR_TRIANGLE_SIZE = 10;
 // Recovery staged fade — bloom dissipates last, so the residual
 // glow reads like a hot wire cooling instead of a flat cut. Each
 // layer uses its own duration + easing curve.
@@ -675,6 +671,33 @@ const SWEEP_LASER_MID_PAUSE_SHAKE_SEC = 0.1;
 // Subtle white-to-cyan core shift so the return pass reads
 // differently from the forward pass at a glance.
 const SWEEP_LASER_RETURN_CORE_COLOR = "#aaeeff";
+
+// === Phase 3 Sweep360 attack ===
+// Full-revolution beam. The 180° sweep laser sweeps once and pauses;
+// this one does a single uninterrupted 360° rotation. Telegraph is
+// the key reading window — a big curved rotation arrow + the start
+// angle line + a faint full-arc preview so the player can pre-empt
+// the rotation direction. Damage check + particles + trail reuse the
+// same primitives as the sweep laser (one beam, one angle), the only
+// difference is the rotation envelope.
+const SWEEP_360_TELEGRAPH_SEC = 1.2;
+const SWEEP_360_FIRING_SEC = 2.0;
+const SWEEP_360_RECOVERY_SEC = 0.5;
+const SWEEP_360_BASE_COOLDOWN_SEC = 9.0;
+const SWEEP_360_BEAM_HIT_HALF_ANGLE = 0.05;
+const SWEEP_360_TELEGRAPH_DASH_PATTERN: [number, number] = [12, 10];
+const SWEEP_360_TELEGRAPH_DASH_RATE = 80;
+// Amber palette — distinct from the red sweep laser so the player
+// reads "different attack" at a glance.
+const SWEEP_360_ACCENT_COLOR = "#ffaa22";
+const SWEEP_360_ARROW_RADIUS = 95;
+const SWEEP_360_ARROW_ARC_RAD = Math.PI / 2; // 90° of arc, big read
+const SWEEP_360_ARROW_LINE_WIDTH = 5;
+const SWEEP_360_ARROW_HEAD_SIZE = 14;
+// Rotation-arrow preview reused in the phase-2 sweep telegraph for a
+// clearer direction tell. Constants live here so the helper picks them
+// up regardless of which attack drew it.
+const ROTATION_ARROW_SHADOW_BLUR = 10;
 
 // === Phase 3 mine field ===
 // Parallel timer (not in the attack rotation, no mutex). Once per
@@ -891,6 +914,11 @@ type RingBurstPhase =
 // Rush attack: boss telegraphs a line toward the player's current
 // position, holds for telegraph, then flies along it. Phase 2+ only.
 type RushPhase = "idle" | "telegraph" | "firing" | "recovery";
+
+// Sweep360 attack — phase 3 only. Single 360° revolution of the beam
+// in a random direction, telegraphed loudly so the player knows which
+// way to run before the beam moves.
+type Sweep360Phase = "idle" | "telegraph" | "firing" | "recovery";
 
 type DyingFragment = {
   x: number;
@@ -1111,6 +1139,16 @@ export class Sentinel implements Enemy {
    *  the recovery phase. */
   private rushSpinAngle = 0;
 
+  // === Sweep360 attack (phase 3) ===
+  private sweep360Phase: Sweep360Phase = "idle";
+  private sweep360Timer = 0;
+  private sweep360IdleTimer = 0;
+  private sweep360StartAngle = 0;
+  private sweep360Direction: 1 | -1 = 1;
+  private sweep360DashOffset = 0;
+  private sweep360BeamParticleTimer = 0;
+  private sweep360Trail: SweepTrailEntry[] = [];
+
   // === Phase 3 mine field ===
   /** Live mines on the floor. Each entry ages until detonation,
    *  then is filtered out. */
@@ -1202,11 +1240,13 @@ export class Sentinel implements Enemy {
     // Phase-transition cinematic also gates incoming damage.
     if (this.state !== "idle" && this.state !== "attacking") return;
     if (this.phaseTransition) return;
-    // God-mode dev shortcut — any successful damage call drops the
+    // Instakill dev shortcut — any successful damage call drops the
     // boss instantly so the death cinematic is one dash-through eye-
     // hit away. Lets us iterate on the dying / VICTORY visuals
-    // without grinding through 60 HP every time.
-    if (isGodMode()) {
+    // without grinding through 60 HP every time. Separate from
+    // god-mode so playtesting invulnerability doesn't also collapse
+    // the fight.
+    if (isInstakill()) {
       this.hp = 0;
       this.enterDying();
       return;
@@ -1439,6 +1479,7 @@ export class Sentinel implements Enemy {
     // branch when nothing is firing.
     this.tickRingBurst(ctxRoom, dt);
     this.tickSweepLaser(ctxRoom, dt);
+    this.tickSweep360(ctxRoom, dt);
     this.tickRushAttack(ctxRoom, dt);
     this.tickRadialBurst(ctxRoom, dt);
     this.tickAimedShot(ctxRoom, dt);
@@ -1454,6 +1495,7 @@ export class Sentinel implements Enemy {
       if (this.radialPhase === "idle") this.radialIdleTimer += dt;
       if (this.aimedPhase === "idle") this.aimedIdleTimer += dt;
       if (this.sweepLaserPhase === "idle") this.sweepLaserIdleTimer += dt;
+      if (this.sweep360Phase === "idle") this.sweep360IdleTimer += dt;
       if (this.rushPhase === "idle") this.rushIdleTimer += dt;
       if (this.ringBurstPhase === "idle" && this.rbCooldownTimer > 0) {
         this.rbCooldownTimer = Math.max(0, this.rbCooldownTimer - dt);
@@ -1468,6 +1510,7 @@ export class Sentinel implements Enemy {
     // RB is the defining mechanic. Sweep is the phase-2+ signature.
     // Aimed is point threat. Radial is filler.
     this.tryStartRingBurst();
+    this.tryStartSweep360();
     this.tryStartSweepLaser(ctxRoom);
     this.tryStartRushAttack(ctxRoom);
     this.tryStartAimedShot(ctxRoom);
@@ -1749,6 +1792,317 @@ export class Sentinel implements Enemy {
     ctx.lineTo(this.rushTargetX - sz, this.rushTargetY);
     ctx.closePath();
     ctx.fill();
+    ctx.restore();
+  }
+
+  // === Sweep360 attack — phase 3 only ===
+  // Full 360° rotation of the beam. The whole point is the loud
+  // telegraph: the curved rotation arrow + start-angle line + circle
+  // preview combine so the player can pre-position on the side the
+  // beam will reach last. The firing window itself is just a single
+  // continuous rotation with no pauses or reversals — the read is in
+  // the telegraph, the dodge is in the timing.
+  private tryStartSweep360(): void {
+    if (this.isAnyAttackActive()) return;
+    if (this.bossPhase < 3) return;
+    const cadence = PHASE_CADENCE[this.bossPhase];
+    if (this.sweep360IdleTimer < SWEEP_360_BASE_COOLDOWN_SEC * cadence) return;
+    this.beginSweep360Telegraph();
+  }
+
+  private beginSweep360Telegraph(): void {
+    this.sweep360Direction = Math.random() < 0.5 ? 1 : -1;
+    // Start angle is random — the beam covers the whole arena
+    // regardless, so anchoring on the player doesn't add anything.
+    this.sweep360StartAngle = Math.random() * Math.PI * 2;
+    this.sweep360Phase = "telegraph";
+    this.sweep360Timer = 0;
+    this.sweep360DashOffset = 0;
+    this.sweep360BeamParticleTimer = 0;
+    this.sweep360Trail = [];
+  }
+
+  private tickSweep360(ctxRoom: EnemyContext, dt: number): void {
+    if (this.sweep360Phase === "idle") return;
+    this.sweep360Timer += dt;
+
+    // Trail aging — ticks across every phase so leftovers fade out.
+    if (this.sweep360Trail.length > 0) {
+      for (const entry of this.sweep360Trail) entry.age += dt;
+      this.sweep360Trail = this.sweep360Trail.filter(
+        (e) => e.age < SWEEP_TRAIL_MAX_AGE_SEC,
+      );
+    }
+
+    if (this.sweep360Phase === "telegraph") {
+      const span =
+        SWEEP_360_TELEGRAPH_DASH_PATTERN[0] +
+        SWEEP_360_TELEGRAPH_DASH_PATTERN[1];
+      this.sweep360DashOffset =
+        (this.sweep360DashOffset + SWEEP_360_TELEGRAPH_DASH_RATE * dt) % span;
+      if (this.sweep360Timer >= SWEEP_360_TELEGRAPH_SEC) {
+        this.sweep360Phase = "firing";
+        this.sweep360Timer = 0;
+        this.sweep360BeamParticleTimer = 0;
+        this.sweep360Trail = [];
+      }
+      return;
+    }
+
+    if (this.sweep360Phase === "firing") {
+      // Damage check — single-angle beam, same primitive as sweep
+      // laser. Player's dash i-frames pass through.
+      const player = ctxRoom.player;
+      if (player.dashIframeTime <= 0) {
+        const currentAngle = this.currentSweep360BeamAngle();
+        const dx = player.x - this.x;
+        const dy = player.y - this.y;
+        const playerAngle = Math.atan2(dy, dx);
+        const diff = Math.abs(shortestAngleDiff(playerAngle, currentAngle));
+        if (diff < SWEEP_360_BEAM_HIT_HALF_ANGLE) {
+          this.requestPlayerHit = true;
+        }
+      }
+
+      // Streaming particles outward along the live beam, same cadence
+      // as the sweep laser. Amber so the attack reads as distinct.
+      this.sweep360BeamParticleTimer += dt;
+      while (
+        this.sweep360BeamParticleTimer >=
+        SWEEP_LASER_BEAM_PARTICLE_INTERVAL_SEC
+      ) {
+        this.sweep360BeamParticleTimer -=
+          SWEEP_LASER_BEAM_PARTICLE_INTERVAL_SEC;
+        const a = this.currentSweep360BeamAngle();
+        ctxRoom.particles.push({
+          x: this.x,
+          y: this.y,
+          vx: Math.cos(a) * SWEEP_LASER_BEAM_PARTICLE_SPEED,
+          vy: Math.sin(a) * SWEEP_LASER_BEAM_PARTICLE_SPEED,
+          initialSize: 3,
+          color: SWEEP_360_ACCENT_COLOR,
+          age: 0,
+          lifetime: SWEEP_LASER_BEAM_PARTICLE_LIFETIME_SEC,
+          glowStrong: 10,
+          glowSoft: 4,
+          drag: 0.97,
+        });
+      }
+
+      // Trail residue.
+      this.sweep360Trail.push({
+        angle: this.currentSweep360BeamAngle(),
+        age: 0,
+      });
+      if (this.sweep360Trail.length > SWEEP_TRAIL_MAX_ENTRIES) {
+        this.sweep360Trail.splice(
+          0,
+          this.sweep360Trail.length - SWEEP_TRAIL_MAX_ENTRIES,
+        );
+      }
+
+      if (this.sweep360Timer >= SWEEP_360_FIRING_SEC) {
+        this.sweep360Phase = "recovery";
+        this.sweep360Timer = 0;
+        // Release ring punctuation, amber to match the attack.
+        ctxRoom.rings.push({
+          x: this.x,
+          y: this.y,
+          age: 0,
+          lifetime: SWEEP_LASER_RELEASE_RING_LIFETIME_SEC,
+          startR: SWEEP_LASER_RELEASE_RING_R_START,
+          endR: SWEEP_LASER_RELEASE_RING_R_END,
+          color: SWEEP_360_ACCENT_COLOR,
+          startLineWidth: SWEEP_LASER_RELEASE_RING_LW_START,
+          endLineWidth: SWEEP_LASER_RELEASE_RING_LW_END,
+          glowBlur: 12,
+        });
+      }
+      return;
+    }
+
+    if (this.sweep360Phase === "recovery") {
+      if (this.sweep360Timer >= SWEEP_360_RECOVERY_SEC) {
+        this.sweep360Phase = "idle";
+        this.sweep360Timer = 0;
+        this.sweep360IdleTimer = 0;
+      }
+      return;
+    }
+  }
+
+  /** Live Sweep360 beam angle. Single rotation, no double-pass. */
+  private currentSweep360BeamAngle(): number {
+    const start = this.sweep360StartAngle;
+    const direction = this.sweep360Direction;
+    if (this.sweep360Phase === "firing") {
+      const t = Math.min(1, this.sweep360Timer / SWEEP_360_FIRING_SEC);
+      return start + direction * Math.PI * 2 * t;
+    }
+    return start;
+  }
+
+  /** Shared rotation-arrow helper. Used by both the Sweep360
+   *  telegraph and the phase-2 sweep laser telegraph so direction
+   *  reads identically across both attacks. Draws a curved arc with
+   *  an arrowhead tangent to the end of the arc, in `color`, around
+   *  the boss at `radius`. */
+  private renderRotationArrow(
+    ctx: CanvasRenderingContext2D,
+    color: string,
+    startA: number,
+    direction: 1 | -1,
+    radius: number,
+  ): void {
+    ctx.save();
+    ctx.strokeStyle = color;
+    ctx.fillStyle = color;
+    ctx.lineWidth = SWEEP_360_ARROW_LINE_WIDTH;
+    ctx.lineCap = "round";
+    ctx.shadowColor = color;
+    ctx.shadowBlur = ROTATION_ARROW_SHADOW_BLUR;
+    const arcLen = SWEEP_360_ARROW_ARC_RAD;
+    const endA = startA + direction * arcLen;
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, radius, startA, endA, direction < 0);
+    ctx.stroke();
+    // Arrowhead at the END of the arc, oriented tangent to the
+    // rotation. The tip is shifted slightly along the tangent so it
+    // reads as forward motion rather than a notch on the arc.
+    const tangent = endA + direction * (Math.PI / 2);
+    const baseX = this.x + Math.cos(endA) * radius;
+    const baseY = this.y + Math.sin(endA) * radius;
+    const head = SWEEP_360_ARROW_HEAD_SIZE;
+    const apexX = baseX + Math.cos(tangent) * (head * 0.9);
+    const apexY = baseY + Math.sin(tangent) * (head * 0.9);
+    const wingA = tangent + Math.PI - 0.55;
+    const wingB = tangent + Math.PI + 0.55;
+    ctx.beginPath();
+    ctx.moveTo(apexX, apexY);
+    ctx.lineTo(baseX + Math.cos(wingA) * head, baseY + Math.sin(wingA) * head);
+    ctx.lineTo(baseX + Math.cos(wingB) * head, baseY + Math.sin(wingB) * head);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+
+  private renderSweep360Telegraph(ctx: CanvasRenderingContext2D): void {
+    const accent = SWEEP_360_ACCENT_COLOR;
+    const startA = this.sweep360StartAngle;
+    const direction = this.sweep360Direction;
+    const reach = Math.hypot(this.arenaW, this.arenaH);
+    const u = Math.min(1, this.sweep360Timer / SWEEP_360_TELEGRAPH_SEC);
+
+    // Faint full-circle preview — pulses to indicate the beam will
+    // sweep through every angle. Drawn first so the line + arrow
+    // paint on top.
+    const ringPulseAlpha =
+      0.08 +
+      ((Math.sin(this.sweep360Timer * Math.PI * 2 / 0.5) + 1) / 2) * 0.10;
+    ctx.save();
+    ctx.strokeStyle = accent;
+    ctx.lineWidth = 3;
+    ctx.globalAlpha = ringPulseAlpha;
+    ctx.shadowColor = accent;
+    ctx.shadowBlur = 6;
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, SWEEP_360_ARROW_RADIUS, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+
+    // Start-angle dashed line, intensity ramps with the telegraph
+    // progress so the lock moment lands hard.
+    const lineEndX = this.x + Math.cos(startA) * reach;
+    const lineEndY = this.y + Math.sin(startA) * reach;
+    ctx.save();
+    ctx.strokeStyle = accent;
+    ctx.lineWidth = 2 + u * 1.5;
+    ctx.setLineDash(SWEEP_360_TELEGRAPH_DASH_PATTERN);
+    ctx.lineDashOffset = -this.sweep360DashOffset;
+    ctx.shadowColor = accent;
+    ctx.shadowBlur = 10;
+    ctx.globalAlpha = 0.5 + u * 0.4;
+    ctx.beginPath();
+    ctx.moveTo(this.x, this.y);
+    ctx.lineTo(lineEndX, lineEndY);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.restore();
+
+    // Big curved rotation arrow — the key direction tell.
+    this.renderRotationArrow(
+      ctx,
+      accent,
+      startA,
+      direction,
+      SWEEP_360_ARROW_RADIUS,
+    );
+  }
+
+  private renderSweep360Beam(ctx: CanvasRenderingContext2D): void {
+    let a = this.currentSweep360BeamAngle();
+    const reach = Math.hypot(this.arenaW, this.arenaH);
+    const accent = SWEEP_360_ACCENT_COLOR;
+    const coreColor = "#ffffff";
+
+    // Trail residue first so the live beam paints on top.
+    if (this.sweep360Trail.length > 0) {
+      ctx.save();
+      for (const entry of this.sweep360Trail) {
+        const fade = 1 - entry.age / SWEEP_TRAIL_MAX_AGE_SEC;
+        if (fade <= 0) continue;
+        const endX = this.x + Math.cos(entry.angle) * reach;
+        const endY = this.y + Math.sin(entry.angle) * reach;
+        ctx.strokeStyle = accent;
+        ctx.lineWidth = SWEEP_TRAIL_BASE_LINEWIDTH * fade;
+        ctx.globalAlpha = SWEEP_TRAIL_BASE_OPACITY * fade;
+        ctx.beginPath();
+        ctx.moveTo(this.x, this.y);
+        ctx.lineTo(endX, endY);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    // Staged recovery fade — same curves as sweep laser so the
+    // "cooling wire" read carries between the two attacks.
+    let coreAlpha = 1;
+    let midAlpha = 1;
+    let outerAlpha = 1;
+    if (this.sweep360Phase === "recovery") {
+      const t = this.sweep360Timer;
+      const cu = Math.min(1, t / SWEEP_LASER_RECOVERY_CORE_FADE_SEC);
+      const mu = Math.min(1, t / SWEEP_LASER_RECOVERY_MID_FADE_SEC);
+      const ou = Math.min(1, t / SWEEP_LASER_RECOVERY_OUTER_FADE_SEC);
+      coreAlpha = 1 - cu * cu;
+      midAlpha = 1 - mu * mu * mu;
+      outerAlpha = 1 - ou * ou * ou * ou;
+    }
+    if (coreAlpha <= 0 && midAlpha <= 0 && outerAlpha <= 0) return;
+
+    const endX = this.x + Math.cos(a) * reach;
+    const endY = this.y + Math.sin(a) * reach;
+    ctx.save();
+    ctx.strokeStyle = accent;
+    ctx.lineWidth = 24;
+    ctx.globalAlpha = 0.28 * outerAlpha;
+    ctx.beginPath();
+    ctx.moveTo(this.x, this.y);
+    ctx.lineTo(endX, endY);
+    ctx.stroke();
+    ctx.lineWidth = 14;
+    ctx.globalAlpha = 0.48 * midAlpha;
+    ctx.beginPath();
+    ctx.moveTo(this.x, this.y);
+    ctx.lineTo(endX, endY);
+    ctx.stroke();
+    ctx.strokeStyle = coreColor;
+    ctx.lineWidth = 6;
+    ctx.globalAlpha = 1 * coreAlpha;
+    ctx.beginPath();
+    ctx.moveTo(this.x, this.y);
+    ctx.lineTo(endX, endY);
+    ctx.stroke();
     ctx.restore();
   }
 
@@ -2225,6 +2579,7 @@ export class Sentinel implements Enemy {
       this.radialPhase !== "idle" ||
       this.aimedPhase !== "idle" ||
       this.sweepLaserPhase !== "idle" ||
+      this.sweep360Phase !== "idle" ||
       this.ringBurstPhase !== "idle" ||
       this.rushPhase !== "idle"
     );
@@ -2875,6 +3230,11 @@ export class Sentinel implements Enemy {
     this.sweepLaserTimer = 0;
     this.sweepLaserIdleTimer = 0;
     this.sweepTrail = [];
+    // Cancel sweep360 too.
+    this.sweep360Phase = "idle";
+    this.sweep360Timer = 0;
+    this.sweep360IdleTimer = 0;
+    this.sweep360Trail = [];
     // Mine field stops cold — live mines are dropped without
     // detonating so the dying cinematic isn't interrupted by a
     // late explosion. Bullets already in flight from earlier
@@ -3175,6 +3535,9 @@ export class Sentinel implements Enemy {
     if (this.sweepLaserPhase === "telegraph") {
       this.renderSweepLaserTelegraph(ctx);
     }
+    if (this.sweep360Phase === "telegraph") {
+      this.renderSweep360Telegraph(ctx);
+    }
     if (this.rushPhase === "telegraph") {
       this.renderRushTelegraph(ctx);
     }
@@ -3192,6 +3555,12 @@ export class Sentinel implements Enemy {
     ) {
       this.renderSweepLaserBeam(ctx);
     }
+    if (
+      this.sweep360Phase === "firing" ||
+      this.sweep360Phase === "recovery"
+    ) {
+      this.renderSweep360Beam(ctx);
+    }
     if (this.streamers.length > 0) {
       this.renderStreamers(ctx);
     }
@@ -3203,18 +3572,19 @@ export class Sentinel implements Enemy {
     const direction = this.sweepLaserDirection;
     const endA = startA + direction * Math.PI;
     const reach = Math.hypot(this.arenaW, this.arenaH);
-    // Sector preview — pulsing low-alpha fill so the player sees the
-    // 180° quadrant the beam will sweep through. Drawn first so the
-    // line + triangle render on top.
+    const u = Math.min(1, this.sweepLaserTimer / SWEEP_LASER_TELEGRAPH_SEC);
+    // Sector preview — pulsing fill showing the 180° quadrant the
+    // beam will sweep through. Bumped alpha range (0.20..0.40) so it
+    // reads against the busy arena background at a glance.
     const sectorPulse =
-      SWEEP_LASER_ARC_ALPHA_MIN +
+      0.20 +
       ((Math.sin(
         (this.sweepLaserTimer * Math.PI * 2) /
           SWEEP_LASER_ARC_PULSE_PERIOD_SEC,
       ) +
         1) /
         2) *
-        (SWEEP_LASER_ARC_ALPHA_MAX - SWEEP_LASER_ARC_ALPHA_MIN);
+        (0.40 - 0.20);
     ctx.save();
     ctx.fillStyle = accent;
     ctx.globalAlpha = sectorPulse;
@@ -3227,18 +3597,47 @@ export class Sentinel implements Enemy {
     ctx.fill();
     ctx.restore();
 
-    // Start-angle dashed line — same colour family as aimed shot's
-    // line but tracks the start of the sweep, not the player.
+    // === Preview scan line ===
+    // A solid beam-shaped line traces the actual sweep ONCE during
+    // the telegraph window, showing exactly where the beam will go
+    // and at roughly the speed of the upcoming firing pass. This is
+    // the unambiguous "where the beam hits" tell — it literally
+    // demonstrates the attack before it fires.
+    const previewAngle = startA + direction * Math.PI * u;
+    const previewX = this.x + Math.cos(previewAngle) * reach;
+    const previewY = this.y + Math.sin(previewAngle) * reach;
+    ctx.save();
+    ctx.strokeStyle = accent;
+    ctx.shadowColor = accent;
+    ctx.shadowBlur = 14;
+    ctx.lineWidth = 5;
+    ctx.globalAlpha = 0.55;
+    ctx.beginPath();
+    ctx.moveTo(this.x, this.y);
+    ctx.lineTo(previewX, previewY);
+    ctx.stroke();
+    // White inner-line for high-contrast read regardless of arena bg.
+    ctx.strokeStyle = "#ffffff";
+    ctx.lineWidth = 2;
+    ctx.globalAlpha = 0.65;
+    ctx.beginPath();
+    ctx.moveTo(this.x, this.y);
+    ctx.lineTo(previewX, previewY);
+    ctx.stroke();
+    ctx.restore();
+
+    // Start-angle dashed line — the bright one (this is where the
+    // beam fires from when firing-1 starts).
     const lineEndX = this.x + Math.cos(startA) * reach;
     const lineEndY = this.y + Math.sin(startA) * reach;
     ctx.save();
     ctx.strokeStyle = accent;
-    ctx.lineWidth = 2;
+    ctx.lineWidth = 3;
     ctx.setLineDash(SWEEP_LASER_TELEGRAPH_DASH_PATTERN);
     ctx.lineDashOffset = -this.sweepLaserDashOffset;
     ctx.shadowColor = accent;
-    ctx.shadowBlur = 8;
-    ctx.globalAlpha = 0.8;
+    ctx.shadowBlur = 10;
+    ctx.globalAlpha = 0.9;
     ctx.beginPath();
     ctx.moveTo(this.x, this.y);
     ctx.lineTo(lineEndX, lineEndY);
@@ -3246,34 +3645,30 @@ export class Sentinel implements Enemy {
     ctx.setLineDash([]);
     ctx.restore();
 
-    // Direction triangle — points along the rotation direction at a
-    // fixed offset from the boss, gives the player a quick read of
-    // CW vs CCW before the beam fires.
-    const triBaseX = this.x + Math.cos(startA) * SWEEP_LASER_DIR_TRIANGLE_OFFSET;
-    const triBaseY = this.y + Math.sin(startA) * SWEEP_LASER_DIR_TRIANGLE_OFFSET;
-    // Tangent: rotate startA by direction*90° to get the apex direction.
-    const tangentA = startA + direction * (Math.PI / 2);
-    const apexX =
-      triBaseX + Math.cos(tangentA) * SWEEP_LASER_DIR_TRIANGLE_SIZE * 1.2;
-    const apexY =
-      triBaseY + Math.sin(tangentA) * SWEEP_LASER_DIR_TRIANGLE_SIZE * 1.2;
-    const sideA = startA + direction * (Math.PI / 2 + 0.6);
-    const sideB = startA + direction * (Math.PI / 2 - 0.6);
+    // End-angle dashed line — mirror of the start line so the player
+    // can see BOTH ends of the 180° span at a glance.
+    const endLineX = this.x + Math.cos(endA) * reach;
+    const endLineY = this.y + Math.sin(endA) * reach;
     ctx.save();
-    ctx.fillStyle = accent;
+    ctx.strokeStyle = accent;
+    ctx.lineWidth = 3;
+    ctx.setLineDash(SWEEP_LASER_TELEGRAPH_DASH_PATTERN);
+    // Run the dash offset in the opposite direction so the two lines
+    // are visually distinct (start crawls one way, end the other).
+    ctx.lineDashOffset = this.sweepLaserDashOffset;
+    ctx.shadowColor = accent;
+    ctx.shadowBlur = 8;
+    ctx.globalAlpha = 0.65;
     ctx.beginPath();
-    ctx.moveTo(apexX, apexY);
-    ctx.lineTo(
-      triBaseX + Math.cos(sideA) * SWEEP_LASER_DIR_TRIANGLE_SIZE * 0.5,
-      triBaseY + Math.sin(sideA) * SWEEP_LASER_DIR_TRIANGLE_SIZE * 0.5,
-    );
-    ctx.lineTo(
-      triBaseX + Math.cos(sideB) * SWEEP_LASER_DIR_TRIANGLE_SIZE * 0.5,
-      triBaseY + Math.sin(sideB) * SWEEP_LASER_DIR_TRIANGLE_SIZE * 0.5,
-    );
-    ctx.closePath();
-    ctx.fill();
+    ctx.moveTo(this.x, this.y);
+    ctx.lineTo(endLineX, endLineY);
+    ctx.stroke();
+    ctx.setLineDash([]);
     ctx.restore();
+
+    // Big curved rotation arrow — same helper the Sweep360 uses, so
+    // the direction language stays consistent across both attacks.
+    this.renderRotationArrow(ctx, accent, startA, direction, 85);
   }
 
   private renderSweepLaserBeam(ctx: CanvasRenderingContext2D): void {
@@ -4353,11 +4748,11 @@ export class Sentinel implements Enemy {
     // (matches takeDamage's gate so the boss is fully invulnerable
     // through the 2 s window).
     if (this.phaseTransition) return false;
-    // God-mode dev shortcut — any dash through the body kills the
+    // Instakill dev shortcut — any dash through the body kills the
     // boss outright. Skips the body-vs-eye distinction so we can
     // trigger the death cinematic from any phase without grinding
     // for a Ring Burst window.
-    if (isGodMode()) {
+    if (isInstakill()) {
       const dx = px - this.x;
       const dy = py - this.y;
       const r = SENTINEL_HITBOX_RADIUS + half;

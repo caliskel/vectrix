@@ -10,6 +10,8 @@ import {
   drawGodModeBadge,
   isGodMode,
   setGodMode,
+  isInstakill,
+  setInstakill,
 } from "../lib/god-mode";
 import { type Bullet, pushTrailSample } from "../lib/bullets";
 import {
@@ -129,10 +131,7 @@ import {
   triggerPlayerSmash,
   updateEye,
 } from "../lib/player";
-import {
-  createGameCompleteMenu,
-  createPauseMenu,
-} from "../lib/pause-menu";
+import { createPauseMenu } from "../lib/pause-menu";
 import { BackgroundFx } from "../lib/bg-fx";
 import {
   createEnergyBackground,
@@ -834,18 +833,10 @@ export function start(canvas: HTMLCanvasElement): void {
     },
   });
 
-  // Game-complete DOM overlay shown after the boss-death sequence
-  // finishes. The frame loop calls `completeMenu.show(...)` once with
-  // the final score + elapsed time when sentinel.state hits "defeated".
-  const completeMenu = createGameCompleteMenu({
-    onPlayAgain: () => {
-      restartRun();
-      lastTime = performance.now();
-    },
-    onQuit: () => {
-      window.location.href = import.meta.env.BASE_URL;
-    },
-  });
+  // (The legacy Game Complete DOM overlay was removed when the boss
+  // death sequence started routing to /epilogue.html instead — the
+  // epilogue page now owns the "you won" screen and its own return
+  // path to the main menu.)
 
   // Dev menu — F1 opens an overlay with a god-mode toggle and a
   // teleport-to-room list. transitionToRoom handles the heavy
@@ -855,6 +846,8 @@ export function start(canvas: HTMLCanvasElement): void {
   const devMenu: DevMenu = createDevMenu({
     getGodMode: () => isGodMode(),
     setGodMode: (v) => setGodMode(v),
+    getInstakill: () => isInstakill(),
+    setInstakill: (v) => setInstakill(v),
     getCurrentRoomId: () => currentRoom.id,
     isTeleportLocked: () =>
       state.runState !== "playing",
@@ -1176,6 +1169,23 @@ export function start(canvas: HTMLCanvasElement): void {
     }
   }
 
+  // Black overlay rendered above everything when the epilogue
+  // hand-off starts. Persists until navigation completes, so the
+  // intermediate frames don't flicker the boss room while the new
+  // page loads.
+  let epilogueFadeStart = 0;
+  let epilogueNavigating = false;
+  function navigateToEpilogue(): void {
+    if (epilogueNavigating) return;
+    epilogueNavigating = true;
+    epilogueFadeStart = performance.now();
+    // Hold the curtain for 800 ms so the fade can play out before the
+    // browser nav (which can be near-instant on the local dev server).
+    window.setTimeout(() => {
+      window.location.href = `${import.meta.env.BASE_URL}epilogue.html`;
+    }, 800);
+  }
+
   // Watches sentinel state transitions so kill score lands at the
   // dying entry, and Game Complete pops at the dying → defeated
   // boundary. Runs once per frame after Sentinel.update.
@@ -1198,11 +1208,13 @@ export function start(canvas: HTMLCanvasElement): void {
       );
     }
     if (prev === "dying" && cur === "defeated") {
-      completeMenu.show({
-        score: state.score,
-        time: state.elapsed,
-      });
+      // Hand off to the epilogue page — fade to black inline first so
+      // the navigation lands on a black canvas (no white flash from
+      // the browser's default transition), then go. The epilogue runs
+      // its own narrator beats + "to be continued" room scene; once
+      // the player taps through, it routes back to the main menu.
       state.runState = "completed";
+      navigateToEpilogue();
     }
     // Music: boss enters dying → drop the boss track entirely. The
     // VICTORY hold + force waves play under quiet, then "BACK TO MAIN
@@ -2364,6 +2376,19 @@ export function start(canvas: HTMLCanvasElement): void {
     if (roomsFadeIn > 0) {
       ctx.save();
       ctx.fillStyle = `rgba(0, 0, 0, ${Math.min(1, roomsFadeIn)})`;
+      ctx.fillRect(0, 0, viewW, viewH);
+      ctx.restore();
+    }
+
+    // Boss-epilogue hand-off curtain. Rendered above everything else;
+    // ramps to fully black over 800 ms so the navigation to
+    // /epilogue.html lands on a black canvas (matching the epilogue's
+    // own opening fadein), no flash, no white frames.
+    if (epilogueNavigating) {
+      const elapsed = (performance.now() - epilogueFadeStart) / 1000;
+      const a = Math.min(1, elapsed / 0.7);
+      ctx.save();
+      ctx.fillStyle = `rgba(0, 0, 0, ${a})`;
       ctx.fillRect(0, 0, viewW, viewH);
       ctx.restore();
     }

@@ -142,6 +142,12 @@ export type DevMenuRoom = { id: string; label: string };
 export type DevMenuConfig = {
   getGodMode: () => boolean;
   setGodMode: (v: boolean) => void;
+  /** Instakill is independent of god-mode — when on, dash-through
+   *  drops any enemy (including the boss) on first contact. Lets
+   *  playtesters keep player invulnerability separate from the
+   *  boss-killing cheat. */
+  getInstakill: () => boolean;
+  setInstakill: (v: boolean) => void;
   getCurrentRoomId: () => string;
   /** True when the run is in a state that disables teleport (e.g.
    *  failed overlay up, mid-transition). The menu greys + disables
@@ -177,18 +183,25 @@ export function createDevMenu(cfg: DevMenuConfig): DevMenu {
   subtitle.textContent = "F1 toggle • Esc close";
   frame.appendChild(subtitle);
 
-  // Section 1 — God mode
+  // Section 1 — Cheats. God mode (player invulnerability) and
+  // instakill (one-shot enemies / boss) are independent toggles.
   const godSection = document.createElement("div");
   godSection.className = "dm-section";
   const godTitle = document.createElement("h3");
   godTitle.className = "dm-section-title";
-  godTitle.textContent = "God mode";
+  godTitle.textContent = "Cheats";
   godSection.appendChild(godTitle);
 
   const godToggle = document.createElement("button");
   godToggle.type = "button";
   godToggle.className = "dm-toggle";
   godSection.appendChild(godToggle);
+
+  const killToggle = document.createElement("button");
+  killToggle.type = "button";
+  killToggle.className = "dm-toggle";
+  godSection.appendChild(killToggle);
+
   frame.appendChild(godSection);
 
   function syncGodToggle() {
@@ -196,10 +209,20 @@ export function createDevMenu(cfg: DevMenuConfig): DevMenu {
     godToggle.classList.toggle("on", on);
     godToggle.textContent = on ? "GOD MODE: ON" : "GOD MODE: OFF";
   }
+  function syncKillToggle() {
+    const on = cfg.getInstakill();
+    killToggle.classList.toggle("on", on);
+    killToggle.textContent = on ? "INSTAKILL: ON" : "INSTAKILL: OFF";
+  }
   syncGodToggle();
+  syncKillToggle();
   godToggle.addEventListener("click", () => {
     cfg.setGodMode(!cfg.getGodMode());
     syncGodToggle();
+  });
+  killToggle.addEventListener("click", () => {
+    cfg.setInstakill(!cfg.getInstakill());
+    syncKillToggle();
   });
 
   // Section 2 — Teleport
@@ -260,6 +283,7 @@ export function createDevMenu(cfg: DevMenuConfig): DevMenu {
       // Freshen state every open — current room may have changed,
       // godmode may have been set externally.
       syncGodToggle();
+      syncKillToggle();
       syncRoomButtons();
       godToggle.focus();
     }

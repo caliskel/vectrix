@@ -11,6 +11,7 @@ export default defineConfig({
         rooms: resolve(__dirname, "rooms.html"),
         tutorial: resolve(__dirname, "tutorial.html"),
         intro: resolve(__dirname, "intro.html"),
+        epilogue: resolve(__dirname, "epilogue.html"),
       },
     },
   },

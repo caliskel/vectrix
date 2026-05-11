@@ -4,6 +4,8 @@ import {
   drawGodModeBadge,
   isGodMode,
   setGodMode,
+  isInstakill,
+  setInstakill,
 } from "../lib/god-mode";
 import { type Bullet, pushTrailSample } from "../lib/bullets";
 import {
@@ -1146,6 +1148,8 @@ export function start(canvas: HTMLCanvasElement): void {
   const devMenu: DevMenu = createDevMenu({
     getGodMode: () => isGodMode(),
     setGodMode: (v) => setGodMode(v),
+    getInstakill: () => isInstakill(),
+    setInstakill: (v) => setInstakill(v),
     getCurrentRoomId: () => currentRoom.id,
     isTeleportLocked: () => state.runState !== "playing",
     teleportToRoom: (id) => {

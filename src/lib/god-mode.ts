@@ -1,15 +1,16 @@
-// Developer toggle — process-local flag that makes the player
-// immune to damage. Lives in module state and is intentionally
-// NOT persisted to localStorage so it can never accidentally leak
-// into a built/shipped session: every reload starts on `false`.
+// Developer toggles — process-local flags that adjust damage flow.
+// `enabled` makes the player immune to damage (god mode); `instakill`
+// makes the boss die on any successful damage call (and enemies
+// drop in one hit). They are independent — turning god mode on no
+// longer also enables instakill, which was clobbering the death
+// cinematic test runs.
 //
-// Sandbox uses installGodModeToggle() to bind F1 directly. Rooms +
-// tutorial route the toggle through the dev-menu overlay instead
-// (F1 opens a menu with godmode + room teleport), so they call
-// setGodMode() from the menu callback rather than installing the
-// global F1 listener.
+// Lives in module state and intentionally NOT persisted to
+// localStorage so dev tweaks can never leak into a built/shipped
+// session: every reload starts on `false`.
 
 let enabled = false;
+let instakill = false;
 let installed = false;
 
 export function isGodMode(): boolean {
@@ -18,6 +19,14 @@ export function isGodMode(): boolean {
 
 export function setGodMode(value: boolean): void {
   enabled = value;
+}
+
+export function isInstakill(): boolean {
+  return instakill;
+}
+
+export function setInstakill(value: boolean): void {
+  instakill = value;
 }
 
 export function installGodModeToggle(): void {
@@ -35,7 +44,7 @@ export function drawGodModeBadge(
   ctx: CanvasRenderingContext2D,
   viewW: number,
 ): void {
-  if (!enabled) return;
+  if (!enabled && !instakill) return;
   ctx.save();
   ctx.textAlign = "center";
   ctx.textBaseline = "top";
@@ -43,6 +52,10 @@ export function drawGodModeBadge(
   ctx.fillStyle = "#facc15";
   ctx.shadowColor = "#facc15";
   ctx.shadowBlur = 8;
-  ctx.fillText("GOD MODE", viewW / 2, 12);
+  let label = "";
+  if (enabled && instakill) label = "GOD MODE + INSTAKILL";
+  else if (enabled) label = "GOD MODE";
+  else label = "INSTAKILL";
+  ctx.fillText(label, viewW / 2, 12);
   ctx.restore();
 }
