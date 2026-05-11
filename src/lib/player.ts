@@ -70,11 +70,7 @@ import {
 import { isActionPressed, type KeybindProfile } from "./keybinds";
 import { drawNeon } from "./neon";
 import { PALETTE } from "./palette";
-import {
-  getPlayerRingSprite,
-  PLAYER_RING_SPRITE_ANCHOR,
-  PLAYER_RING_SPRITE_BASE_RADIUS,
-} from "./player-eye-sprite";
+import { getPlayerRingSprite } from "./player-eye-sprite";
 
 const SHAKE_DURATION = 0.2;
 const DILATE_DURATION = 0.3;
@@ -1141,24 +1137,21 @@ export function drawPlayerEye(
   }
 
   // ===== outer ring (deformed in dash) =====
-  // Cached as a sprite per (ringColor, haloColor); ellipse stretch in
-  // dash applies via ctx.scale around the sprite. Replaces 2 shadowBlur
-  // ops per frame — the biggest single rendering cost in the player
-  // path, fired every frame regardless of activity.
-  const ringSprite = getPlayerRingSprite(ringColor, haloColor);
-  const ringScale = r / PLAYER_RING_SPRITE_BASE_RADIUS;
+  // Cached as a sprite per (ringColor, haloColor, radius). Building
+  // per-radius keeps the menu previews (64 / 110 px) sharp instead
+  // of upscaling a small in-game sprite. Dash stretch applies via
+  // ctx.scale around the drawImage.
+  const ringSprite = getPlayerRingSprite(ringColor, haloColor, r);
   ctx.save();
   if (isDashing) {
     ctx.rotate(dashAngle);
-    ctx.scale(stretchX * ringScale, stretchY * ringScale);
+    ctx.scale(stretchX, stretchY);
     ctx.rotate(-dashAngle);
-  } else if (ringScale !== 1) {
-    ctx.scale(ringScale, ringScale);
   }
   ctx.drawImage(
-    ringSprite,
-    -PLAYER_RING_SPRITE_ANCHOR,
-    -PLAYER_RING_SPRITE_ANCHOR,
+    ringSprite.canvas,
+    -ringSprite.anchor,
+    -ringSprite.anchor,
   );
   ctx.restore();
 
