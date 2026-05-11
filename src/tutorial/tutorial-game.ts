@@ -108,7 +108,11 @@ import {
   type Particle,
   type Ring,
   addFloatingText,
+  compactParticles,
+  compactRings,
   drawFloatingTexts,
+  pushParticle,
+  pushRing,
 } from "../lib/particles";
 import {
   type PlayerProfile,
@@ -607,32 +611,32 @@ export function start(canvas: HTMLCanvasElement): void {
           const py = w.y + Math.random() * w.h;
           const speed = 80 + Math.random() * 140;
           const angle = Math.random() * Math.PI * 2;
-          particles.push({
-            x: px,
-            y: py,
-            vx: Math.cos(angle) * speed,
-            vy: Math.sin(angle) * speed,
-            initialSize: 4,
-            color: PALETTE.bgGrid,
-            age: 0,
-            lifetime: 0.55,
-            glowStrong: 8,
-            glowSoft: 3,
-            drag: 0.94,
-          });
+          pushParticle(
+            particles,
+            px,
+            py,
+            Math.cos(angle) * speed,
+            Math.sin(angle) * speed,
+            4,
+            PALETTE.bgGrid,
+            0.55,
+            8,
+            3,
+            0.94,
+          );
         }
-        rings.push({
-          x: w.x + w.w / 2,
-          y: w.y + w.h / 2,
-          age: 0,
-          lifetime: 0.3,
-          startR: w.h * 0.25,
-          endR: w.h * 0.55,
-          color: "#cbd5e1",
-          startLineWidth: 2,
-          endLineWidth: 0.5,
-          glowBlur: 12,
-        });
+        pushRing(
+          rings,
+          w.x + w.w / 2,
+          w.y + w.h / 2,
+          0.3,
+          w.h * 0.25,
+          w.h * 0.55,
+          "#cbd5e1",
+          2,
+          0.5,
+          12,
+        );
       }
       currentRoom.markers = undefined;
       markerIndex = 0;
@@ -1321,19 +1325,19 @@ export function start(canvas: HTMLCanvasElement): void {
         PARTICLE_SIZE_MIN_FACTOR +
         Math.random() *
           (PARTICLE_SIZE_MAX_FACTOR - PARTICLE_SIZE_MIN_FACTOR);
-      particles.push({
-        x: player.x,
-        y: player.y,
+      pushParticle(
+        particles,
+        player.x,
+        player.y,
         vx,
         vy,
-        initialSize: PLAYER_SIZE * sizeFactor,
+        PLAYER_SIZE * sizeFactor,
         color,
-        age: 0,
         lifetime,
-        glowStrong: isDash ? 15 : 8,
-        glowSoft: isDash ? 6 : 3,
-        drag: PARTICLE_DRAG,
-      });
+        isDash ? 15 : 8,
+        isDash ? 6 : 3,
+        PARTICLE_DRAG,
+      );
     }
   }
 
@@ -1573,7 +1577,7 @@ export function start(canvas: HTMLCanvasElement): void {
     }
     floatingTexts = floatingTexts.filter((t) => t.age < t.lifetime);
     for (const r of rings) r.age += dt;
-    rings = rings.filter((r) => r.age < r.lifetime);
+    compactRings(rings, (r) => r.age < r.lifetime);
     for (const p of particles) {
       p.age += dt;
       p.x += p.vx * dt;
@@ -1584,7 +1588,7 @@ export function start(canvas: HTMLCanvasElement): void {
         p.vy *= k;
       }
     }
-    particles = particles.filter((p) => p.age < p.lifetime);
+    compactParticles(particles, (p) => p.age < p.lifetime);
 
     if (state.clearFlash > 0) {
       state.clearFlash = Math.max(0, state.clearFlash - dt);
@@ -2098,34 +2102,34 @@ export function start(canvas: HTMLCanvasElement): void {
           markerIndex += 1;
           hintAge = 0;
           audio.play.pickupGrab("hp");
-          rings.push({
-            x: active.x,
-            y: active.y,
-            age: 0,
-            lifetime: 0.35,
-            startR: 16,
-            endR: 60,
-            color: PALETTE.pickupHP,
-            startLineWidth: 3,
-            endLineWidth: 1,
-            glowBlur: 14,
-          });
+          pushRing(
+            rings,
+            active.x,
+            active.y,
+            0.35,
+            16,
+            60,
+            PALETTE.pickupHP,
+            3,
+            1,
+            14,
+          );
           for (let i = 0; i < 6; i++) {
             const a = Math.random() * Math.PI * 2;
             const sp = 180 + Math.random() * 140;
-            particles.push({
-              x: active.x,
-              y: active.y,
-              vx: Math.cos(a) * sp,
-              vy: Math.sin(a) * sp,
-              initialSize: 3,
-              color: PALETTE.pickupHP,
-              age: 0,
-              lifetime: 0.4,
-              glowStrong: 10,
-              glowSoft: 4,
-              drag: 0.94,
-            });
+            pushParticle(
+              particles,
+              active.x,
+              active.y,
+              Math.cos(a) * sp,
+              Math.sin(a) * sp,
+              3,
+              PALETTE.pickupHP,
+              0.4,
+              10,
+              4,
+              0.94,
+            );
           }
         }
       }

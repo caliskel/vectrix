@@ -109,6 +109,140 @@ export type Ring = {
   glowBlur?: number;
 };
 
+// === Object pools ===
+// Boss combat spawns particles + rings in bursts (16-24 particles per
+// hit, 10+ rings during a mine detonation). Each push({...}) is an
+// object literal allocation; each `list.filter(...)` allocates a fresh
+// array per frame. Together that's GC churn that shows up as
+// occasional frame stutters in Chrome during heavy combat.
+//
+// Callers use `pushParticle(list, ...)` / `pushRing(list, ...)` to add
+// to a list — the helper pulls a recycled instance from the pool when
+// available, falls back to a fresh allocation when the pool is empty.
+// `compactParticles(list, keep)` / `compactRings(list, keep)` replace
+// `list = list.filter(...)` to reuse the array AND return dead items
+// to the pool so the next acquire can recycle them.
+
+const particlePool: Particle[] = [];
+const ringPool: Ring[] = [];
+
+export function pushParticle(
+  list: Particle[],
+  x: number,
+  y: number,
+  vx: number,
+  vy: number,
+  initialSize: number,
+  color: string,
+  lifetime: number,
+  glowStrong: number,
+  glowSoft: number,
+  drag: number,
+): void {
+  const recycled = particlePool.pop();
+  if (recycled) {
+    recycled.x = x;
+    recycled.y = y;
+    recycled.vx = vx;
+    recycled.vy = vy;
+    recycled.initialSize = initialSize;
+    recycled.color = color;
+    recycled.age = 0;
+    recycled.lifetime = lifetime;
+    recycled.glowStrong = glowStrong;
+    recycled.glowSoft = glowSoft;
+    recycled.drag = drag;
+    list.push(recycled);
+    return;
+  }
+  list.push({
+    x,
+    y,
+    vx,
+    vy,
+    initialSize,
+    color,
+    age: 0,
+    lifetime,
+    glowStrong,
+    glowSoft,
+    drag,
+  });
+}
+
+export function compactParticles(
+  list: Particle[],
+  keep: (p: Particle) => boolean,
+): void {
+  let writeIdx = 0;
+  for (let readIdx = 0; readIdx < list.length; readIdx++) {
+    const p = list[readIdx];
+    if (keep(p)) {
+      list[writeIdx++] = p;
+    } else {
+      particlePool.push(p);
+    }
+  }
+  list.length = writeIdx;
+}
+
+export function pushRing(
+  list: Ring[],
+  x: number,
+  y: number,
+  lifetime: number,
+  startR: number,
+  endR: number,
+  color: string,
+  startLineWidth: number | undefined,
+  endLineWidth: number | undefined,
+  glowBlur: number | undefined,
+): void {
+  const recycled = ringPool.pop();
+  if (recycled) {
+    recycled.x = x;
+    recycled.y = y;
+    recycled.age = 0;
+    recycled.lifetime = lifetime;
+    recycled.startR = startR;
+    recycled.endR = endR;
+    recycled.color = color;
+    recycled.startLineWidth = startLineWidth;
+    recycled.endLineWidth = endLineWidth;
+    recycled.glowBlur = glowBlur;
+    list.push(recycled);
+    return;
+  }
+  list.push({
+    x,
+    y,
+    age: 0,
+    lifetime,
+    startR,
+    endR,
+    color,
+    startLineWidth,
+    endLineWidth,
+    glowBlur,
+  });
+}
+
+export function compactRings(
+  list: Ring[],
+  keep: (r: Ring) => boolean,
+): void {
+  let writeIdx = 0;
+  for (let readIdx = 0; readIdx < list.length; readIdx++) {
+    const r = list[readIdx];
+    if (keep(r)) {
+      list[writeIdx++] = r;
+    } else {
+      ringPool.push(r);
+    }
+  }
+  list.length = writeIdx;
+}
+
 export function addFloatingText(
   list: FloatingText[],
   text: string,
@@ -147,16 +281,18 @@ export function addRing(
     glowBlur?: number;
   } = {},
 ): void {
-  list.push({
+  // Routes through the pool so callers like impacts.ts get the same
+  // recycling benefit as direct pushRing users.
+  pushRing(
+    list,
     x,
     y,
-    age: 0,
-    lifetime: opts.lifetime ?? 0.1,
-    startR: opts.startR ?? 8,
-    endR: opts.endR ?? 32,
-    color: opts.color ?? "#facc15",
-    startLineWidth: opts.startLineWidth,
-    endLineWidth: opts.endLineWidth,
-    glowBlur: opts.glowBlur,
-  });
+    opts.lifetime ?? 0.1,
+    opts.startR ?? 8,
+    opts.endR ?? 32,
+    opts.color ?? "#facc15",
+    opts.startLineWidth,
+    opts.endLineWidth,
+    opts.glowBlur,
+  );
 }

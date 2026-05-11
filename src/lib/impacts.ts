@@ -27,7 +27,12 @@ import {
   IMPACT_ENEMY_KILL_WHITE_PARTICLE_COUNT,
 } from "./config";
 import type { Enemy } from "./enemies/types";
-import { addRing, type Particle, type Ring } from "./particles";
+import {
+  addRing,
+  pushParticle,
+  type Particle,
+  type Ring,
+} from "./particles";
 
 /**
  * Caller plumbing for impact emission. Particles + rings live in the
@@ -75,19 +80,19 @@ export function emitBulletHit(
   for (let i = 0; i < IMPACT_BULLET_PARTICLE_COUNT; i++) {
     const a = Math.random() * Math.PI * 2;
     const sp = 200 + Math.random() * 200;
-    ctx.particles.push({
+    pushParticle(
+      ctx.particles,
       x,
       y,
-      vx: Math.cos(a) * sp,
-      vy: Math.sin(a) * sp,
-      initialSize: 3,
-      color: bulletColor,
-      age: 0,
-      lifetime: 0.35,
-      glowStrong: 8,
-      glowSoft: 3,
-      drag: 0.95,
-    });
+      Math.cos(a) * sp,
+      Math.sin(a) * sp,
+      3,
+      bulletColor,
+      0.35,
+      8,
+      3,
+      0.95,
+    );
   }
   audio.play.hitLight();
 }
@@ -124,19 +129,19 @@ export function emitEnemyDamage(
   for (let i = 0; i < IMPACT_ENEMY_DAMAGE_PARTICLE_COUNT; i++) {
     const a = Math.random() * Math.PI * 2;
     const sp = 250 + Math.random() * 200;
-    ctx.particles.push({
-      x: enemy.x,
-      y: enemy.y,
-      vx: Math.cos(a) * sp,
-      vy: Math.sin(a) * sp,
-      initialSize: 4,
-      color: enemy.color,
-      age: 0,
-      lifetime: 0.5,
-      glowStrong: 10,
-      glowSoft: 4,
-      drag: 0.95,
-    });
+    pushParticle(
+      ctx.particles,
+      enemy.x,
+      enemy.y,
+      Math.cos(a) * sp,
+      Math.sin(a) * sp,
+      4,
+      enemy.color,
+      0.5,
+      10,
+      4,
+      0.95,
+    );
   }
   ctx.triggerShake(
     IMPACT_ENEMY_DAMAGE_SHAKE_AMOUNT,
@@ -169,36 +174,36 @@ export function emitEnemyKill(ctx: ImpactContext, enemy: Enemy): void {
   for (let i = 0; i < IMPACT_ENEMY_KILL_PARTICLE_COUNT; i++) {
     const a = Math.random() * Math.PI * 2;
     const sp = 300 + Math.random() * 300;
-    ctx.particles.push({
-      x: enemy.x,
-      y: enemy.y,
-      vx: Math.cos(a) * sp,
-      vy: Math.sin(a) * sp,
-      initialSize: 4,
-      color: enemy.color,
-      age: 0,
-      lifetime: 0.7,
-      glowStrong: 14,
-      glowSoft: 5,
-      drag: 0.96,
-    });
+    pushParticle(
+      ctx.particles,
+      enemy.x,
+      enemy.y,
+      Math.cos(a) * sp,
+      Math.sin(a) * sp,
+      4,
+      enemy.color,
+      0.7,
+      14,
+      5,
+      0.96,
+    );
   }
   for (let i = 0; i < IMPACT_ENEMY_KILL_WHITE_PARTICLE_COUNT; i++) {
     const a = Math.random() * Math.PI * 2;
     const sp = 300 + Math.random() * 300;
-    ctx.particles.push({
-      x: enemy.x,
-      y: enemy.y,
-      vx: Math.cos(a) * sp,
-      vy: Math.sin(a) * sp,
-      initialSize: 4,
-      color: "#ffffff",
-      age: 0,
-      lifetime: 0.7,
-      glowStrong: 14,
-      glowSoft: 5,
-      drag: 0.96,
-    });
+    pushParticle(
+      ctx.particles,
+      enemy.x,
+      enemy.y,
+      Math.cos(a) * sp,
+      Math.sin(a) * sp,
+      4,
+      "#ffffff",
+      0.7,
+      14,
+      5,
+      0.96,
+    );
   }
   ctx.triggerShake(
     IMPACT_ENEMY_KILL_SHAKE_AMOUNT,

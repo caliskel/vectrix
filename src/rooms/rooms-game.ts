@@ -128,7 +128,10 @@ import {
   type Particle,
   type Ring,
   addFloatingText,
+  compactParticles,
+  compactRings,
   drawFloatingTexts,
+  pushParticle,
 } from "../lib/particles";
 import {
   type PlayerProfile,
@@ -1011,19 +1014,19 @@ export function start(canvas: HTMLCanvasElement): void {
         PARTICLE_SIZE_MIN_FACTOR +
         Math.random() *
           (PARTICLE_SIZE_MAX_FACTOR - PARTICLE_SIZE_MIN_FACTOR);
-      particles.push({
-        x: player.x,
-        y: player.y,
+      pushParticle(
+        particles,
+        player.x,
+        player.y,
         vx,
         vy,
-        initialSize: PLAYER_SIZE * sizeFactor,
+        PLAYER_SIZE * sizeFactor,
         color,
-        age: 0,
         lifetime,
-        glowStrong: isDash ? 15 : 8,
-        glowSoft: isDash ? 6 : 3,
-        drag: PARTICLE_DRAG,
-      });
+        isDash ? 15 : 8,
+        isDash ? 6 : 3,
+        PARTICLE_DRAG,
+      );
     }
   }
 
@@ -1323,7 +1326,7 @@ export function start(canvas: HTMLCanvasElement): void {
     }
     floatingTexts = floatingTexts.filter((t) => t.age < t.lifetime);
     for (const r of rings) r.age += dt;
-    rings = rings.filter((r) => r.age < r.lifetime);
+    compactRings(rings, (r) => r.age < r.lifetime);
     for (const p of particles) {
       p.age += dt;
       p.x += p.vx * dt;
@@ -1334,7 +1337,7 @@ export function start(canvas: HTMLCanvasElement): void {
         p.vy *= k;
       }
     }
-    particles = particles.filter((p) => p.age < p.lifetime);
+    compactParticles(particles, (p) => p.age < p.lifetime);
 
     if (state.clearFlash > 0) {
       state.clearFlash = Math.max(0, state.clearFlash - dt);
@@ -1412,7 +1415,7 @@ export function start(canvas: HTMLCanvasElement): void {
           p.vy *= k;
         }
       }
-      particles = particles.filter((p) => p.age < p.lifetime);
+      compactParticles(particles, (p) => p.age < p.lifetime);
       // Player coast — keep the body alive so it doesn't freeze
       // mid-dash / mid-squash when the boss death cinematic kicks
       // in. Inputs are already cleared above; what we tick here is

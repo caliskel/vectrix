@@ -7,6 +7,7 @@
 // import { audio } from "../audio";
 import { isInstakill } from "../god-mode";
 import { acquireBullet } from "../bullets";
+import { pushParticle, pushRing } from "../particles";
 import { initAwareness } from "./awareness";
 import type {
   AwarenessState,
@@ -1332,19 +1333,19 @@ export class Sentinel implements Enemy {
     for (let i = 0; i < MATERIALIZE_PARTICLE_COUNT; i++) {
       const angle = (i / MATERIALIZE_PARTICLE_COUNT) * Math.PI * 2;
       const speed = 200 + Math.random() * 150;
-      ctxRoom.particles.push({
-        x: this.x,
-        y: this.y,
-        vx: Math.cos(angle) * speed,
-        vy: Math.sin(angle) * speed,
-        initialSize: 4,
-        color: SENTINEL_COLOR,
-        age: 0,
-        lifetime: MATERIALIZE_PARTICLE_LIFETIME_MS / 1000,
-        glowStrong: 12,
-        glowSoft: 5,
-        drag: 0.94,
-      });
+      pushParticle(
+        ctxRoom.particles,
+        this.x,
+        this.y,
+        Math.cos(angle) * speed,
+        Math.sin(angle) * speed,
+        4,
+        SENTINEL_COLOR,
+        MATERIALIZE_PARTICLE_LIFETIME_MS / 1000,
+        12,
+        5,
+        0.94,
+      );
     }
   }
 
@@ -1874,19 +1875,19 @@ export class Sentinel implements Enemy {
         this.sweep360BeamParticleTimer -=
           SWEEP_LASER_BEAM_PARTICLE_INTERVAL_SEC;
         const a = this.currentSweep360BeamAngle();
-        ctxRoom.particles.push({
-          x: this.x,
-          y: this.y,
-          vx: Math.cos(a) * SWEEP_LASER_BEAM_PARTICLE_SPEED,
-          vy: Math.sin(a) * SWEEP_LASER_BEAM_PARTICLE_SPEED,
-          initialSize: 3,
-          color: SWEEP_360_ACCENT_COLOR,
-          age: 0,
-          lifetime: SWEEP_LASER_BEAM_PARTICLE_LIFETIME_SEC,
-          glowStrong: 10,
-          glowSoft: 4,
-          drag: 0.97,
-        });
+        pushParticle(
+          ctxRoom.particles,
+          this.x,
+          this.y,
+          Math.cos(a) * SWEEP_LASER_BEAM_PARTICLE_SPEED,
+          Math.sin(a) * SWEEP_LASER_BEAM_PARTICLE_SPEED,
+          3,
+          SWEEP_360_ACCENT_COLOR,
+          SWEEP_LASER_BEAM_PARTICLE_LIFETIME_SEC,
+          10,
+          4,
+          0.97,
+        );
       }
 
       // Trail residue.
@@ -1905,18 +1906,18 @@ export class Sentinel implements Enemy {
         this.sweep360Phase = "recovery";
         this.sweep360Timer = 0;
         // Release ring punctuation, amber to match the attack.
-        ctxRoom.rings.push({
-          x: this.x,
-          y: this.y,
-          age: 0,
-          lifetime: SWEEP_LASER_RELEASE_RING_LIFETIME_SEC,
-          startR: SWEEP_LASER_RELEASE_RING_R_START,
-          endR: SWEEP_LASER_RELEASE_RING_R_END,
-          color: SWEEP_360_ACCENT_COLOR,
-          startLineWidth: SWEEP_LASER_RELEASE_RING_LW_START,
-          endLineWidth: SWEEP_LASER_RELEASE_RING_LW_END,
-          glowBlur: 12,
-        });
+        pushRing(
+          ctxRoom.rings,
+          this.x,
+          this.y,
+          SWEEP_LASER_RELEASE_RING_LIFETIME_SEC,
+          SWEEP_LASER_RELEASE_RING_R_START,
+          SWEEP_LASER_RELEASE_RING_R_END,
+          SWEEP_360_ACCENT_COLOR,
+          SWEEP_LASER_RELEASE_RING_LW_START,
+          SWEEP_LASER_RELEASE_RING_LW_END,
+          12,
+        );
       }
       return;
     }
@@ -2231,18 +2232,18 @@ export class Sentinel implements Enemy {
     // (a delayed second ring) was dropped during the visual budget
     // pass; it overlapped with shockwave 1 enough that the visual
     // delta wasn't worth the extra ring.
-    ctxRoom.rings.push({
-      x: this.x,
-      y: this.y,
-      age: 0,
-      lifetime: BURST_SW1_LIFETIME_SEC,
-      startR: BURST_SW1_R_START,
-      endR: BURST_SW1_R_END,
-      color: BURST_SW1_COLOR,
-      startLineWidth: BURST_SW1_LW_START,
-      endLineWidth: BURST_SW1_LW_END,
-      glowBlur: 16,
-    });
+    pushRing(
+      ctxRoom.rings,
+      this.x,
+      this.y,
+      BURST_SW1_LIFETIME_SEC,
+      BURST_SW1_R_START,
+      BURST_SW1_R_END,
+      BURST_SW1_COLOR,
+      BURST_SW1_LW_START,
+      BURST_SW1_LW_END,
+      16,
+    );
     // Boss flash — additive white overlay on the body for ~80ms.
     this.bossFlashTimer = BURST_FLASH_DURATION_SEC;
     // Streamers — kept on the boss instance because they're line
@@ -2358,18 +2359,18 @@ export class Sentinel implements Enemy {
           // Attention pulse — single golden ring expanding from the
           // eye outward, snaps the player's attention to the boss
           // centre at the moment the eye becomes a target.
-          ctxRoom.rings.push({
-            x: this.x,
-            y: this.y,
-            age: 0,
-            lifetime: RB_ATTENTION_PULSE_LIFETIME_SEC,
-            startR: RB_ATTENTION_PULSE_R0,
-            endR: RB_ATTENTION_PULSE_R1,
-            color: RB_ATTENTION_PULSE_COLOR,
-            startLineWidth: RB_ATTENTION_PULSE_LW0,
-            endLineWidth: RB_ATTENTION_PULSE_LW1,
-            glowBlur: 18,
-          });
+          pushRing(
+            ctxRoom.rings,
+            this.x,
+            this.y,
+            RB_ATTENTION_PULSE_LIFETIME_SEC,
+            RB_ATTENTION_PULSE_R0,
+            RB_ATTENTION_PULSE_R1,
+            RB_ATTENTION_PULSE_COLOR,
+            RB_ATTENTION_PULSE_LW0,
+            RB_ATTENTION_PULSE_LW1,
+            18,
+          );
         }
         break;
       }
@@ -2454,37 +2455,37 @@ export class Sentinel implements Enemy {
     this.rbTimer = 0;
     // Ring-shaped white shockwave + radial particle spray at the
     // moment the rings leave the body.
-    ctxRoom.rings.push({
-      x: this.x,
-      y: this.y,
-      age: 0,
-      lifetime: RB_DETACH_RING_LIFETIME_SEC,
-      startR: RB_DETACH_RING_START_R,
-      endR: RB_DETACH_RING_END_R,
-      color: "#ffffff",
-      startLineWidth: 4,
-      endLineWidth: 1,
-      glowBlur: 14,
-    });
+    pushRing(
+      ctxRoom.rings,
+      this.x,
+      this.y,
+      RB_DETACH_RING_LIFETIME_SEC,
+      RB_DETACH_RING_START_R,
+      RB_DETACH_RING_END_R,
+      "#ffffff",
+      4,
+      1,
+      14,
+    );
     for (let i = 0; i < RB_DETACH_PARTICLE_COUNT; i++) {
       const a = (i / RB_DETACH_PARTICLE_COUNT) * Math.PI * 2;
       const speed =
         RB_DETACH_PARTICLE_SPEED_MIN +
         Math.random() *
           (RB_DETACH_PARTICLE_SPEED_MAX - RB_DETACH_PARTICLE_SPEED_MIN);
-      ctxRoom.particles.push({
-        x: this.x,
-        y: this.y,
-        vx: Math.cos(a) * speed,
-        vy: Math.sin(a) * speed,
-        initialSize: 4,
-        color: "#ffffff",
-        age: 0,
-        lifetime: RB_DETACH_PARTICLE_LIFETIME_SEC,
-        glowStrong: 12,
-        glowSoft: 5,
-        drag: 0.94,
-      });
+      pushParticle(
+        ctxRoom.particles,
+        this.x,
+        this.y,
+        Math.cos(a) * speed,
+        Math.sin(a) * speed,
+        4,
+        "#ffffff",
+        RB_DETACH_PARTICLE_LIFETIME_SEC,
+        12,
+        5,
+        0.94,
+      );
     }
     // audio.play.bossRingDetach();         // boss sfx disabled
   }
@@ -2494,30 +2495,30 @@ export class Sentinel implements Enemy {
    *  3 HP damage to the boss is applied by the caller via
    *  takeDamage(RB_EYE_HIT_DAMAGE) right after this fires. */
   private triggerEyeHitFeedback(ctxRoom: EnemyContext): void {
-    ctxRoom.rings.push({
-      x: this.x,
-      y: this.y,
-      age: 0,
-      lifetime: RB_EYE_HIT_INNER_RING_LIFETIME_SEC,
-      startR: RB_EYE_HIT_INNER_RING_R0,
-      endR: RB_EYE_HIT_INNER_RING_R1,
-      color: "#ffffff",
-      startLineWidth: 5,
-      endLineWidth: 1,
-      glowBlur: 20,
-    });
-    ctxRoom.rings.push({
-      x: this.x,
-      y: this.y,
-      age: 0,
-      lifetime: RB_EYE_HIT_OUTER_RING_LIFETIME_SEC,
-      startR: RB_EYE_HIT_OUTER_RING_R0,
-      endR: RB_EYE_HIT_OUTER_RING_R1,
-      color: RB_EYE_HIT_OUTER_RING_COLOR,
-      startLineWidth: 4,
-      endLineWidth: 0.5,
-      glowBlur: 18,
-    });
+    pushRing(
+      ctxRoom.rings,
+      this.x,
+      this.y,
+      RB_EYE_HIT_INNER_RING_LIFETIME_SEC,
+      RB_EYE_HIT_INNER_RING_R0,
+      RB_EYE_HIT_INNER_RING_R1,
+      "#ffffff",
+      5,
+      1,
+      20,
+    );
+    pushRing(
+      ctxRoom.rings,
+      this.x,
+      this.y,
+      RB_EYE_HIT_OUTER_RING_LIFETIME_SEC,
+      RB_EYE_HIT_OUTER_RING_R0,
+      RB_EYE_HIT_OUTER_RING_R1,
+      RB_EYE_HIT_OUTER_RING_COLOR,
+      4,
+      0.5,
+      18,
+    );
     const total =
       RB_EYE_HIT_PARTICLE_COUNT_WHITE + RB_EYE_HIT_PARTICLE_COUNT_GOLD;
     for (let i = 0; i < total; i++) {
@@ -2527,21 +2528,21 @@ export class Sentinel implements Enemy {
         Math.random() *
           (RB_EYE_HIT_PARTICLE_SPEED_MAX -
             RB_EYE_HIT_PARTICLE_SPEED_MIN);
-      ctxRoom.particles.push({
-        x: this.x,
-        y: this.y,
-        vx: Math.cos(a) * speed,
-        vy: Math.sin(a) * speed,
-        initialSize: 4,
-        color: i < RB_EYE_HIT_PARTICLE_COUNT_WHITE
+      pushParticle(
+        ctxRoom.particles,
+        this.x,
+        this.y,
+        Math.cos(a) * speed,
+        Math.sin(a) * speed,
+        4,
+        i < RB_EYE_HIT_PARTICLE_COUNT_WHITE
           ? "#ffffff"
           : RB_EYE_HIT_OUTER_RING_COLOR,
-        age: 0,
-        lifetime: RB_EYE_HIT_PARTICLE_LIFETIME_SEC,
-        glowStrong: 14,
-        glowSoft: 5,
-        drag: 0.94,
-      });
+        RB_EYE_HIT_PARTICLE_LIFETIME_SEC,
+        14,
+        5,
+        0.94,
+      );
     }
     this.pendingShakePx = RB_EYE_HIT_SHAKE_PX;
     this.pendingShakeSec = RB_EYE_HIT_SHAKE_SEC;
@@ -2666,18 +2667,18 @@ export class Sentinel implements Enemy {
       t.ringEmitTimer += dt * 1000;
       if (t.ringEmitTimer >= PHASE_TRANSITION_RING_INTERVAL_MS) {
         t.ringEmitTimer -= PHASE_TRANSITION_RING_INTERVAL_MS;
-        ctxRoom.rings.push({
-          x: this.x,
-          y: this.y,
-          age: 0,
-          lifetime: PHASE_TRANSITION_RING_LIFETIME_SEC,
-          startR: PHASE_TRANSITION_RING_R0,
-          endR: PHASE_TRANSITION_RING_R1,
-          color: ACCENT_PER_PHASE[t.fromPhase],
-          startLineWidth: 4,
-          endLineWidth: 0.5,
-          glowBlur: 14,
-        });
+        pushRing(
+          ctxRoom.rings,
+          this.x,
+          this.y,
+          PHASE_TRANSITION_RING_LIFETIME_SEC,
+          PHASE_TRANSITION_RING_R0,
+          PHASE_TRANSITION_RING_R1,
+          ACCENT_PER_PHASE[t.fromPhase],
+          4,
+          0.5,
+          14,
+        );
       }
       const u =
         (t.elapsedMs - PHASE_TRANSITION_HITSTOP_END_MS) /
@@ -2706,19 +2707,19 @@ export class Sentinel implements Enemy {
           Math.random() *
             (PHASE_TRANSITION_CLIMAX_PARTICLE_SPEED_MAX -
               PHASE_TRANSITION_CLIMAX_PARTICLE_SPEED_MIN);
-        ctxRoom.particles.push({
-          x: this.x,
-          y: this.y,
-          vx: Math.cos(a) * speed,
-          vy: Math.sin(a) * speed,
-          initialSize: 4,
-          color: i < half ? "#ffffff" : newAccent,
-          age: 0,
-          lifetime: PHASE_TRANSITION_CLIMAX_PARTICLE_LIFETIME_SEC,
-          glowStrong: 14,
-          glowSoft: 5,
-          drag: 0.94,
-        });
+        pushParticle(
+          ctxRoom.particles,
+          this.x,
+          this.y,
+          Math.cos(a) * speed,
+          Math.sin(a) * speed,
+          4,
+          i < half ? "#ffffff" : newAccent,
+          PHASE_TRANSITION_CLIMAX_PARTICLE_LIFETIME_SEC,
+          14,
+          5,
+          0.94,
+        );
       }
       // Phase-transition climax — dedicated BWAA + noise sizzle
       // replacing the hitHeavy+alert placeholder.
@@ -2812,19 +2813,19 @@ export class Sentinel implements Enemy {
           this.sweepLaserPhase === "firing-2"
             ? SWEEP_LASER_RETURN_CORE_COLOR
             : "#ffffff";
-        ctxRoom.particles.push({
-          x: this.x,
-          y: this.y,
-          vx: Math.cos(a) * SWEEP_LASER_BEAM_PARTICLE_SPEED,
-          vy: Math.sin(a) * SWEEP_LASER_BEAM_PARTICLE_SPEED,
-          initialSize: 3,
-          color: particleColor,
-          age: 0,
-          lifetime: SWEEP_LASER_BEAM_PARTICLE_LIFETIME_SEC,
-          glowStrong: 10,
-          glowSoft: 4,
-          drag: 0.97,
-        });
+        pushParticle(
+          ctxRoom.particles,
+          this.x,
+          this.y,
+          Math.cos(a) * SWEEP_LASER_BEAM_PARTICLE_SPEED,
+          Math.sin(a) * SWEEP_LASER_BEAM_PARTICLE_SPEED,
+          3,
+          particleColor,
+          SWEEP_LASER_BEAM_PARTICLE_LIFETIME_SEC,
+          10,
+          4,
+          0.97,
+        );
       }
       // Trail push — capture this frame's beam angle as fresh
       // residue. Mid-pause pushes pile up at the static end-angle
@@ -2893,18 +2894,18 @@ export class Sentinel implements Enemy {
         // exponential drone-gain ramp to 0 over SWEEP_LASER_
         // RECOVERY_OUTER_FADE_SEC; no continuous drone synth
         // exists yet to fade.)
-        ctxRoom.rings.push({
-          x: this.x,
-          y: this.y,
-          age: 0,
-          lifetime: SWEEP_LASER_RELEASE_RING_LIFETIME_SEC,
-          startR: SWEEP_LASER_RELEASE_RING_R_START,
-          endR: SWEEP_LASER_RELEASE_RING_R_END,
-          color: SWEEP_LASER_RELEASE_RING_COLOR,
-          startLineWidth: SWEEP_LASER_RELEASE_RING_LW_START,
-          endLineWidth: SWEEP_LASER_RELEASE_RING_LW_END,
-          glowBlur: 12,
-        });
+        pushRing(
+          ctxRoom.rings,
+          this.x,
+          this.y,
+          SWEEP_LASER_RELEASE_RING_LIFETIME_SEC,
+          SWEEP_LASER_RELEASE_RING_R_START,
+          SWEEP_LASER_RELEASE_RING_R_END,
+          SWEEP_LASER_RELEASE_RING_COLOR,
+          SWEEP_LASER_RELEASE_RING_LW_START,
+          SWEEP_LASER_RELEASE_RING_LW_END,
+          12,
+        );
       }
       return;
     }
@@ -3042,19 +3043,19 @@ export class Sentinel implements Enemy {
   ): void {
     for (let i = 0; i < MINE_SPAWN_PARTICLE_COUNT; i++) {
       const a = (i / MINE_SPAWN_PARTICLE_COUNT) * Math.PI * 2;
-      ctxRoom.particles.push({
+      pushParticle(
+        ctxRoom.particles,
         x,
         y,
-        vx: Math.cos(a) * MINE_SPAWN_PARTICLE_SPEED,
-        vy: Math.sin(a) * MINE_SPAWN_PARTICLE_SPEED,
-        initialSize: 4,
-        color: MINE_COLOR,
-        age: 0,
-        lifetime: MINE_SPAWN_PARTICLE_LIFETIME_SEC,
-        glowStrong: 8,
-        glowSoft: 3,
-        drag: 0.92,
-      });
+        Math.cos(a) * MINE_SPAWN_PARTICLE_SPEED,
+        Math.sin(a) * MINE_SPAWN_PARTICLE_SPEED,
+        4,
+        MINE_COLOR,
+        MINE_SPAWN_PARTICLE_LIFETIME_SEC,
+        8,
+        3,
+        0.92,
+      );
     }
     // Tense single beep so the player can locate the new mine by
     // ear before the strobe phase kicks in.
@@ -3080,18 +3081,18 @@ export class Sentinel implements Enemy {
         ),
       );
     }
-    ctxRoom.rings.push({
-      x: m.x,
-      y: m.y,
-      age: 0,
-      lifetime: MINE_DETONATION_RING_LIFETIME_SEC,
-      startR: MINE_DETONATION_RING_R0,
-      endR: MINE_DETONATION_RING_R1,
-      color: MINE_COLOR,
-      startLineWidth: MINE_DETONATION_RING_LW0,
-      endLineWidth: MINE_DETONATION_RING_LW1,
-      glowBlur: 12,
-    });
+    pushRing(
+      ctxRoom.rings,
+      m.x,
+      m.y,
+      MINE_DETONATION_RING_LIFETIME_SEC,
+      MINE_DETONATION_RING_R0,
+      MINE_DETONATION_RING_R1,
+      MINE_COLOR,
+      MINE_DETONATION_RING_LW0,
+      MINE_DETONATION_RING_LW1,
+      12,
+    );
     for (let i = 0; i < MINE_DETONATION_PARTICLE_COUNT; i++) {
       const a = (i / MINE_DETONATION_PARTICLE_COUNT) * Math.PI * 2;
       const ps =
@@ -3099,19 +3100,19 @@ export class Sentinel implements Enemy {
         Math.random() *
           (MINE_DETONATION_PARTICLE_SPEED_MAX -
             MINE_DETONATION_PARTICLE_SPEED_MIN);
-      ctxRoom.particles.push({
-        x: m.x,
-        y: m.y,
-        vx: Math.cos(a) * ps,
-        vy: Math.sin(a) * ps,
-        initialSize: 5,
-        color: MINE_COLOR,
-        age: 0,
-        lifetime: MINE_DETONATION_PARTICLE_LIFETIME_SEC,
-        glowStrong: 10,
-        glowSoft: 4,
-        drag: 0.92,
-      });
+      pushParticle(
+        ctxRoom.particles,
+        m.x,
+        m.y,
+        Math.cos(a) * ps,
+        Math.sin(a) * ps,
+        5,
+        MINE_COLOR,
+        MINE_DETONATION_PARTICLE_LIFETIME_SEC,
+        10,
+        4,
+        0.92,
+      );
     }
     // Heavier than hitHeavy: sub thump + bandpass noise sizzle. Pulls
     // attention even when an attack is mid-firing.
@@ -3170,19 +3171,19 @@ export class Sentinel implements Enemy {
     for (let i = 0; i < AIMED_MUZZLE_PARTICLE_COUNT; i++) {
       const a = Math.random() * Math.PI * 2;
       const ps = 100 + Math.random() * 80;
-      ctxRoom.particles.push({
-        x: this.x,
-        y: this.y,
-        vx: Math.cos(a) * ps,
-        vy: Math.sin(a) * ps,
-        initialSize: 3,
-        color: SENTINEL_COLOR,
-        age: 0,
-        lifetime: AIMED_MUZZLE_PARTICLE_LIFETIME_SEC,
-        glowStrong: 8,
-        glowSoft: 3,
-        drag: 0.92,
-      });
+      pushParticle(
+        ctxRoom.particles,
+        this.x,
+        this.y,
+        Math.cos(a) * ps,
+        Math.sin(a) * ps,
+        3,
+        SENTINEL_COLOR,
+        AIMED_MUZZLE_PARTICLE_LIFETIME_SEC,
+        8,
+        3,
+        0.92,
+      );
     }
   }
 
@@ -3307,19 +3308,19 @@ export class Sentinel implements Enemy {
           Math.random() *
             (DYING_BUILDUP_PARTICLE_SPEED_MAX -
               DYING_BUILDUP_PARTICLE_SPEED_MIN);
-        ctxRoom.particles.push({
-          x: sx,
-          y: sy,
-          vx: -Math.cos(a) * sp,
-          vy: -Math.sin(a) * sp,
-          initialSize: 4,
-          color: SENTINEL_COLOR,
-          age: 0,
-          lifetime: DYING_BUILDUP_PARTICLE_LIFETIME_SEC,
-          glowStrong: 10,
-          glowSoft: 4,
-          drag: 0.96,
-        });
+        pushParticle(
+          ctxRoom.particles,
+          sx,
+          sy,
+          -Math.cos(a) * sp,
+          -Math.sin(a) * sp,
+          4,
+          SENTINEL_COLOR,
+          DYING_BUILDUP_PARTICLE_LIFETIME_SEC,
+          10,
+          4,
+          0.96,
+        );
       }
     }
 
@@ -3347,18 +3348,18 @@ export class Sentinel implements Enemy {
       t >= POST_WAVE_SCHEDULE[this.postWavesFired].startMs
     ) {
       const w = POST_WAVE_SCHEDULE[this.postWavesFired];
-      ctxRoom.rings.push({
-        x: this.deathX,
-        y: this.deathY,
-        age: 0,
-        lifetime: w.lifetimeSec,
-        startR: POST_WAVE_START_R,
-        endR: w.endR,
-        color: w.color,
-        startLineWidth: POST_WAVE_LW_START,
-        endLineWidth: POST_WAVE_LW_END,
-        glowBlur: POST_WAVE_GLOW_BLUR,
-      });
+      pushRing(
+        ctxRoom.rings,
+        this.deathX,
+        this.deathY,
+        w.lifetimeSec,
+        POST_WAVE_START_R,
+        w.endR,
+        w.color,
+        POST_WAVE_LW_START,
+        POST_WAVE_LW_END,
+        POST_WAVE_GLOW_BLUR,
+      );
       this.pendingShakePx = POST_WAVE_SHAKE_PX;
       this.pendingShakeSec = POST_WAVE_SHAKE_SEC;
       this.postWavesFired++;
@@ -3452,57 +3453,57 @@ export class Sentinel implements Enemy {
         Math.random() *
           (DYING_DETONATION_PARTICLE_SPEED_MAX -
             DYING_DETONATION_PARTICLE_SPEED_MIN);
-      ctxRoom.particles.push({
-        x: this.deathX,
-        y: this.deathY,
-        vx: Math.cos(a) * sp,
-        vy: Math.sin(a) * sp,
-        initialSize: i % 2 === 0 ? 5 : 4,
-        color: i % 2 === 0 ? SENTINEL_COLOR : "#ffffff",
-        age: 0,
-        lifetime: DYING_DETONATION_PARTICLE_LIFETIME_SEC,
-        glowStrong: 12,
-        glowSoft: 5,
-        drag: 0.93,
-      });
+      pushParticle(
+        ctxRoom.particles,
+        this.deathX,
+        this.deathY,
+        Math.cos(a) * sp,
+        Math.sin(a) * sp,
+        i % 2 === 0 ? 5 : 4,
+        i % 2 === 0 ? SENTINEL_COLOR : "#ffffff",
+        DYING_DETONATION_PARTICLE_LIFETIME_SEC,
+        12,
+        5,
+        0.93,
+      );
     }
     // Three shockwaves stacked at the death position.
-    ctxRoom.rings.push({
-      x: this.deathX,
-      y: this.deathY,
-      age: 0,
-      lifetime: DYING_DETONATION_RING1_LIFETIME_SEC,
-      startR: DYING_DETONATION_RING1_R0,
-      endR: DYING_DETONATION_RING1_R1,
-      color: SENTINEL_COLOR,
-      startLineWidth: DYING_DETONATION_RING1_LW0,
-      endLineWidth: DYING_DETONATION_RING1_LW1,
-      glowBlur: 18,
-    });
-    ctxRoom.rings.push({
-      x: this.deathX,
-      y: this.deathY,
-      age: 0,
-      lifetime: DYING_DETONATION_RING2_LIFETIME_SEC,
-      startR: DYING_DETONATION_RING2_R0,
-      endR: DYING_DETONATION_RING2_R1,
-      color: "#ffffff",
-      startLineWidth: DYING_DETONATION_RING2_LW0,
-      endLineWidth: DYING_DETONATION_RING2_LW1,
-      glowBlur: 14,
-    });
-    ctxRoom.rings.push({
-      x: this.deathX,
-      y: this.deathY,
-      age: 0,
-      lifetime: DYING_DETONATION_RING3_LIFETIME_SEC,
-      startR: DYING_DETONATION_RING3_R0,
-      endR: DYING_DETONATION_RING3_R1,
-      color: VICTORY_COLOR,
-      startLineWidth: DYING_DETONATION_RING3_LW0,
-      endLineWidth: DYING_DETONATION_RING3_LW1,
-      glowBlur: 12,
-    });
+    pushRing(
+      ctxRoom.rings,
+      this.deathX,
+      this.deathY,
+      DYING_DETONATION_RING1_LIFETIME_SEC,
+      DYING_DETONATION_RING1_R0,
+      DYING_DETONATION_RING1_R1,
+      SENTINEL_COLOR,
+      DYING_DETONATION_RING1_LW0,
+      DYING_DETONATION_RING1_LW1,
+      18,
+    );
+    pushRing(
+      ctxRoom.rings,
+      this.deathX,
+      this.deathY,
+      DYING_DETONATION_RING2_LIFETIME_SEC,
+      DYING_DETONATION_RING2_R0,
+      DYING_DETONATION_RING2_R1,
+      "#ffffff",
+      DYING_DETONATION_RING2_LW0,
+      DYING_DETONATION_RING2_LW1,
+      14,
+    );
+    pushRing(
+      ctxRoom.rings,
+      this.deathX,
+      this.deathY,
+      DYING_DETONATION_RING3_LIFETIME_SEC,
+      DYING_DETONATION_RING3_R0,
+      DYING_DETONATION_RING3_R1,
+      VICTORY_COLOR,
+      DYING_DETONATION_RING3_LW0,
+      DYING_DETONATION_RING3_LW1,
+      12,
+    );
     this.pendingShakePx = DYING_DETONATION_SHAKE_PX;
     this.pendingShakeSec = DYING_DETONATION_SHAKE_SEC;
     // audio.play.hitHeavy();                // boss sfx disabled (death)
@@ -4694,33 +4695,33 @@ export class Sentinel implements Enemy {
     ctxRoom: EnemyContext,
     pos: { x: number; y: number },
   ): void {
-    ctxRoom.rings.push({
-      x: pos.x,
-      y: pos.y,
-      age: 0,
-      lifetime: BODY_WHIFF_RING_LIFETIME_SEC,
-      startR: BODY_WHIFF_RING_R_START,
-      endR: BODY_WHIFF_RING_R_END,
-      color: BODY_WHIFF_RING_COLOR,
-      startLineWidth: BODY_WHIFF_RING_LW_START,
-      endLineWidth: BODY_WHIFF_RING_LW_END,
-      glowBlur: 0,
-    });
+    pushRing(
+      ctxRoom.rings,
+      pos.x,
+      pos.y,
+      BODY_WHIFF_RING_LIFETIME_SEC,
+      BODY_WHIFF_RING_R_START,
+      BODY_WHIFF_RING_R_END,
+      BODY_WHIFF_RING_COLOR,
+      BODY_WHIFF_RING_LW_START,
+      BODY_WHIFF_RING_LW_END,
+      0,
+    );
     for (let i = 0; i < BODY_WHIFF_PARTICLE_COUNT; i++) {
       const a = (i / BODY_WHIFF_PARTICLE_COUNT) * Math.PI * 2;
-      ctxRoom.particles.push({
-        x: pos.x,
-        y: pos.y,
-        vx: Math.cos(a) * BODY_WHIFF_PARTICLE_SPEED,
-        vy: Math.sin(a) * BODY_WHIFF_PARTICLE_SPEED,
-        initialSize: 2,
-        color: BODY_WHIFF_PARTICLE_COLOR,
-        age: 0,
-        lifetime: BODY_WHIFF_PARTICLE_LIFETIME_SEC,
-        glowStrong: 4,
-        glowSoft: 2,
-        drag: 0.9,
-      });
+      pushParticle(
+        ctxRoom.particles,
+        pos.x,
+        pos.y,
+        Math.cos(a) * BODY_WHIFF_PARTICLE_SPEED,
+        Math.sin(a) * BODY_WHIFF_PARTICLE_SPEED,
+        2,
+        BODY_WHIFF_PARTICLE_COLOR,
+        BODY_WHIFF_PARTICLE_LIFETIME_SEC,
+        4,
+        2,
+        0.9,
+      );
     }
   }
 
