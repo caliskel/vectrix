@@ -18,6 +18,7 @@ import {
   BLINK_CLOSE_DURATION_MS,
   DASH_DURATION_MS,
   PLAYER_MAX_SPEED,
+  PLAYER_SIZE,
   PLAYER_WALK_FACTOR,
 } from "../lib/config";
 import {
@@ -64,17 +65,16 @@ const CANVAS_W = 1200;
 const CANVAS_H = 800;
 const EYE_CX = 600;
 const EYE_CY = 420;
-// HERO_SIZE matches the intro cinematic (60 px) so the cached ring
-// sprite is generated at a high enough resolution to stay crisp when
-// the letterbox transform upscales the canonical canvas onto a
-// large window. The in-game PLAYER_SIZE (32) is intentionally
-// rejected here — its sprite cache is too low-res to survive the
-// 1.6×+ letterbox magnification cleanly and read as "pixelated."
-const HERO_SIZE = 60;
-// Void scene scale matches the intro's narration phase
-// (PULLBACK_SCALE_END = 0.45) so the hero sits at the same small
-// "glyph in the void" composition during the narrator beats.
-const HERO_SCALE_VOID = 0.45;
+// HERO_SIZE matches the in-game player — same value the tutorial
+// and rooms render path uses for drawPlayerEye. Anything bigger
+// makes the hero look out of scale next to the tutorial-sized
+// 1200×800 walls (which is exactly what was happening when this
+// was 60).
+const HERO_SIZE = PLAYER_SIZE;
+// Void scene scale — small "glyph in the void" composition during
+// the narrator beats. With HERO_SIZE=32 the effective visual is ~27 px,
+// matching the intro narration phase's pullback-end size.
+const HERO_SCALE_VOID = 0.85;
 const ACCEL_FACTOR = 9;
 const FRICTION = 8.0;
 
@@ -339,12 +339,11 @@ function tickRoomScene(state: EpilogueState, dt: number): void {
   }
   player.x += player.vx * dt;
   player.y += player.vy * dt;
-  // Perimeter clamp — uses the cinematic HERO_SIZE (60) so the visual
-  // hero edge stops at the wall rather than the smaller in-game
-  // PLAYER_SIZE (32). 30 px wall thickness matches every other room
-  // in the game.
-  const half = HERO_SIZE / 2;
-  const WALL_T = 30;
+  // Perimeter clamp — same PLAYER_SIZE / 2 = 16 the in-game tutorial
+  // uses, so the hero stops at the wall at exactly the visual edge
+  // a player has muscle-memorised from gameplay.
+  const half = PLAYER_SIZE / 2;
+  // WALL_T (30) is already declared at module scope.
   const minX = WALL_T + half;
   const maxX = CANVAS_W - WALL_T - half;
   const minY = WALL_T + half;
