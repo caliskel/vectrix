@@ -909,6 +909,11 @@ export type EyeRenderOpts = {
    *  to white here so the dormant body's covered eye shows as black,
    *  then fills with white when the spark inhabits it. */
   lidColor?: string;
+  /** Overrides the pupil specular highlight colour. Defaults to
+   *  hardcoded white — fine for gameplay, but the intro cinematic
+   *  needs to tween it from black to white so the dormant eye doesn't
+   *  leak a 1-pixel white sliver through the eyelid seam. */
+  highlightColor?: string;
   /**
    * When provided, drives every body layer (ring / iris / pupil) and
    * the dash halo (via dashParticles) — the eye reads as the player's
@@ -1184,7 +1189,7 @@ export function drawPlayerEye(
     4,
   );
 
-  ctx.fillStyle = "#ffffff";
+  ctx.fillStyle = opts.highlightColor ?? "#ffffff";
   ctx.beginPath();
   ctx.arc(
     p.pupilOffsetX - pupilR * 0.35,

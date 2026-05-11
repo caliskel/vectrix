@@ -1,51 +1,27 @@
-import { makeDoor } from "../lib/door";
 import type { Room } from "../lib/room";
-import type { Wall } from "../lib/walls";
 
 const ROOM_W = 1200;
 const ROOM_H = 800;
-const WALL_T = 30;
-const DOOR_CENTER_Y = 400;
-const DOOR_W = 30;
-const DOOR_H = 120;
 
-// Tutorial entry room — a still, empty chamber the awakened hero
-// finds itself in after the intro cinematic. Nothing here: no
-// markers, no enemies, no hint. The exit on the right is open from
-// the start; stepping through transitions to the real onboarding
-// (the markers room, currently `room0`).
+// Tutorial entry room — a narrative interlude played the first time
+// after the intro cinematic. Visually it IS the cinematic
+// background — pure void with the drifting vector grid, no walls,
+// no door, no enemies. The hero spawns at centre where the cinematic
+// left it, the narrator's lines fade in below the eye, and then the
+// game auto-transitions to `room0` (the controls markers room).
 //
-// Purpose: a calm beat between the cinematic and the controls. The
-// player gets a moment to feel their body before the lesson begins.
+// tutorial-game.ts owns the narration sequencer and the transition
+// trigger — this file just declares the shape of the room. Walls
+// are intentionally empty so the player can't bump into anything;
+// movement is suppressed in tutorial-game while the narration runs.
 export function buildRoomIntro(): Room {
-  const gapTop = DOOR_CENTER_Y - DOOR_H / 2;
-  const gapBottom = DOOR_CENTER_Y + DOOR_H / 2;
-  const walls: Wall[] = [
-    { x: 0, y: 0, w: ROOM_W, h: WALL_T },
-    { x: 0, y: ROOM_H - WALL_T, w: ROOM_W, h: WALL_T },
-    { x: 0, y: 0, w: WALL_T, h: ROOM_H },
-    { x: ROOM_W - WALL_T, y: 0, w: WALL_T, h: gapTop },
-    {
-      x: ROOM_W - WALL_T,
-      y: gapBottom,
-      w: WALL_T,
-      h: ROOM_H - gapBottom,
-    },
-  ];
-
   return {
     id: "roomIntro",
-    walls,
+    walls: [],
     enemies: [],
-    door: makeDoor(
-      ROOM_W - WALL_T / 2,
-      DOOR_CENTER_Y,
-      DOOR_W,
-      DOOR_H,
-      "open",
-    ),
+    door: null,
     nextRoomId: "room0",
-    spawnX: 200,
-    spawnY: 400,
+    spawnX: ROOM_W / 2,
+    spawnY: ROOM_H / 2,
   };
 }

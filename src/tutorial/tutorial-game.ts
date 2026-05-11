@@ -137,6 +137,12 @@ import { buildRoom2 } from "./room2";
 import { buildRoom3 } from "./room3";
 import { buildRoomIntro } from "./roomIntro";
 import {
+  drawScrambleText,
+  isScrambleTextDone,
+  makeScrambleSchedule,
+  type ScrambleSchedule,
+} from "../lib/scramble-text";
+import {
   drawMarker,
   markerOverlapsPlayer,
   tickMarker,
@@ -812,7 +818,30 @@ export function start(canvas: HTMLCanvasElement): void {
     deathFx: null,
   };
 
-  let currentRoom: Room = rooms.get("roomIntro")!;
+  // The narrator's lines + camera pullback now live in
+  // intro-cinematic.ts; tutorial starts straight in room0 (the
+  // controls markers). roomIntro is kept buildable for archaeological
+  // reasons but is no longer referenced in the flow.
+  let currentRoom: Room = rooms.get("room0")!;
+  // Soft fade-in from black on first load — the intro cinematic ends
+  // with a fade-to-black, so room0 emerging from full darkness reads
+  // as a continuous beat rather than a hard scene cut.
+  let introFadeIn = 1.0;
+  // Hero's first thought after the cinematic — "who was that?" plays
+  // once on initial load (after the intro), then never replays. On
+  // restart `bootThoughtAge` stays past the schedule's totalDuration
+  // so the draw call silently no-ops; we don't reset it on rebuild.
+  const BOOT_THOUGHT_TEXT = "who was that?";
+  const bootThoughtSchedule: ScrambleSchedule = makeScrambleSchedule({
+    // Wait for the introFadeIn (1.2 s) to mostly clear before the
+    // text starts surfacing — the room needs to be visible first.
+    appearStart: 2.5,
+    fadeInDuration: 0.5,
+    settleDuration: 2.0,
+    holdDuration: 0.8,
+    fadeOutDuration: 0.8,
+  });
+  let bootThoughtAge = 0;
   let arenaBg: ArenaBg = createArenaBg(
     currentRoom.width ?? ROOM_W_PX,
     currentRoom.height ?? ROOM_H_PX,
@@ -887,7 +916,7 @@ export function start(canvas: HTMLCanvasElement): void {
   function restartRun() {
     audio.silence();
     rebuildAllRooms();
-    currentRoom = rooms.get("roomIntro")!;
+    currentRoom = rooms.get("room0")!;
     state.runState = "playing";
     state.hp = 3;
     state.score = 0;
@@ -1326,6 +1355,18 @@ export function start(canvas: HTMLCanvasElement): void {
       render();
       requestAnimationFrame(frame);
       return;
+    }
+
+    // Decay the post-intro fade-in. Driven on dt so the speed is
+    // independent of the framerate; runs alongside normal gameplay
+    // without blocking input — the player can already move while the
+    // fade-in finishes, exactly like waking up mid-step.
+    if (introFadeIn > 0) {
+      introFadeIn = Math.max(0, introFadeIn - dt / 1.2);
+    }
+    // Boot thought timer — only ticks until the schedule is done.
+    if (!isScrambleTextDone(bootThoughtAge, bootThoughtSchedule)) {
+      bootThoughtAge += dt;
     }
 
     bgFx.update(dt);
@@ -2159,6 +2200,22 @@ export function start(canvas: HTMLCanvasElement): void {
 
     drawFloatingTexts(ctx, floatingTexts);
 
+    // Boot thought — hero's first thought after the cinematic. Plays
+    // once on initial entry to room0; renders in world space (under
+    // the camera transform when useCamera is true) so it sits
+    // anchored just under the player. The lib silently no-ops once
+    // the schedule has finished, so we just call unconditionally.
+    if (currentRoom.id === "room0") {
+      drawScrambleText(
+        ctx,
+        BOOT_THOUGHT_TEXT,
+        bootThoughtAge,
+        bootThoughtSchedule,
+        player.x,
+        player.y + 80,
+      );
+    }
+
     // Death cinematic — drawn in world space so the explosion sits at
     // the player's last known position even in scrolling rooms.
     if (state.deathFx) drawDeathFx(ctx, state.deathFx);
@@ -2258,6 +2315,17 @@ export function start(canvas: HTMLCanvasElement): void {
     // anchors / buttons; no canvas overlay needed here.
 
     drawScanlines(ctx, viewW, viewH);
+
+    // Post-intro fade-in — sits ON TOP of everything (HUD, scanlines,
+    // overlays) so the entire screen comes up from black smoothly
+    // after the cinematic's fade-to-black redirect. Decays via dt in
+    // the frame loop.
+    if (introFadeIn > 0) {
+      ctx.save();
+      ctx.fillStyle = `rgba(0, 0, 0, ${Math.min(1, introFadeIn)})`;
+      ctx.fillRect(0, 0, viewW, viewH);
+      ctx.restore();
+    }
   }
 
   function showTutorialCompleteOverlay(): void {

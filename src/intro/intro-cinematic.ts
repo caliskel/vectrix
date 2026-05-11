@@ -23,6 +23,18 @@ import {
   type Player,
   type PlayerProfile,
 } from "../lib/player";
+import {
+  createVoidBg,
+  drawVoidBg,
+  drawVoidVignette,
+  tickVoidBg,
+  type VoidBgState,
+} from "../lib/void-bg";
+import {
+  drawScrambleText,
+  makeScrambleSchedule,
+  type ScrambleSchedule,
+} from "../lib/scramble-text";
 
 const CANVAS_W = 1200;
 const CANVAS_H = 800;
@@ -48,6 +60,8 @@ type PhaseId =
   | "merge"
   | "awaken"
   | "askname"
+  | "pullback"
+  | "narration"
   | "fadeout";
 
 const PHASE_ORDER: PhaseId[] = [
@@ -57,6 +71,8 @@ const PHASE_ORDER: PhaseId[] = [
   "merge",
   "awaken",
   "askname",
+  "pullback",
+  "narration",
   "fadeout",
 ];
 
@@ -65,21 +81,69 @@ const PHASE_DURATIONS: Record<PhaseId, number> = {
   dormant: 2.5,
   sparkapproach: 3.5,
   merge: 1.0,
-  awaken: 2.0,
+  awaken: 4.0,
   askname: 4.5,
-  fadeout: 0.7,
+  // Camera slowly pulls back from the awakened eye, the bloom dies
+  // out, and the void around it becomes the focal point again. Long
+  // enough that the scale change reads as breathing rather than zoom.
+  pullback: 5.5,
+  // Narrator speaks four beats over typewriter text at the top of
+  // the stage. Same canvas, same void — reads as one continuous
+  // cinematic rather than two.
+  narration: 21.5,
+  // Fades to BLACK (not white). The page navigation to tutorial.html
+  // happens during full black so there's no scene-switch flash; the
+  // tutorial loads room0 underneath the darkness.
+  fadeout: 1.2,
 };
+
+// Camera scale at the start / end of the pullback — eye returns to
+// roughly its dormant-phase size so the narration plays over the same
+// "small glyph in the void" composition the cinematic opened on.
+const PULLBACK_SCALE_END = 0.45;
+
+// Narrator beats — four typewriter lines played sequentially during
+// the narration phase. Timing is in seconds-from-narration-start.
+type NarrationBeat = {
+  text: string;
+  typeStart: number;
+  typeDuration: number; // ≈ 70 ms/char
+  holdDuration: number;
+  fadeDuration: number;
+};
+
+const NARRATION_BEATS: NarrationBeat[] = [
+  {
+    text: "Oh? A spark?",
+    typeStart: 1.5,
+    typeDuration: 0.85,
+    holdDuration: 1.6,
+    fadeDuration: 0.45,
+  },
+  {
+    text: "I thought they were all destroyed by the Archivist.",
+    typeStart: 4.7,
+    typeDuration: 3.4,
+    holdDuration: 1.9,
+    fadeDuration: 0.45,
+  },
+  {
+    text: "Well then. I hope you handle the task.",
+    typeStart: 11.0,
+    typeDuration: 2.6,
+    holdDuration: 1.7,
+    fadeDuration: 0.45,
+  },
+  {
+    text: "Initiating training protocol.",
+    typeStart: 16.6,
+    typeDuration: 1.9,
+    holdDuration: 1.6,
+    fadeDuration: 0.5,
+  },
+];
 
 // ---- Types ----
-
-type DustMote = {
-  x: number;
-  y: number;
-  vx: number;
-  vy: number;
-  size: number;
-  alpha: number;
-};
 
 type SparkPath = {
   startX: number;
@@ -122,10 +186,8 @@ export type IntroState = {
   sparkPath: SparkPath | null;
   sparkPathT: number;
 
-  // Background
-  gridOffsetX: number;
-  gridOffsetY: number;
-  dust: DustMote[];
+  // Background — shared void renderer (grid + dust + radial wash).
+  bg: VoidBgState;
 
   // Flashes
   mergeFlash: number;
@@ -137,10 +199,6 @@ const DORMANT_HEX = "#000000";
 // read as "a glyph is here" but dim enough that the void is what the
 // viewer perceives as the focal point.
 const RING_DORMANT_HEX = "#1c2436";
-
-const GRID_SPACING = 100;
-const GRID_DRIFT_X = 8; // px/s
-const GRID_DRIFT_Y = 5;
 
 // ---- State builders ----
 
@@ -178,27 +236,10 @@ export function createIntroState(): IntroState {
     sparkTrail: [],
     sparkPath: null,
     sparkPathT: 0,
-    gridOffsetX: 0,
-    gridOffsetY: 0,
-    dust: buildDust(),
+    bg: createVoidBg(CANVAS_W, CANVAS_H),
     mergeFlash: 0,
     finalFlash: 0,
   };
-}
-
-function buildDust(): DustMote[] {
-  const dust: DustMote[] = [];
-  for (let i = 0; i < 60; i++) {
-    dust.push({
-      x: Math.random() * CANVAS_W,
-      y: Math.random() * CANVAS_H,
-      vx: (Math.random() - 0.5) * 8,
-      vy: (Math.random() - 0.5) * 8,
-      size: 0.8 + Math.random() * 1.4,
-      alpha: 0.08 + Math.random() * 0.18,
-    });
-  }
-  return dust;
 }
 
 // ---- Update ----
@@ -296,36 +337,95 @@ function tickPhase(state: IntroState, dt: number): void {
       break;
     }
     case "awaken": {
-      // Iris / ring / lid colour finishes shifting in the first ~30%.
-      state.heroIrisT = Math.min(1, state.heroIrisT + dt / 0.6);
-      // Bloom decays as the body becomes the only luminous element.
+      // Colour transition wraps up during the slow-crack window so
+      // the body has its real palette before the saccade starts.
+      state.heroIrisT = Math.min(1, state.heroIrisT + dt / 0.5);
       state.heroBloom = Math.max(0, 1 - u * 0.7);
-      // Final scale push.
       state.heroScale = lerp(0.82, HERO_SCALE_FULL, easeOutCubic(u));
-      // Eye-opening choreography — five staged beats across the 2 s
-      // phase instead of a single linear sweep. Reads as a real
-      // waking eye: hesitate, crack, hold, snap, settle.
-      //   0.00–0.12 : hold closed with a faint micro-tremor (the
-      //               body "deciding" to wake)
-      //   0.12–0.26 : drowsy crack to ~18 % open
-      //   0.26–0.40 : hold the crack with a tiny breath wobble
-      //   0.40–0.60 : snap open (easeOutCubic) all the way to 100 %
-      //   0.60–1.00 : wide open. Engine handoff at 0.95 so it can
-      //               schedule natural blinks during askname.
-      if (u < 0.12) {
-        const wiggle = Math.sin(state.time * 24) * 0.015;
-        state.heroBlinkOpenT = Math.max(0, wiggle);
-      } else if (u < 0.26) {
-        const k = (u - 0.12) / 0.14;
-        state.heroBlinkOpenT = easeOutCubic(k) * 0.18;
-      } else if (u < 0.40) {
-        state.heroBlinkOpenT = 0.18 + Math.sin(state.time * 5.5) * 0.012;
-      } else if (u < 0.60) {
-        const k = (u - 0.40) / 0.20;
-        state.heroBlinkOpenT = 0.18 + easeOutCubic(k) * (1 - 0.18);
+      // 4-second awaken phase. Four acts:
+      //  1) slow drowsy crack to 20 % open;
+      //  2) hold cracked while pupil saccades right → left → centre,
+      //     with three reflex half-blinks (0.20 → 0 → 0.20) between
+      //     and after the saccade moves;
+      //  3) close back to 0 (the body briefly shuts again);
+      //  4) smooth full open. Engine handoff at 0.95.
+      //
+      //  u-windows:
+      //   0.00–0.04  hold closed
+      //   0.04–0.20  slow crack to 0.20 (~0.64 s)
+      //   0.20–0.78  HOLD CRACKED with saccades + reflex blinks (~2.3 s)
+      //   0.78–0.84  close back to 0
+      //   0.84–0.86  held shut
+      //   0.86–0.95  smooth full open (~0.36 s)
+      //   0.95–1.00  wide. Engine handoff.
+      const CRACK = 0.20;
+      let blinkOpen = 0;
+      let pupilX = 0;
+      let pupilY = 0;
+
+      if (u < 0.04) {
+        blinkOpen = 0;
+      } else if (u < 0.20) {
+        const k = (u - 0.04) / 0.16;
+        blinkOpen = easeInOutCubic(k) * CRACK;
+      } else if (u < 0.78) {
+        // Held cracked. Saccade + reflex-blink choreography across
+        // a ~2.3 s window (in 4 s phase). Each saccade dart is
+        // ~0.28 s and each reflex blink is a sinusoidal dip from
+        // CRACK to 0 and back over ~0.24 s.
+        //
+        //   0.20–0.27  dart right
+        //   0.27–0.33  reflex blink at right
+        //   0.33–0.40  hold right
+        //   0.40–0.47  sweep to left
+        //   0.47–0.53  reflex blink at left
+        //   0.53–0.60  hold left
+        //   0.60–0.66  settle to centre
+        //   0.66–0.72  reflex blink at centre
+        //   0.72–0.78  hold centre
+        blinkOpen = CRACK;
+        const SACC = 9;
+        if (u < 0.27) {
+          const k = (u - 0.20) / 0.07;
+          pupilX = easeOutCubic(k) * SACC;
+        } else if (u < 0.33) {
+          pupilX = SACC;
+          blinkOpen = blinkPulse((u - 0.27) / 0.06, CRACK);
+        } else if (u < 0.40) {
+          pupilX = SACC;
+        } else if (u < 0.47) {
+          const k = (u - 0.40) / 0.07;
+          pupilX = lerp(SACC, -SACC, easeOutCubic(k));
+        } else if (u < 0.53) {
+          pupilX = -SACC;
+          blinkOpen = blinkPulse((u - 0.47) / 0.06, CRACK);
+        } else if (u < 0.60) {
+          pupilX = -SACC;
+        } else if (u < 0.66) {
+          const k = (u - 0.60) / 0.06;
+          pupilX = lerp(-SACC, 0, easeOutCubic(k));
+        } else if (u < 0.72) {
+          pupilX = 0;
+          blinkOpen = blinkPulse((u - 0.66) / 0.06, CRACK);
+        } else {
+          pupilX = 0;
+        }
+      } else if (u < 0.84) {
+        const k = (u - 0.78) / 0.06;
+        blinkOpen = lerp(CRACK, 0, easeInQuad(k));
+      } else if (u < 0.86) {
+        blinkOpen = 0;
+      } else if (u < 0.95) {
+        const k = (u - 0.86) / 0.09;
+        blinkOpen = easeInOutCubic(k);
       } else {
-        state.heroBlinkOpenT = 1;
+        blinkOpen = 1;
       }
+
+      state.heroBlinkOpenT = blinkOpen;
+      state.hero.pupilOffsetX = pupilX;
+      state.hero.pupilOffsetY = pupilY;
+
       if (u >= 0.95 && state.heroFrozen) {
         state.heroFrozen = false;
         state.hero.blinkActive = false;
@@ -336,6 +436,26 @@ function tickPhase(state: IntroState, dt: number): void {
     case "askname":
       // Bloom slowly fades to nothing.
       state.heroBloom = Math.max(0, state.heroBloom - dt * 0.25);
+      break;
+    case "pullback": {
+      // Camera retreats with a soft S-curve. easeInOutQuad's slope is
+      // gentler in the middle than cubic — no abrupt mid-phase
+      // acceleration, reads as a long sustained pull. Bloom finishes
+      // burning off across the same window.
+      const startScale = HERO_SCALE_FULL;
+      state.heroScale = lerp(
+        startScale,
+        PULLBACK_SCALE_END,
+        easeInOutQuad(u),
+      );
+      state.heroBloom = Math.max(0, state.heroBloom - dt * 0.4);
+      break;
+    }
+    case "narration":
+      // Hold the small-in-void composition. Hero stays at pullback's
+      // end scale, engine drives the eye's blinks / idle look, the
+      // void grid drifts on its own.
+      state.heroScale = PULLBACK_SCALE_END;
       break;
     case "fadeout":
       state.finalFlash = u;
@@ -377,19 +497,7 @@ function tickAmbient(state: IntroState, dt: number): void {
   } else if (state.phase === "awaken") {
     speedMul = 1.2 - (state.phaseTime / PHASE_DURATIONS.awaken) * 0.4;
   }
-  state.gridOffsetX =
-    (state.gridOffsetX + GRID_DRIFT_X * dt * speedMul) % GRID_SPACING;
-  state.gridOffsetY =
-    (state.gridOffsetY + GRID_DRIFT_Y * dt * speedMul) % GRID_SPACING;
-
-  for (const m of state.dust) {
-    m.x += m.vx * dt;
-    m.y += m.vy * dt;
-    if (m.x < -10) m.x = CANVAS_W + 10;
-    if (m.x > CANVAS_W + 10) m.x = -10;
-    if (m.y < -10) m.y = CANVAS_H + 10;
-    if (m.y > CANVAS_H + 10) m.y = -10;
-  }
+  tickVoidBg(state.bg, dt, CANVAS_W, CANVAS_H, speedMul);
 }
 
 // ---- Spark path ----
@@ -492,8 +600,7 @@ export function drawIntro(
     offsetY * dpr,
   );
 
-  drawGrid(ctx, state);
-  drawDust(ctx, state);
+  drawVoidBg(ctx, state.bg, CANVAS_W, CANVAS_H, EYE_CX, EYE_CY);
 
   if (state.sparkActive || state.sparkTrail.length > 0) {
     drawSpark(ctx, state);
@@ -507,7 +614,7 @@ export function drawIntro(
   // brief.
   drawHero(ctx, state);
 
-  drawVignette(ctx);
+  drawVoidVignette(ctx, CANVAS_W, CANVAS_H, EYE_CX, EYE_CY);
 
   if (state.mergeFlash > 0) {
     ctx.fillStyle = `rgba(255, 255, 255, ${0.7 * state.mergeFlash})`;
@@ -515,9 +622,14 @@ export function drawIntro(
   }
 
   if (state.phase === "askname") drawAskNameText(ctx, state);
+  if (state.phase === "narration") drawNarration(ctx, state);
 
   if (state.finalFlash > 0) {
-    ctx.fillStyle = `rgba(255, 255, 255, ${state.finalFlash})`;
+    // Fade-to-BLACK during the final phase so the page navigation
+    // to tutorial.html happens under cover of darkness. Tutorial
+    // loads room0 underneath; the scene-switch feels like the camera
+    // simply closed its eyes rather than a hard cut.
+    ctx.fillStyle = `rgba(0, 0, 0, ${state.finalFlash})`;
     ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
   }
 
@@ -531,60 +643,6 @@ export function drawIntro(
   }
 
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-}
-
-function drawGrid(ctx: CanvasRenderingContext2D, state: IntroState): void {
-  // Slow drifting vector grid — sits behind the void as a hint of
-  // structure. Dim enough that the eye stays the focal point.
-  ctx.save();
-  ctx.strokeStyle = "rgba(40, 80, 130, 0.10)";
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  const offX = state.gridOffsetX;
-  const offY = state.gridOffsetY;
-  for (
-    let x = -GRID_SPACING + (offX % GRID_SPACING);
-    x < CANVAS_W + GRID_SPACING;
-    x += GRID_SPACING
-  ) {
-    ctx.moveTo(x, 0);
-    ctx.lineTo(x, CANVAS_H);
-  }
-  for (
-    let y = -GRID_SPACING + (offY % GRID_SPACING);
-    y < CANVAS_H + GRID_SPACING;
-    y += GRID_SPACING
-  ) {
-    ctx.moveTo(0, y);
-    ctx.lineTo(CANVAS_W, y);
-  }
-  ctx.stroke();
-  // Radial wash from the eye centre fades the grid to deep black at
-  // the edges so the composition pools around the focal point.
-  const wash = ctx.createRadialGradient(
-    EYE_CX,
-    EYE_CY,
-    80,
-    EYE_CX,
-    EYE_CY,
-    720,
-  );
-  wash.addColorStop(0, "rgba(0, 0, 0, 0)");
-  wash.addColorStop(1, "rgba(0, 0, 0, 0.85)");
-  ctx.fillStyle = wash;
-  ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
-  ctx.restore();
-}
-
-function drawDust(ctx: CanvasRenderingContext2D, state: IntroState): void {
-  ctx.save();
-  for (const m of state.dust) {
-    ctx.fillStyle = `rgba(255, 255, 255, ${m.alpha})`;
-    ctx.beginPath();
-    ctx.arc(m.x, m.y, m.size, 0, Math.PI * 2);
-    ctx.fill();
-  }
-  ctx.restore();
 }
 
 function drawSpark(ctx: CanvasRenderingContext2D, state: IntroState): void {
@@ -708,14 +766,13 @@ function drawHeroBloom(
 
 function drawHero(ctx: CanvasRenderingContext2D, state: IntroState): void {
   // Same drawPlayerEye used in gameplay. EVERY body colour lerps from
-  // dormant black/slate to the profile palette over heroIrisT, so the
-  // same renderer covers both the empty-shell silhouette and the
-  // awakened hero. Critically the pupil is also lerped — drawPlayerEye
-  // draws the iris/pupil/highlight BEFORE clipping in the eyelids,
-  // and the eyelid seam at y=0 leaks a sub-pixel hairline of whatever
-  // sits underneath. If the pupil stayed white during dormant, that
-  // hairline read as a bright white horizontal line through a
-  // pitch-black eye.
+  // dormant black/slate to the profile palette over heroIrisT — and
+  // crucially the lerped values are stuffed into the PROFILE field
+  // because drawPlayerEye prefers profile.outerRing / profile.pupil
+  // over the bare ringColor / pupilColor opts. Without that
+  // indirection the dormant body silently reverted to the white
+  // profile defaults and the eyelid seam at y=0 leaked a 1-pixel
+  // white hairline of pupil + highlight through pitch-black lids.
   const ringColor = lerpHex(
     RING_DORMANT_HEX,
     state.heroProfile.outerRing,
@@ -736,66 +793,131 @@ function drawHero(ctx: CanvasRenderingContext2D, state: IntroState): void {
     state.heroProfile.pupil,
     state.heroIrisT,
   );
-  const profile: PlayerProfile = { ...state.heroProfile, iris };
-  const size = HERO_SIZE * state.heroScale;
-  drawPlayerEye(ctx, state.hero, size, {
+  const highlightColor = lerpHex(
+    DORMANT_HEX,
+    "#ffffff",
+    state.heroIrisT,
+  );
+  const profile: PlayerProfile = {
+    outerRing: ringColor,
+    iris,
+    pupil: pupilColor,
+    dashParticles: state.heroProfile.dashParticles,
+  };
+  // Camera-style scaling: draw the eye at a fixed HERO_SIZE and wrap
+  // it in ctx.scale around the eye centre. drawPlayerEye's cached
+  // ring sprite is keyed on `Math.round(radius)`, so animating size
+  // by tweening drawPlayerEye's size param thrashes the cache and
+  // makes the eye visibly "step" across integer pixel boundaries
+  // during the pullback. Wrapping in ctx.scale keeps the sprite at
+  // one cached radius and lets canvas interpolate the visual size
+  // smoothly — no stepping, no sprite rebuilds per frame.
+  const s = state.heroScale;
+  ctx.save();
+  ctx.translate(EYE_CX, EYE_CY);
+  ctx.scale(s, s);
+  ctx.translate(-EYE_CX, -EYE_CY);
+  drawPlayerEye(ctx, state.hero, HERO_SIZE, {
     ringColor,
     pupilColor,
-    ghostColor: state.heroProfile.outerRing,
+    ghostColor: ringColor,
     dashDurationSec: DASH_DURATION_MS / 1000,
     profile,
     lidColor,
+    highlightColor,
   });
+  ctx.restore();
 }
+
+// Hero's first thought ("who am i?") emerges as scrambled glyphs,
+// then resolves left-to-right into the legible question. The
+// schedule fits the askname phase (4.5 s): silence → scramble fade-in
+// → settle → hold → fade out.
+const ASK_NAME_SCHEDULE: ScrambleSchedule = makeScrambleSchedule({
+  appearStart: 1.5,
+  fadeInDuration: 0.5,
+  settleDuration: 1.4,
+  holdDuration: 0.5,
+  fadeOutDuration: 0.6,
+});
 
 function drawAskNameText(
   ctx: CanvasRenderingContext2D,
   state: IntroState,
 ): void {
-  // Bare monospace below the eye — no window, no brackets. The text
-  // surfaces 1.5 s after the askname phase begins (silence first),
-  // fades in over 0.6 s, holds, fades out over 0.6 s.
-  const appearSec = 1.5;
-  const fadeInSec = 0.6;
-  const fadeOutSec = 0.6;
-  const totalSec = PHASE_DURATIONS.askname;
-  const visible = state.phaseTime - appearSec;
-  if (visible < 0) return;
+  drawScrambleText(
+    ctx,
+    "who am i?",
+    state.phaseTime,
+    ASK_NAME_SCHEDULE,
+    EYE_CX,
+    EYE_CY + 110,
+  );
+}
+
+function drawNarration(
+  ctx: CanvasRenderingContext2D,
+  state: IntroState,
+): void {
+  // Find the active beat at the current narration-phase time. Beats
+  // are sequential — first one whose [typeStart, end] window contains
+  // phaseTime is THE active beat.
+  const t = state.phaseTime;
+  let active: NarrationBeat | null = null;
+  for (const beat of NARRATION_BEATS) {
+    const end =
+      beat.typeStart +
+      beat.typeDuration +
+      beat.holdDuration +
+      beat.fadeDuration;
+    if (t >= beat.typeStart && t < end) {
+      active = beat;
+      break;
+    }
+  }
+  if (!active) return;
+
+  const rel = t - active.typeStart;
+  // Typewriter reveal — chars revealed left-to-right at
+  // typeDuration / text.length seconds per character. Tuned for
+  // ~70 ms/char so each line reads as a deliberate transmission.
+  const typedT = Math.min(1, rel / active.typeDuration);
+  const charsVisible = Math.max(
+    0,
+    Math.min(active.text.length, Math.floor(active.text.length * typedT)),
+  );
+  const partial = active.text.slice(0, charsVisible);
+
   let alpha = 1;
-  if (visible < fadeInSec) alpha = visible / fadeInSec;
-  const tailStart = totalSec - appearSec - fadeOutSec;
-  if (visible > tailStart) {
+  const fadeInSec = 0.25;
+  if (rel < fadeInSec) alpha = rel / fadeInSec;
+  const holdEnd = active.typeDuration + active.holdDuration;
+  if (rel > holdEnd) {
     alpha = Math.min(
       alpha,
-      Math.max(0, 1 - (visible - tailStart) / fadeOutSec),
+      Math.max(0, 1 - (rel - holdEnd) / active.fadeDuration),
     );
   }
   if (alpha <= 0) return;
+
+  const showCursor =
+    rel < holdEnd &&
+    (rel < active.typeDuration || Math.floor(rel * 2.5) % 2 === 0);
+  const display = partial + (showCursor ? "▍" : "");
+
   ctx.save();
   ctx.globalAlpha = alpha;
   ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.font = "300 22px ui-monospace, SFMono-Regular, Menlo, monospace";
-  ctx.fillStyle = "#a5f3fc";
-  ctx.shadowColor = "#7dd3fc";
-  ctx.shadowBlur = 8;
-  ctx.fillText("who am i?", EYE_CX, EYE_CY + 110);
+  ctx.textBaseline = "top";
+  ctx.font =
+    "500 24px ui-monospace, 'SF Mono', 'Consolas', 'Liberation Mono', monospace";
+  ctx.fillStyle = "#7dd3fc";
+  ctx.shadowColor = "#38bdf8";
+  ctx.shadowBlur = 12;
+  // Top of the stage — 120 px from the top of the canonical 800-px
+  // canvas, centred horizontally.
+  ctx.fillText(display, EYE_CX, 120);
   ctx.restore();
-}
-
-function drawVignette(ctx: CanvasRenderingContext2D): void {
-  const grad = ctx.createRadialGradient(
-    EYE_CX,
-    EYE_CY,
-    220,
-    EYE_CX,
-    EYE_CY,
-    720,
-  );
-  grad.addColorStop(0, "rgba(0, 0, 0, 0)");
-  grad.addColorStop(1, "rgba(0, 0, 0, 0.75)");
-  ctx.fillStyle = grad;
-  ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
 }
 
 // ---- Util ----
@@ -832,8 +954,25 @@ function easeOutCubic(t: number): number {
   return 1 - Math.pow(1 - t, 3);
 }
 
+function easeInQuad(t: number): number {
+  return t * t;
+}
+
+// Sinusoidal dip from `baseline` to 0 and back to `baseline`. k=0
+// returns baseline, k=0.5 returns 0, k=1 returns baseline. Used for
+// reflex half-blinks while the eye is held at a non-zero cracked
+// state — drops to fully shut at the midpoint and rises back.
+function blinkPulse(k: number, baseline: number): number {
+  if (k <= 0 || k >= 1) return baseline;
+  return baseline * (1 - Math.sin(Math.PI * k));
+}
+
 function easeInOutCubic(t: number): number {
   return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+}
+
+function easeInOutQuad(t: number): number {
+  return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
 }
 
 // ---- Skip ----
@@ -842,10 +981,14 @@ export const MIN_WATCH_BEFORE_SKIP_SEC = 2.0;
 
 export function trySkipIntro(state: IntroState): boolean {
   if (state.time < MIN_WATCH_BEFORE_SKIP_SEC) return false;
-  if (state.phase === "fadeout") return false;
-  state.phase = "fadeout";
-  state.phaseTime = 0;
-  state.finalFlash = 0;
+  if (state.done) return false;
+  // Hard skip — slam the screen to full black this frame and flag
+  // the run as done so main.ts triggers the redirect. The tutorial
+  // page handles its own fade-in from black on the other side, so
+  // the player sees: cinematic content → single black frame →
+  // tutorial fading in. No phase fast-forward, no narration burn-down.
+  state.finalFlash = 1;
+  state.done = true;
   return true;
 }
 
