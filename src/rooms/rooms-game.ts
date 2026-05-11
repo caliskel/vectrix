@@ -2,6 +2,14 @@ import { audio } from "../lib/audio";
 import { createDevMenu, type DevMenu } from "../lib/dev-menu";
 import { drawFpsOverlay, recordFrame } from "../lib/fps-meter";
 import {
+  drawPerfOverlay,
+  perfBegin,
+  perfEnd,
+  perfFrameEnd,
+  perfFrameStart,
+  togglePerfOverlay,
+} from "../lib/perf-meter";
+import {
   drawScrambleText,
   isScrambleTextDone,
   makeScrambleSchedule,
@@ -874,6 +882,14 @@ export function start(canvas: HTMLCanvasElement): void {
     // pause overlay underneath, etc.
     if (devMenu.isOpen()) return;
 
+    // F2 — toggle frame-time breakdown overlay. Independent of the
+    // dev menu so we can profile while the menu is closed.
+    if (code === "F2") {
+      e.preventDefault();
+      togglePerfOverlay();
+      return;
+    }
+
     // Esc / Tab are SYSTEM keys — hardcoded pause toggle (not
     // rebindable; the Controls overlay rejects them).
     if (code === "Escape" || code === "Tab") {
@@ -1273,6 +1289,7 @@ export function start(canvas: HTMLCanvasElement): void {
 
   function frame(now: number) {
     recordFrame(now);
+    perfFrameStart(now);
     let dt = (now - lastTime) / 1000;
     lastTime = now;
     if (dt > 0.05) dt = 0.05;
@@ -2082,17 +2099,23 @@ export function start(canvas: HTMLCanvasElement): void {
 
   function render() {
     // letterbox: clear in CSS pixels, then transform into room space
+    perfBegin("bg");
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.fillStyle = PALETTE.bg;
     ctx.fillRect(0, 0, viewW, viewH);
     // synthwave pulse drawn in screen space so it lives behind the world
     bgFx.drawBack(ctx, viewW, viewH);
+    perfEnd("bg");
 
     // Energy + text background passes, both clipped out of the visible
     // arena rect so they only show in the letterbox / camera margins.
     const arenaBounds = computeArenaBounds();
+    perfBegin("energy");
     drawEnergyBackground(ctx, energyBg, viewW, viewH, arenaBounds);
+    perfEnd("energy");
+    perfBegin("bgtext");
     drawBackgroundTexts(ctx, bgText, viewW, viewH, arenaBounds);
+    perfEnd("bgtext");
 
     // screen shake — applied to the room transform only so HUD stays put
     let shakeX = 0;
@@ -2123,50 +2146,58 @@ export function start(canvas: HTMLCanvasElement): void {
     // DEEP FIELD background — radial spark + vignette anchored on
     // the player (the only consciousness still burning in the dead
     // network), parallax dots, grid pulses, radar sweeps.
+    perfBegin("arenabg");
     drawArenaBg(ctx, arenaBg, { x: player.x, y: player.y });
+    perfEnd("arenabg");
 
     // Minimalist world-space grid. Clamped to the room's logical
     // bounds so it stops at the perimeter walls and never bleeds into
     // the letterbox. Stateful node pass renders alive/faint/dead
     // intersections — most are dark by default, a handful flicker.
+    perfBegin("grid");
     drawRoomGrid(
       ctx,
       currentRoom.width ?? ROOM_W_PX,
       currentRoom.height ?? ROOM_H_PX,
       gridNodes,
     );
+    perfEnd("grid");
 
     // Archive ambience — ghost text + phantom visitors painted just
     // above the floor so they read as part of the environment, not
     // floating overlays.
     drawArchiveFx(ctx, archiveFx);
 
+    perfBegin("walls");
     drawWalls(ctx, currentRoom.walls);
     drawWallOverlay(ctx, wallFx, currentRoom.walls);
     if (currentRoom.door) drawDoor(ctx, currentRoom.door);
     if (currentRoom.backDoor) drawDoor(ctx, currentRoom.backDoor);
+    perfEnd("walls");
 
     // detection rings (drawn under everything so they read as a
     // ground-level radar pulse, not an overlay on top of the enemy)
+    perfBegin("detection");
     for (const e of currentRoom.enemies) {
       drawEnemyDetection(ctx, e, player.x, player.y);
     }
+    perfEnd("detection");
 
     // lasers (under enemies so the beam appears to emerge from behind)
+    perfBegin("lasers");
     for (const l of lasers) drawLaser(ctx, l);
+    perfEnd("lasers");
 
     // enemies
+    perfBegin("enemies");
     for (const e of currentRoom.enemies) e.draw(ctx);
+    perfEnd("enemies");
 
 
-    // bullets — trail pass then live pass. Trail still uses plain
-    // fillRect (no shadow, just modulated alpha). Live pass blits a
-    // pre-rendered sprite (one offscreen canvas per color/size combo
-    // in lib/bullet-sprite) so per-bullet shadowBlur is gone — the
-    // dominant frame cost in phase 3 of the boss (50-80 bullets
-    // steady-state with the cadence boost + mine detonations).
+    // bullets — trail pass then live pass.
     const bSize = settings.bullets.size;
     const bColor = settings.bullets.color;
+    perfBegin("trails");
     ctx.save();
     ctx.fillStyle = bColor;
     ctx.shadowBlur = 0;
@@ -2183,15 +2214,19 @@ export function start(canvas: HTMLCanvasElement): void {
     }
     ctx.globalAlpha = 1;
     ctx.restore();
+    perfEnd("trails");
+    perfBegin("bullets");
     const bulletSprite = getBulletSprite(bColor, bSize);
     const bulletOffset = getBulletSpriteOffset(bSize);
     for (const b of bullets) {
       ctx.drawImage(bulletSprite, b.x - bulletOffset, b.y - bulletOffset);
     }
+    perfEnd("bullets");
 
     // particles — flat path always; per-particle shadowBlur was a
     // major frame-cost spike during combat. Particles are tiny and
     // short-lived, the glow lift isn't worth the cost.
+    perfBegin("particles");
     ctx.save();
     ctx.shadowBlur = 0;
     for (const p of particles) {
@@ -2203,6 +2238,7 @@ export function start(canvas: HTMLCanvasElement): void {
       ctx.fillRect(p.x - sz / 2, p.y - sz / 2, sz, sz);
     }
     ctx.restore();
+    perfEnd("particles");
 
     // player
     const pSize = PLAYER_SIZE;
@@ -2214,6 +2250,7 @@ export function start(canvas: HTMLCanvasElement): void {
     if (state.deathFx && state.deathFx.age > 0.04) drawPlayer = false;
 
     if (drawPlayer) {
+      perfBegin("player");
       // Body layers come straight from the player profile in every
       // state. The dash halo is derived inside drawPlayerEye from
       // profile.dashParticles, so the energy reads as the same colour
@@ -2226,9 +2263,11 @@ export function start(canvas: HTMLCanvasElement): void {
         dashCooldownSec: DASH_COOLDOWN_MS / 1000,
         profile,
       });
+      perfEnd("player");
     }
 
     // rings
+    perfBegin("rings");
     for (const ring of rings) {
       const t = ring.age / ring.lifetime;
       const r = ring.startR + (ring.endR - ring.startR) * t;
@@ -2249,6 +2288,7 @@ export function start(canvas: HTMLCanvasElement): void {
       ctx.stroke();
       ctx.restore();
     }
+    perfEnd("rings");
 
     // key pickup (drawn above bullets / particles, below HUD)
     if (currentKey && !currentKey.collected) drawKey(ctx, currentKey);
@@ -2362,6 +2402,8 @@ export function start(canvas: HTMLCanvasElement): void {
     drawBossOverlay();
     drawGodModeBadge(ctx, viewW);
     drawFpsOverlay(ctx, viewW);
+    drawPerfOverlay(ctx, viewW);
+    perfFrameEnd(performance.now());
 
     if (state.runState === "failed" && shouldShowDeathOverlay(state.deathFx)) {
       drawFailedOverlay();
