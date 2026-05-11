@@ -127,7 +127,11 @@ class AudioEngine {
     // Tone.start() is idempotent — retrying it on every call lets a
     // page-load attempt (autoplay-blocked, no gesture yet) wake up
     // once the user clicks. setupChain still runs once.
-    void toneStart();
+    // Resolving the start promise also retries queued music — without
+    // this, a pre-gesture playMusic() would schedule the fade ramp in
+    // suspended-context time and the first audible samples would land
+    // at full gain (audible crackle / pop at track start).
+    void toneStart().then(() => this.tryStartMusic());
     if (this.initialized) return;
     this.initialized = true;
     this.setupChain();
@@ -234,6 +238,13 @@ class AudioEngine {
         fadeOut: 0.5,
         onload: () => {
           this.musicLoadingKeys.delete(key);
+          // Skip MP3 encoder-delay priming (~576 samples ≈ 12 ms at 48 kHz)
+          // so the loop seam doesn't click and the very first samples after
+          // start aren't garbage. Safe for non-MP3 sources too — a few ms
+          // of head trim is inaudible.
+          try {
+            player.loopStart = 0.015;
+          } catch {}
           this.tryStartMusic();
         },
         onerror: () => {
@@ -252,6 +263,11 @@ class AudioEngine {
     const next = this.musicTracks.get(key);
     if (!next || !next.loaded) return;
     if (this.activeMusicKey === key && next.state === "started") return;
+    // Don't start in a suspended AudioContext — fade-in ramps scheduled
+    // here would burn off in suspended time and the first audible
+    // samples would arrive at full gain. Caller will retry from
+    // init() once Tone.start() resolves on a user gesture.
+    if (getContext().state !== "running") return;
 
     const fade = this.musicQueuedFadeSec;
     // Fade out whatever is currently playing.

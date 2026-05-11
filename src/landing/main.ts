@@ -89,11 +89,11 @@ audio.setMusicTrack(
   "menu",
   encodeURI(import.meta.env.BASE_URL + "audio/menu/Neon Drift Menu.mp3"),
 );
-audio.playMusic("menu", 1.0);
+audio.playMusic("menu", 2.0);
 audio.init();
 const kickMenuMusic = () => {
   audio.init();
-  audio.playMusic("menu", 1.0);
+  audio.playMusic("menu", 2.0);
 };
 window.addEventListener("keydown", kickMenuMusic, { once: false });
 window.addEventListener("click", kickMenuMusic, { once: false });
