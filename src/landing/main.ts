@@ -85,7 +85,10 @@ startMenuBg(bgCanvas, {
 });
 
 // === Menu music — same flow as before, eager start + gesture fallback ===
-audio.setMusicTrack("menu", encodeURI("/audio/menu/Neon Drift Menu.mp3"));
+audio.setMusicTrack(
+  "menu",
+  encodeURI(import.meta.env.BASE_URL + "audio/menu/Neon Drift Menu.mp3"),
+);
 audio.playMusic("menu", 1.0);
 audio.init();
 const kickMenuMusic = () => {

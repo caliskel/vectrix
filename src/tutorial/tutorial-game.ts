@@ -374,6 +374,16 @@ export function start(canvas: HTMLCanvasElement): void {
   audio.setMasterVolume(settings.audio.master);
   audio.setSfxVolume(settings.audio.sfx);
   audio.setMusicVolume(settings.audio.music);
+  // Shared sandbox / tutorial loop on the "gameplay" key — same file
+  // as sandbox, so the same buffer URL is registered. Eager play on
+  // start() tries to autoplay; cold visits hit the gesture fallback
+  // in the keydown / click handlers below.
+  audio.setMusicTrack(
+    "gameplay",
+    encodeURI(import.meta.env.BASE_URL + "audio/gameplay/Vectrix Drift.mp3"),
+  );
+  audio.playMusic("gameplay", 1.0);
+  audio.init();
 
   // Player profile from the landing-page editor (saved in localStorage).
   // Loaded once at start; the editor lives on a different page so a
@@ -906,7 +916,7 @@ export function start(canvas: HTMLCanvasElement): void {
       lastTime = performance.now();
     },
     onQuit: () => {
-      window.location.href = "/";
+      window.location.href = import.meta.env.BASE_URL;
     },
   });
 
@@ -934,6 +944,7 @@ export function start(canvas: HTMLCanvasElement): void {
 
   window.addEventListener("keydown", (e) => {
     audio.init();
+    audio.playMusic("gameplay", 1.0);
     const code = e.code;
 
     // Dev menu owns its own F1 / Esc handling. Short-circuit our
@@ -979,6 +990,7 @@ export function start(canvas: HTMLCanvasElement): void {
 
   canvas.addEventListener("click", (e) => {
     audio.init();
+    audio.playMusic("gameplay", 1.0);
     if (menu.isOpen()) return;
     if (state.runState !== "failed") return;
     const rect = canvas.getBoundingClientRect();
@@ -2218,18 +2230,19 @@ export function start(canvas: HTMLCanvasElement): void {
     const root = document.createElement("div");
     root.id = "tut-complete-overlay";
     root.className = "tc-overlay";
+    const base = import.meta.env.BASE_URL;
     root.innerHTML = `
       <h2 class="tc-title">TUTORIAL COMPLETE</h2>
       <div class="tc-subtitle">You're ready for the real thing.</div>
       <div class="tc-actions">
-        <a class="tc-btn tc-btn-primary" href="/rooms.html">
+        <a class="tc-btn tc-btn-primary" href="${base}rooms.html">
           ▶  PROCEED TO STORY
         </a>
         <button type="button" class="tc-btn tc-btn-replay"
                 data-action="replay">
           ↺  REPLAY TUTORIAL
         </button>
-        <a class="tc-btn tc-btn-menu" href="/">
+        <a class="tc-btn tc-btn-menu" href="${base}">
           ←  BACK TO MAIN MENU
         </a>
       </div>

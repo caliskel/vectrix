@@ -421,10 +421,11 @@ export function start(canvas: HTMLCanvasElement): void {
   // /audio/ from there). Load is deferred until audio.init() fires on
   // the first user gesture (the keydown / click handlers below);
   // crossfades are kicked from reconcileBossMusic().
-  audio.setMusicTrack("rooms", encodeURI("/audio/Glass Under Ice.mp3"));
-  audio.setMusicTrack("boss-1", "/audio/boss-phase-1.mp3");
-  audio.setMusicTrack("boss-2", "/audio/boss-phase-2.mp3");
-  audio.setMusicTrack("boss-3", "/audio/boss-phase-3.mp3");
+  const audioBase = import.meta.env.BASE_URL + "audio/";
+  audio.setMusicTrack("rooms", encodeURI(audioBase + "Glass Under Ice.mp3"));
+  audio.setMusicTrack("boss-1", audioBase + "boss-phase-1.mp3");
+  audio.setMusicTrack("boss-2", audioBase + "boss-phase-2.mp3");
+  audio.setMusicTrack("boss-3", audioBase + "boss-phase-3.mp3");
 
   // Player profile from the landing-page editor (saved in localStorage).
   // Loaded once at start; the editor lives on a different page so a
@@ -655,7 +656,7 @@ export function start(canvas: HTMLCanvasElement): void {
       lastTime = performance.now();
     },
     onQuit: () => {
-      window.location.href = "/";
+      window.location.href = import.meta.env.BASE_URL;
     },
   });
 
@@ -668,7 +669,7 @@ export function start(canvas: HTMLCanvasElement): void {
       lastTime = performance.now();
     },
     onQuit: () => {
-      window.location.href = "/";
+      window.location.href = import.meta.env.BASE_URL;
     },
   });
 
@@ -2382,7 +2383,7 @@ function showTutorialLockOverlay(
   // DOM CTA so the button is keyboard-accessible and styled like the
   // landing menu instead of being painted on the canvas.
   const btn = document.createElement("a");
-  btn.href = "/tutorial.html";
+  btn.href = import.meta.env.BASE_URL + "tutorial.html";
   btn.textContent = "GO TO TUTORIAL";
   btn.style.cssText = [
     "position: fixed",

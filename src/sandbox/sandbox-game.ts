@@ -84,6 +84,16 @@ const save = () => saveSettings(settings);
 audio.setMasterVolume(settings.audio.master);
 audio.setSfxVolume(settings.audio.sfx);
 audio.setMusicVolume(settings.audio.music);
+// Shared sandbox / tutorial loop. Both modes register the same key
+// and load the same file from /audio/gameplay/. Eager play on script
+// load tries to autoplay; the per-page first-gesture handler resumes
+// the AudioContext on cold visits where autoplay is blocked.
+audio.setMusicTrack(
+  "gameplay",
+  encodeURI(import.meta.env.BASE_URL + "audio/gameplay/Vectrix Drift.mp3"),
+);
+audio.playMusic("gameplay", 1.0);
+audio.init();
 
 const canvas = document.getElementById("app") as HTMLCanvasElement;
 const ctx = canvas.getContext("2d")!;
@@ -164,14 +174,16 @@ const pauseMenu = createSandboxPauseMenu({
     lastTime = performance.now();
   },
   onQuit: () => {
-    window.location.href = "/";
+    window.location.href = import.meta.env.BASE_URL;
   },
 });
 
 window.addEventListener("keydown", (e) => {
   // Tone.js requires a user gesture to start the AudioContext.
-  // init() is idempotent — only the first call costs anything.
+  // init() retries Tone.start() on every call so a suspended context
+  // (autoplay was blocked at page load) wakes up here.
   audio.init();
+  audio.playMusic("gameplay", 1.0);
   const code = e.code;
 
   // Esc / Tab are SYSTEM keys (not rebindable) — they toggle the
@@ -219,6 +231,7 @@ window.addEventListener("blur", () => keys.clear());
 
 canvas.addEventListener("click", (e) => {
   audio.init();
+  audio.playMusic("gameplay", 1.0);
   if (menu.isOpen() || pauseMenu.isOpen()) return;
   if (state.runState !== "ended") return;
   const rect = canvas.getBoundingClientRect();
