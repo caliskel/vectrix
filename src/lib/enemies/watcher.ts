@@ -16,10 +16,10 @@ import {
   WATCHER_IDLE_PUPIL_LERP,
   WATCHER_SPEED_FACTOR,
 } from "../config";
-import { drawNeon } from "../neon";
 import { resolveEntityWallCollisions } from "../walls";
 import { applyAwarenessJitter, initAwareness } from "./awareness";
 import { applyEnemyKnockback, drawEnemyHitFlash } from "./fx";
+import { getWatcherSprite, WATCHER_SPRITE_ANCHOR } from "./watcher-sprite";
 import type {
   AwarenessState,
   Enemy,
@@ -39,20 +39,10 @@ import type {
 // as depth rather than a target. Pupil is large and visibly black on
 // top of the burgundy core, with a tiny white catchlight.
 const WATCHER_RADIUS = 30;        // outer ring radius
-const OUTER_RING_W = 2.5;
-const IRIS_OUTER_R = 24;
-const IRIS_MID_R = 19;
-const IRIS_INNER_R = 14;
-const IRIS_OUTER_COLOR = "#ff1744";
-const IRIS_MID_COLOR = "#c8002a";
-const IRIS_INNER_COLOR = "#6b0014";
+const IRIS_OUTER_R = 24;          // pupil tracking offset uses this
 const PUPIL_RADIUS = 9;
 const PUPIL_HIGHLIGHT_R = 2.5;
 const PUPIL_HIGHLIGHT_OFFSET = 2;
-const GLOSS_OFFSET_Y = -16;
-const GLOSS_W = 12;
-const GLOSS_H = 5;
-const GLOSS_ALPHA = 0.2;
 const PUPIL_LERP_RATE = 10;
 const WATCHER_HP_MAX = 3;
 
@@ -403,40 +393,15 @@ export class Watcher implements Enemy {
       ctx.translate(-this.x, -this.y);
     }
 
-    // 1. Outer ring — stroke only (no fill). The unfilled annulus between
-    //    ring and iris exposes the room background as a dark gap, which
-    //    is what reads as the orb's "shell".
-    drawNeon(
-      ctx,
-      () => {
-        ctx.beginPath();
-        ctx.arc(this.x, this.y, WATCHER_RADIUS, 0, Math.PI * 2);
-        ctx.lineWidth = OUTER_RING_W;
-        ctx.strokeStyle = "#f8fafc";
-        ctx.stroke();
-      },
-      "#f8fafc",
-      8,
-      3,
+    // Body (outer ring + iris stack + gloss) — baked into a single
+    // sprite. One drawImage replaces a drawNeon + 4 fill arcs + an
+    // ellipse fill.
+    const bodySprite = getWatcherSprite();
+    ctx.drawImage(
+      bodySprite,
+      this.x - WATCHER_SPRITE_ANCHOR,
+      this.y - WATCHER_SPRITE_ANCHOR,
     );
-
-    // 2-4. Iris stack — three opaque solid discs. The illusion of depth
-    //      comes from the colors fading toward burgundy at the center,
-    //      not from alpha blending. Do NOT lower opacity on these.
-    ctx.fillStyle = IRIS_OUTER_COLOR;
-    ctx.beginPath();
-    ctx.arc(this.x, this.y, IRIS_OUTER_R, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.fillStyle = IRIS_MID_COLOR;
-    ctx.beginPath();
-    ctx.arc(this.x, this.y, IRIS_MID_R, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.fillStyle = IRIS_INNER_COLOR;
-    ctx.beginPath();
-    ctx.arc(this.x, this.y, IRIS_INNER_R, 0, Math.PI * 2);
-    ctx.fill();
 
     // 5. Pupil — solid black, follows pupil tracking offset
     ctx.fillStyle = "#0a0e1a";
@@ -461,25 +426,6 @@ export class Watcher implements Enemy {
       Math.PI * 2,
     );
     ctx.fill();
-
-    // 7. Glossy iris highlight — translucent ellipse near the top edge,
-    //    static (does not follow the pupil) so it reads as a fixed
-    //    reflection on the orb.
-    ctx.save();
-    ctx.globalAlpha = GLOSS_ALPHA;
-    ctx.fillStyle = "#ffffff";
-    ctx.beginPath();
-    ctx.ellipse(
-      this.x,
-      this.y + GLOSS_OFFSET_Y,
-      GLOSS_W,
-      GLOSS_H,
-      0,
-      0,
-      Math.PI * 2,
-    );
-    ctx.fill();
-    ctx.restore();
 
     if (squashing) ctx.restore();
 

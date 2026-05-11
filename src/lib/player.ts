@@ -70,6 +70,11 @@ import {
 import { isActionPressed, type KeybindProfile } from "./keybinds";
 import { drawNeon } from "./neon";
 import { PALETTE } from "./palette";
+import {
+  getPlayerRingSprite,
+  PLAYER_RING_SPRITE_ANCHOR,
+  PLAYER_RING_SPRITE_BASE_RADIUS,
+} from "./player-eye-sprite";
 
 const SHAKE_DURATION = 0.2;
 const DILATE_DURATION = 0.3;
@@ -1136,23 +1141,26 @@ export function drawPlayerEye(
   }
 
   // ===== outer ring (deformed in dash) =====
-  drawNeon(
-    ctx,
-    () => {
-      ctx.beginPath();
-      if (isDashing) {
-        ctx.ellipse(0, 0, r * stretchX, r * stretchY, dashAngle, 0, Math.PI * 2);
-      } else {
-        ctx.arc(0, 0, r, 0, Math.PI * 2);
-      }
-      ctx.strokeStyle = ringColor;
-      ctx.lineWidth = 2;
-      ctx.stroke();
-    },
-    haloColor,
-    opts.blurStrong ?? 25,
-    opts.blurSoft ?? 10,
+  // Cached as a sprite per (ringColor, haloColor); ellipse stretch in
+  // dash applies via ctx.scale around the sprite. Replaces 2 shadowBlur
+  // ops per frame — the biggest single rendering cost in the player
+  // path, fired every frame regardless of activity.
+  const ringSprite = getPlayerRingSprite(ringColor, haloColor);
+  const ringScale = r / PLAYER_RING_SPRITE_BASE_RADIUS;
+  ctx.save();
+  if (isDashing) {
+    ctx.rotate(dashAngle);
+    ctx.scale(stretchX * ringScale, stretchY * ringScale);
+    ctx.rotate(-dashAngle);
+  } else if (ringScale !== 1) {
+    ctx.scale(ringScale, ringScale);
+  }
+  ctx.drawImage(
+    ringSprite,
+    -PLAYER_RING_SPRITE_ANCHOR,
+    -PLAYER_RING_SPRITE_ANCHOR,
   );
+  ctx.restore();
 
   // ===== iris + pupil + highlight (NOT deformed; shifted forward in dash) =====
   ctx.save();

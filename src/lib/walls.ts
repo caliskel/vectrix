@@ -95,12 +95,20 @@ const WALL_STROKE_ALPHA = 0.6;
 const WALL_GLOW_BLUR = 12;
 const DASHABLE_GLOW_BLUR = 14;
 
-export function drawWalls(
-  ctx: CanvasRenderingContext2D,
-  walls: Wall[],
-): void {
-  if (walls.length === 0) return;
+// Wall layer cache: walls don't move within a room, so we bake them
+// into an offscreen canvas the first frame the array is seen and blit
+// per frame afterwards. Keyed on the walls array reference + the
+// rendered extent, so a room transition (new walls array) builds a
+// fresh layer without leaking the old one. Two shadowBlur passes per
+// frame go away, plus the per-wall path setup.
+type CachedLayer = {
+  canvas: HTMLCanvasElement;
+  extentX: number;
+  extentY: number;
+};
+const layerCache = new WeakMap<Wall[], CachedLayer>();
 
+function paintWalls(ctx: CanvasRenderingContext2D, walls: Wall[]): void {
   // Single fill pass for all walls — same colour, batch as one path.
   ctx.save();
   ctx.fillStyle = WALL_FILL;
@@ -110,8 +118,7 @@ export function drawWalls(
   }
   ctx.restore();
 
-  // Stroke passes grouped by style so shadowBlur is set once per group
-  // (one expensive shadow render per category, not per wall).
+  // Stroke passes grouped by style so shadowBlur fires once per group.
   const solidWalls: Wall[] = [];
   const dashableWalls: Wall[] = [];
   for (const w of walls) {
@@ -149,3 +156,45 @@ export function drawWalls(
     ctx.restore();
   }
 }
+
+function getWallLayer(walls: Wall[]): CachedLayer | null {
+  if (walls.length === 0) return null;
+  // Compute layer extent from the walls themselves so we don't have
+  // to pass roomW/roomH — handles tutorial rooms / future arenas
+  // with the same code path.
+  let maxX = 0;
+  let maxY = 0;
+  for (const w of walls) {
+    const right = w.x + w.w + WALL_GLOW_BLUR;
+    const bottom = w.y + w.h + WALL_GLOW_BLUR;
+    if (right > maxX) maxX = right;
+    if (bottom > maxY) maxY = bottom;
+  }
+  const extentX = Math.ceil(maxX + WALL_GLOW_BLUR);
+  const extentY = Math.ceil(maxY + WALL_GLOW_BLUR);
+
+  const cached = layerCache.get(walls);
+  if (cached && cached.extentX === extentX && cached.extentY === extentY) {
+    return cached;
+  }
+  const canvas = document.createElement("canvas");
+  canvas.width = extentX;
+  canvas.height = extentY;
+  const wctx = canvas.getContext("2d");
+  if (!wctx) return null;
+  paintWalls(wctx, walls);
+  const layer: CachedLayer = { canvas, extentX, extentY };
+  layerCache.set(walls, layer);
+  return layer;
+}
+
+export function drawWalls(
+  ctx: CanvasRenderingContext2D,
+  walls: Wall[],
+): void {
+  if (walls.length === 0) return;
+  const layer = getWallLayer(walls);
+  if (!layer) return;
+  ctx.drawImage(layer.canvas, 0, 0);
+}
+
