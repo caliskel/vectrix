@@ -134,45 +134,60 @@ const RIPPLE_GLOW = 10;
 const RIPPLE_COLOR = "#a5f3fc";
 const RIPPLE_FRAGMENT_COUNT = 0; // reserved for later; keep ring-only for now
 
-// Wall damage — each non-dashable wall gets 1-3 broken spots along
-// its perimeter. Each spot has static cracks etched inward and emits
-// occasional electric arcs + sparks outward. Reads as "the network
-// is leaking what little power it has left through every crack."
-const DAMAGE_AREA_THRESHOLD_2 = 30000;  // wall area > this gets 2 damage spots
-const DAMAGE_AREA_THRESHOLD_3 = 90000;  // and > this gets 3
-const DAMAGE_CRACK_COUNT_MIN = 2;
-const DAMAGE_CRACK_COUNT_MAX = 4;
-const DAMAGE_CRACK_SEG_MIN = 2;
-const DAMAGE_CRACK_SEG_MAX = 4;
-const DAMAGE_CRACK_SEG_LEN_MIN = 3;
+// Wall damage — only a couple of spots per ROOM total (not per wall).
+// Each spot is a small jagged "lightning crack" etched into the wall
+// surface, tapered from a thicker base at the wall edge to a thin tip
+// inward. Periodically spurts an electric arc + sparks outward. Reads
+// as "the network is leaking what little power it has left through a
+// handful of fractures."
+const DAMAGE_MAX_PER_ROOM_MIN = 2;
+const DAMAGE_MAX_PER_ROOM_MAX = 3;
+const DAMAGE_MIN_WALL_AREA = 12000;     // only big walls are eligible
+const DAMAGE_CRACK_COUNT_MIN = 1;
+const DAMAGE_CRACK_COUNT_MAX = 1;
+const DAMAGE_CRACK_SEG_MIN = 4;         // jagged lightning look
+const DAMAGE_CRACK_SEG_MAX = 6;
+const DAMAGE_CRACK_SEG_LEN_MIN = 4;
 const DAMAGE_CRACK_SEG_LEN_MAX = 8;
-const DAMAGE_CRACK_JITTER = 4;
-const DAMAGE_CORE_RADIUS = 3.2;
-const DAMAGE_GLOW_RADIUS = 1.4;
-const DAMAGE_CORE_COLOR = "rgba(5, 10, 20, 0.95)";
-const DAMAGE_GLOW_COLOR = "rgba(165, 243, 252, 0.55)";
-const DAMAGE_CRACK_COLOR = "rgba(8, 14, 26, 0.95)";
-const DAMAGE_CRACK_LINE_WIDTH = 1.4;
+const DAMAGE_CRACK_JITTER = 5;
+const DAMAGE_CRACK_CORE_COLOR = "rgba(220, 232, 245, 0.65)";  // muted off-white
+const DAMAGE_CRACK_HALO_COLOR = "rgba(165, 243, 252, 0.40)";  // soft cyan halo
+const DAMAGE_CRACK_CORE_BASE_LW = 1.2;  // thicker near wall edge
+const DAMAGE_CRACK_CORE_TIP_LW = 0.35;  // sharp tip inward
+const DAMAGE_CRACK_HALO_BASE_LW = 3.0;
+const DAMAGE_CRACK_HALO_TIP_LW = 0.7;
+const DAMAGE_CRACK_GLOW_BLUR = 5;       // softer (was 9)
 
-const ARC_INTERVAL_MIN = 2.5;
-const ARC_INTERVAL_MAX = 6.0;
+const ARC_INTERVAL_MIN = 2.0;
+const ARC_INTERVAL_MAX = 5.0;
+// "Splash" = N branches fanning out from the same origin.
+const ARC_BRANCH_MIN = 3;
+const ARC_BRANCH_MAX = 5;
+const ARC_FAN_SPREAD_RAD = 0.85;        // ±~49° from the outward normal
+const ARC_FAN_JITTER_RAD = 0.18;        // per-branch random tilt
 const ARC_SEGMENTS_MIN = 3;
 const ARC_SEGMENTS_MAX = 5;
-const ARC_LENGTH_MIN = 18;
-const ARC_LENGTH_MAX = 42;
-const ARC_JITTER_PX = 13;
-const ARC_LIFETIME_MIN_SEC = 0.10;
-const ARC_LIFETIME_MAX_SEC = 0.18;
+const ARC_LENGTH_MIN = 28;              // each branch is short
+const ARC_LENGTH_MAX = 60;
+const ARC_BRANCH_LENGTH_FALLOFF = 0.4;  // edge branches this much shorter
+const ARC_JITTER_PX = 14;               // perpendicular wobble per segment
+const ARC_LIFETIME_MIN_SEC = 0.22;
+const ARC_LIFETIME_MAX_SEC = 0.38;
 const ARC_COLOR = "#a5f3fc";
-const ARC_GLOW_BLUR = 14;
-const ARC_LINE_WIDTH = 1.7;
-const ARC_SPARK_COUNT_MIN = 1;
-const ARC_SPARK_COUNT_MAX = 2;
-const SPARK_SPEED_MIN = 80;
-const SPARK_SPEED_MAX = 200;
-const SPARK_LIFETIME_SEC = 0.45;
-const SPARK_GRAVITY = 240;
+const ARC_CORE_COLOR = "#ffffff";
+const ARC_GLOW_BLUR = 18;
+const ARC_HALO_BASE_LW = 2.6;
+const ARC_HALO_TIP_LW = 0.5;
+const ARC_CORE_BASE_LW = 1.1;
+const ARC_CORE_TIP_LW = 0.25;
+const ARC_SPARK_COUNT_MIN = 3;
+const ARC_SPARK_COUNT_MAX = 5;
+const SPARK_SPEED_MIN = 120;
+const SPARK_SPEED_MAX = 320;
+const SPARK_LIFETIME_SEC = 0.6;
+const SPARK_GRAVITY = 280;
 const SPARK_COLOR = "#a5f3fc";
+const SPARK_SIZE_PX = 2.4;
 
 // Wall layer cache: walls don't move within a room, so we bake them
 // into an offscreen canvas the first frame the array is seen and blit
@@ -222,9 +237,11 @@ type DamagePoint = {
 
 type ElectricArc = {
   origin: DamagePoint;
-  // World-space polyline of the arc's jagged path going outward from
-  // origin in the +normal direction.
-  segments: Vec2[];
+  // World-space polylines fanning outward from the origin. Each
+  // branch starts at origin and zigzags along its own direction in
+  // the outward half-plane (+normal ±FAN_SPREAD). Reads as a
+  // multi-stream splash rather than a single bolt.
+  branches: Vec2[][];
   age: number;
   lifetime: number;
 };
@@ -257,8 +274,8 @@ export type WallFx = {
   sparks: Spark[];
 };
 
-export function createWallFx(_walls?: Wall[]): WallFx {
-  return {
+export function createWallFx(walls?: Wall[]): WallFx {
+  const fx: WallFx = {
     marchOffset: 0,
     pulses: [],
     ripples: [],
@@ -267,27 +284,36 @@ export function createWallFx(_walls?: Wall[]): WallFx {
     arcs: [],
     sparks: [],
   };
+  if (walls && walls.length > 0) initWallDamage(fx, walls);
+  return fx;
 }
 
-function ensureWallDamage(fx: WallFx, wall: Wall): DamagePoint[] {
-  // Dashable walls (the tutorial phase-2 gate, Room 4 section
-  // dividers) are semantic markers in a different visual language —
-  // skip damage on them.
-  if (wall.dashable) {
-    return fx.damage.get(wall) ?? [];
+// Pick 2-3 random non-dashable, big-enough walls in the room and
+// stamp one damage point on each. Runs once per WallFx (each room
+// transition creates a fresh WallFx in rooms-game / tutorial-game),
+// so the damage cast is stable for the duration of the room.
+function initWallDamage(fx: WallFx, walls: Wall[]): void {
+  const eligible: Wall[] = [];
+  for (const w of walls) {
+    if (w.dashable) continue;
+    if (w.w * w.h < DAMAGE_MIN_WALL_AREA) continue;
+    eligible.push(w);
   }
-  let pts = fx.damage.get(wall);
-  if (pts) return pts;
-  pts = [];
-  const area = wall.w * wall.h;
-  let count = 1;
-  if (area >= DAMAGE_AREA_THRESHOLD_3) count = 3;
-  else if (area >= DAMAGE_AREA_THRESHOLD_2) count = 2;
-  for (let i = 0; i < count; i++) {
-    pts.push(buildDamagePoint(wall));
+  if (eligible.length === 0) return;
+  const target = Math.min(
+    eligible.length,
+    DAMAGE_MAX_PER_ROOM_MIN +
+      Math.floor(Math.random() * (DAMAGE_MAX_PER_ROOM_MAX - DAMAGE_MAX_PER_ROOM_MIN + 1)),
+  );
+  // Fisher-Yates partial shuffle — first `target` slots become a
+  // uniform random subset of the eligible walls.
+  for (let i = 0; i < target; i++) {
+    const j = i + Math.floor(Math.random() * (eligible.length - i));
+    const tmp = eligible[i];
+    eligible[i] = eligible[j];
+    eligible[j] = tmp;
+    fx.damage.set(eligible[i], [buildDamagePoint(eligible[i])]);
   }
-  fx.damage.set(wall, pts);
-  return pts;
 }
 
 function buildDamagePoint(wall: Wall): DamagePoint {
@@ -377,27 +403,51 @@ function buildCracks(nx: number, ny: number): Vec2[][] {
   return polylines;
 }
 
-function buildArc(dp: DamagePoint): Vec2[] {
-  // Outward = +normal direction. Tangent perpendicular.
-  const tx = -dp.ny;
-  const ty = dp.nx;
-  const segs =
-    ARC_SEGMENTS_MIN +
-    Math.floor(Math.random() * (ARC_SEGMENTS_MAX - ARC_SEGMENTS_MIN + 1));
-  const totalLen = pickInterval(ARC_LENGTH_MIN, ARC_LENGTH_MAX);
-  const segLen = totalLen / segs;
-  const pts: Vec2[] = [{ x: dp.x, y: dp.y }];
-  let cx = dp.x;
-  let cy = dp.y;
-  for (let s = 0; s < segs; s++) {
-    cx += dp.nx * segLen;
-    cy += dp.ny * segLen;
-    const jitter = (Math.random() - 0.5) * ARC_JITTER_PX;
-    cx += tx * jitter;
-    cy += ty * jitter;
-    pts.push({ x: cx, y: cy });
+function buildSplash(dp: DamagePoint): Vec2[][] {
+  // Branches fan across an angular cone centered on the outward
+  // normal. Center branches are longer; edge branches are shorter,
+  // mimicking a water splash where the bulk of the volume goes
+  // straight out and side spray is shorter.
+  const branchCount =
+    ARC_BRANCH_MIN +
+    Math.floor(Math.random() * (ARC_BRANCH_MAX - ARC_BRANCH_MIN + 1));
+  const branches: Vec2[][] = [];
+  for (let b = 0; b < branchCount; b++) {
+    // Position in fan: 0 = far CCW edge, 1 = far CW edge, 0.5 = center.
+    const t = branchCount > 1 ? b / (branchCount - 1) : 0.5;
+    const baseAngle = (t - 0.5) * 2 * ARC_FAN_SPREAD_RAD;
+    const angle = baseAngle + (Math.random() - 0.5) * ARC_FAN_JITTER_RAD;
+    // Branch direction = outward normal rotated by `angle`.
+    const cosA = Math.cos(angle);
+    const sinA = Math.sin(angle);
+    const dirX = dp.nx * cosA - dp.ny * sinA;
+    const dirY = dp.nx * sinA + dp.ny * cosA;
+    // Tangent perpendicular to this branch's direction, used for the
+    // per-segment perpendicular jitter.
+    const btx = -dirY;
+    const bty = dirX;
+    // Length falls off toward the edges of the fan.
+    const distFromCenter = Math.abs(t - 0.5) * 2; // 0..1
+    const lengthMul = 1 - distFromCenter * ARC_BRANCH_LENGTH_FALLOFF;
+    const totalLen = pickInterval(ARC_LENGTH_MIN, ARC_LENGTH_MAX) * lengthMul;
+    const segs =
+      ARC_SEGMENTS_MIN +
+      Math.floor(Math.random() * (ARC_SEGMENTS_MAX - ARC_SEGMENTS_MIN + 1));
+    const segLen = totalLen / segs;
+    const pts: Vec2[] = [{ x: dp.x, y: dp.y }];
+    let cx = dp.x;
+    let cy = dp.y;
+    for (let s = 0; s < segs; s++) {
+      cx += dirX * segLen;
+      cy += dirY * segLen;
+      const jitter = (Math.random() - 0.5) * ARC_JITTER_PX;
+      cx += btx * jitter;
+      cy += bty * jitter;
+      pts.push({ x: cx, y: cy });
+    }
+    branches.push(pts);
   }
-  return pts;
+  return branches;
 }
 
 export function updateWallFx(fx: WallFx, dt: number, walls: Wall[]): void {
@@ -438,23 +488,27 @@ export function updateWallFx(fx: WallFx, dt: number, walls: Wall[]): void {
     if (r.age >= RIPPLE_LIFETIME_SEC) fx.ripples.splice(i, 1);
   }
 
-  // Wall damage — ensure every non-dashable wall has damage points
-  // generated, then tick each spot's arc timer. When a timer trips,
-  // spawn an electric arc + 1-2 sparks. Lazy generation handles
-  // tutorial's mid-room wall mutations transparently.
+  // Wall damage — tick each existing spot's arc timer. Damage points
+  // are picked once at WallFx creation (initWallDamage) so the set is
+  // stable for the room; we just walk what's there. When a timer
+  // trips, spawn an electric arc + 1-2 sparks + a flash ring.
   for (const w of walls) {
-    if (w.dashable) continue;
-    const pts = ensureWallDamage(fx, w);
+    const pts = fx.damage.get(w);
+    if (!pts) continue;
     for (const dp of pts) {
       dp.nextArcAt -= dt;
       if (dp.nextArcAt <= 0) {
         dp.nextArcAt = pickInterval(ARC_INTERVAL_MIN, ARC_INTERVAL_MAX);
         fx.arcs.push({
           origin: dp,
-          segments: buildArc(dp),
+          branches: buildSplash(dp),
           age: 0,
           lifetime: pickInterval(ARC_LIFETIME_MIN_SEC, ARC_LIFETIME_MAX_SEC),
         });
+        // Flash ring at the crack base — reuses the impact-ripple
+        // system so the surge reads as a real "punch" without a new
+        // entity type.
+        fx.ripples.push({ x: dp.x, y: dp.y, age: 0 });
         const sparkCount =
           ARC_SPARK_COUNT_MIN +
           Math.floor(Math.random() * (ARC_SPARK_COUNT_MAX - ARC_SPARK_COUNT_MIN + 1));
@@ -729,71 +783,87 @@ export function drawWallOverlay(
   // impact; the ring alone reads clearly so we ship without.
   void RIPPLE_FRAGMENT_COUNT;
 
-  // 4. Wall damage — static cracks per damage point, drawn dark
-  // against the wall fill so they read as fractures. Damage core is
-  // a small dark blob with a faint cyan inner glow. Drawing live
-  // each frame (not baked into the cache) so damage points generated
-  // mid-room — e.g. after the tutorial dash wall push — show up
-  // without invalidating the cache.
+  // 4. Wall damage — a small jagged "lightning crack" per damage
+  // point, tapered from a thick base at the wall edge to a sharp
+  // thin tip inward. Two passes (halo + core), both per-segment so
+  // each segment can have its own lineWidth. Clipped to the union
+  // of wall rects so cracks can't bleed outside the wall surface.
+  // Drawn live each frame (not baked into the cache) so damage
+  // points generated mid-room would show up without invalidating
+  // the cache — though with the current bulk-init approach they're
+  // stable for the room's lifetime.
+  let hasDamage = false;
   for (const w of solidWalls) {
-    const dps = fx.damage.get(w);
-    if (!dps) continue;
-    for (const dp of dps) {
-      // Cracks — thin dark polyline strokes.
-      ctx.save();
-      ctx.strokeStyle = DAMAGE_CRACK_COLOR;
-      ctx.lineWidth = DAMAGE_CRACK_LINE_WIDTH;
-      ctx.shadowBlur = 0;
-      ctx.beginPath();
-      for (const poly of dp.cracks) {
-        ctx.moveTo(dp.x + poly[0].x, dp.y + poly[0].y);
-        for (let i = 1; i < poly.length; i++) {
-          ctx.lineTo(dp.x + poly[i].x, dp.y + poly[i].y);
-        }
-      }
-      ctx.stroke();
-      ctx.restore();
-      // Core blob — dark hole.
-      ctx.save();
-      ctx.fillStyle = DAMAGE_CORE_COLOR;
-      ctx.beginPath();
-      ctx.arc(dp.x, dp.y, DAMAGE_CORE_RADIUS, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.restore();
-      // Inner glow — faint cyan at the center, hints at trapped
-      // current.
-      ctx.save();
-      ctx.fillStyle = DAMAGE_GLOW_COLOR;
-      ctx.shadowColor = ARC_COLOR;
-      ctx.shadowBlur = 8;
-      ctx.beginPath();
-      ctx.arc(dp.x, dp.y, DAMAGE_GLOW_RADIUS, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.restore();
-    }
+    if (fx.damage.has(w)) { hasDamage = true; break; }
+  }
+  if (hasDamage) {
+    ctx.save();
+    // Clip to union of walls so any per-segment overshoot (e.g. round
+    // cap at the base sitting on the wall edge) gets trimmed.
+    ctx.beginPath();
+    for (const w of solidWalls) ctx.rect(w.x, w.y, w.w, w.h);
+    ctx.clip();
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    // Halo pass — wide cyan, with glow blur.
+    ctx.strokeStyle = DAMAGE_CRACK_HALO_COLOR;
+    ctx.shadowColor = ARC_COLOR;
+    ctx.shadowBlur = DAMAGE_CRACK_GLOW_BLUR;
+    drawTaperedCracks(
+      ctx,
+      solidWalls,
+      fx.damage,
+      DAMAGE_CRACK_HALO_BASE_LW,
+      DAMAGE_CRACK_HALO_TIP_LW,
+    );
+    // Core pass — thin bright white core on top.
+    ctx.strokeStyle = DAMAGE_CRACK_CORE_COLOR;
+    ctx.shadowColor = "#ffffff";
+    ctx.shadowBlur = 3;
+    drawTaperedCracks(
+      ctx,
+      solidWalls,
+      fx.damage,
+      DAMAGE_CRACK_CORE_BASE_LW,
+      DAMAGE_CRACK_CORE_TIP_LW,
+    );
+    ctx.restore();
   }
 
-  // 5. Live electric arcs — jagged cyan polylines fading over
-  // ~100-180 ms, with shadow glow.
+  // 5. Live splash arcs — multi-branch fans spurting outward from
+  // damage points, fading over ~220-380 ms. Two passes (halo + core)
+  // both per-segment tapered so each branch tapers thin at the tip.
   if (fx.arcs.length > 0) {
+    // Halo pass.
     ctx.save();
     ctx.strokeStyle = ARC_COLOR;
     ctx.shadowColor = ARC_COLOR;
     ctx.shadowBlur = ARC_GLOW_BLUR;
-    ctx.lineWidth = ARC_LINE_WIDTH;
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
     for (const arc of fx.arcs) {
       const u = arc.age / arc.lifetime;
-      // Bright first half, fast fade in second half.
       const alpha = u < 0.35 ? 1 : Math.max(0, 1 - (u - 0.35) / 0.65);
       ctx.globalAlpha = alpha;
-      ctx.beginPath();
-      ctx.moveTo(arc.segments[0].x, arc.segments[0].y);
-      for (let i = 1; i < arc.segments.length; i++) {
-        ctx.lineTo(arc.segments[i].x, arc.segments[i].y);
+      for (const branch of arc.branches) {
+        strokeTaperedPolyline(ctx, branch, ARC_HALO_BASE_LW, ARC_HALO_TIP_LW);
       }
-      ctx.stroke();
+    }
+    ctx.restore();
+    // White hot core pass — slightly longer-lived for an afterimage.
+    ctx.save();
+    ctx.strokeStyle = ARC_CORE_COLOR;
+    ctx.shadowColor = "#ffffff";
+    ctx.shadowBlur = 6;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    for (const arc of fx.arcs) {
+      const u = arc.age / arc.lifetime;
+      const alpha = u < 0.45 ? 1 : Math.max(0, 1 - (u - 0.45) / 0.55);
+      ctx.globalAlpha = alpha;
+      for (const branch of arc.branches) {
+        strokeTaperedPolyline(ctx, branch, ARC_CORE_BASE_LW, ARC_CORE_TIP_LW);
+      }
     }
     ctx.restore();
   }
@@ -803,13 +873,64 @@ export function drawWallOverlay(
     ctx.save();
     ctx.fillStyle = SPARK_COLOR;
     ctx.shadowColor = SPARK_COLOR;
-    ctx.shadowBlur = 8;
+    ctx.shadowBlur = 10;
+    const half = SPARK_SIZE_PX * 0.5;
     for (const s of fx.sparks) {
       const u = s.age / s.lifetime;
       ctx.globalAlpha = 1 - u;
-      ctx.fillRect(s.x - 1, s.y - 1, 2, 2);
+      ctx.fillRect(s.x - half, s.y - half, SPARK_SIZE_PX, SPARK_SIZE_PX);
     }
     ctx.restore();
+  }
+}
+
+// Per-segment stroke of a single polyline with a linear taper from
+// baseLw at segment 0 to tipLw at the last segment. Caller sets
+// strokeStyle / shadow / lineCap on ctx before invoking.
+function strokeTaperedPolyline(
+  ctx: CanvasRenderingContext2D,
+  poly: Vec2[],
+  baseLw: number,
+  tipLw: number,
+): void {
+  const segments = poly.length - 1;
+  if (segments <= 0) return;
+  for (let i = 1; i <= segments; i++) {
+    const u = (i - 0.5) / segments;
+    ctx.lineWidth = baseLw + (tipLw - baseLw) * u;
+    ctx.beginPath();
+    ctx.moveTo(poly[i - 1].x, poly[i - 1].y);
+    ctx.lineTo(poly[i].x, poly[i].y);
+    ctx.stroke();
+  }
+}
+
+// Cracks variant — same tapering, but polylines are stored in
+// damage-point-local coordinates so we apply the dp offset inline.
+function drawTaperedCracks(
+  ctx: CanvasRenderingContext2D,
+  walls: Wall[],
+  damage: Map<Wall, DamagePoint[]>,
+  baseLw: number,
+  tipLw: number,
+): void {
+  for (const w of walls) {
+    const dps = damage.get(w);
+    if (!dps) continue;
+    for (const dp of dps) {
+      for (const poly of dp.cracks) {
+        const segments = poly.length - 1;
+        if (segments <= 0) continue;
+        for (let i = 1; i <= segments; i++) {
+          const u = (i - 0.5) / segments;
+          ctx.lineWidth = baseLw + (tipLw - baseLw) * u;
+          ctx.beginPath();
+          ctx.moveTo(dp.x + poly[i - 1].x, dp.y + poly[i - 1].y);
+          ctx.lineTo(dp.x + poly[i].x, dp.y + poly[i].y);
+          ctx.stroke();
+        }
+      }
+    }
   }
 }
 
