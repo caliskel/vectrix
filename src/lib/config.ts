@@ -504,3 +504,19 @@ export function saveSettings(s: Settings) {
     // swallow quota / privacy-mode errors
   }
 }
+
+// Floating background text — cyberpunk-terminal phrases that type
+// themselves out in the canvas margins outside the playfield. See
+// lib/background-text.ts for the runtime; constants here so tuning
+// the cadence doesn't require touching the module.
+export const FLOATING_TEXT_SPAWN_INTERVAL_MIN_MS = 3000;
+export const FLOATING_TEXT_SPAWN_INTERVAL_MAX_MS = 7000;
+export const FLOATING_TEXT_MAX_CONCURRENT = 4;
+export const FLOATING_TEXT_TYPING_SPEED_MS = 50;
+export const FLOATING_TEXT_STABLE_DURATION_MIN_MS = 3000;
+export const FLOATING_TEXT_STABLE_DURATION_MAX_MS = 5000;
+export const FLOATING_TEXT_FADEOUT_MS = 800;
+export const FLOATING_TEXT_FONT_SIZE_MIN = 11;
+export const FLOATING_TEXT_FONT_SIZE_MAX = 16;
+export const FLOATING_TEXT_CURSOR_BLINK_MS = 400;
+export const FLOATING_TEXT_SPAWN_RETRY_LIMIT = 5;

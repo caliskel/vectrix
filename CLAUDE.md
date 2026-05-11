@@ -1750,6 +1750,51 @@ Constants live in the module file. The render path uses
 not per entity, so the per-frame cost is three configured passes
 of simple `stroke` / `fillRect` calls.
 
+## Background text (`lib/background-text.ts`)
+
+Cyberpunk-terminal phrases that type themselves out in the same
+margins as the energy background. Shared across rooms / tutorial /
+sandbox; one `BackgroundTextState` per session.
+
+Pool of ~60 short phrases mixing system messages
+(`SYSTEM.BOOT_OK`, `0xFF2D55 // FALLBACK`, `PING 47ms`),
+lore-suggestive lines (`witness protocol active`, `sentinel
+approaches`, `walls do not hold them`) and cryptic strings
+(`i see you i see you`, `the geometry forgets`, `glass cascade`).
+Each spawn picks one uniformly.
+
+Cadence and tuning live in `lib/config.ts` as `FLOATING_TEXT_*`
+constants (spawn interval 3–7 s, max 4 concurrent, typing 50 ms
+per char, stable 3–5 s, fadeout 800 ms, font size 11–16 px,
+cursor blink 400 ms, spawn retry limit 5).
+
+Per-word state machine:
+
+- **typing** — characters are revealed at the configured speed,
+  trailing cursor (`_`) blinks 50/50 at the configured period.
+  Color is picked at spawn with weights 70 % cyan (`#00e5ff`
+  α 0.35), 15 % red (`#ff2d55` α 0.30), 15 % white (α 0.25). Glow
+  blur 4 in the text color.
+- **stable** — full text held for 3–5 s, cursor keeps blinking.
+- **fadeout** — alpha linearly drops from `maxAlpha` to 0 across
+  800 ms (cursor hidden), then the word is removed.
+
+Spawn placement: tries up to `FLOATING_TEXT_SPAWN_RETRY_LIMIT`
+random positions whose pre-measured bbox doesn't intersect the
+arena rect. If no placement fits (e.g. sandbox where the arena
+covers the entire viewport) the spawn is skipped and the timer is
+clamped to a short retry interval so the loop keeps trying.
+
+The draw path applies the same even-odd clip the energy
+background uses, so even if a word survives a window resize
+that shrinks the margins, the text stays masked to the visible
+margin area.
+
+`ctx.letterSpacing = "2px"` is set per draw — supported in all
+modern Chromium / Safari / Firefox builds; older browsers ignore
+the property silently, the visual spacing is slightly tighter
+but alignment stays correct.
+
 ## Working rules
 
 - **Commit before large changes.** Always tag a checkpoint (`git tag` or

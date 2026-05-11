@@ -141,6 +141,12 @@ import {
   type ArenaScreenBounds,
   type EnergyBackground,
 } from "../lib/background-energy";
+import {
+  createBackgroundTextState,
+  drawBackgroundTexts,
+  updateBackgroundTexts,
+  type BackgroundTextState,
+} from "../lib/background-text";
 import { PostProcessor, DEFAULT_POST } from "../lib/postprocess";
 import { type Bounds, hitBounds } from "../lib/types";
 import {
@@ -599,6 +605,8 @@ export function start(canvas: HTMLCanvasElement): void {
   // the visible arena. Single instance for the whole session so the
   // streams keep flowing across room transitions.
   const energyBg: EnergyBackground = createEnergyBackground(viewW, viewH);
+  // Cyberpunk-terminal phrases typing themselves out in the margins.
+  const bgText: BackgroundTextState = createBackgroundTextState(viewW, viewH);
   let gridNodes: GridNodeState = createGridNodeState(
     currentRoom.width ?? ROOM_W_PX,
     currentRoom.height ?? ROOM_H_PX,
@@ -607,6 +615,32 @@ export function start(canvas: HTMLCanvasElement): void {
     currentRoom.width ?? ROOM_W_PX,
     currentRoom.height ?? ROOM_H_PX,
   );
+
+  // Screen-space rect of the visible arena, used to clip out the
+  // playfield from the energy/text background passes. Camera and
+  // letterbox both factored in.
+  function computeArenaBounds(): ArenaScreenBounds {
+    const worldW = currentRoom.width ?? ROOM_W_PX;
+    const worldH = currentRoom.height ?? ROOM_H_PX;
+    if (currentRoom.useCamera) {
+      const canonLeft = Math.max(0, -camera.x);
+      const canonTop = Math.max(0, -camera.y);
+      const canonRight = Math.min(ROOM_W_PX, worldW - camera.x);
+      const canonBottom = Math.min(ROOM_H_PX, worldH - camera.y);
+      return {
+        x: offsetX + canonLeft * scale,
+        y: offsetY + canonTop * scale,
+        w: Math.max(0, (canonRight - canonLeft) * scale),
+        h: Math.max(0, (canonBottom - canonTop) * scale),
+      };
+    }
+    return {
+      x: offsetX,
+      y: offsetY,
+      w: ROOM_W_PX * scale,
+      h: ROOM_H_PX * scale,
+    };
+  }
 
   function syncRoomFx() {
     const w = currentRoom.width ?? ROOM_W_PX;
@@ -1417,6 +1451,7 @@ export function start(canvas: HTMLCanvasElement): void {
     updateArenaBg(arenaBg, dt);
     updateWallFx(wallFx, dt, currentRoom.walls);
     updateEnergyBackground(energyBg, dt, viewW, viewH);
+    updateBackgroundTexts(bgText, dt, ctx, viewW, viewH, computeArenaBounds());
     updateGridNodes(gridNodes, dt);
     updateArchiveFx(archiveFx, dt, player.x, player.y);
     tickScanlines(dt);
@@ -1995,37 +2030,11 @@ export function start(canvas: HTMLCanvasElement): void {
     // synthwave pulse drawn in screen space so it lives behind the world
     bgFx.drawBack(ctx, viewW, viewH);
 
-    // energy background — drifting lines / rising particles / lightning,
-    // clipped out of the visible arena rect so it only shows in the
-    // letterbox / camera margins. Arena rect calc handles both fixed-
-    // size rooms (canonical 1200×800) and camera rooms whose world is
-    // smaller than canonical in some dimension (the camera centers and
-    // leaves a band visible at top/bottom).
-    {
-      const worldW = currentRoom.width ?? ROOM_W_PX;
-      const worldH = currentRoom.height ?? ROOM_H_PX;
-      let arenaBounds: ArenaScreenBounds;
-      if (currentRoom.useCamera) {
-        const canonLeft = Math.max(0, -camera.x);
-        const canonTop = Math.max(0, -camera.y);
-        const canonRight = Math.min(ROOM_W_PX, worldW - camera.x);
-        const canonBottom = Math.min(ROOM_H_PX, worldH - camera.y);
-        arenaBounds = {
-          x: offsetX + canonLeft * scale,
-          y: offsetY + canonTop * scale,
-          w: Math.max(0, (canonRight - canonLeft) * scale),
-          h: Math.max(0, (canonBottom - canonTop) * scale),
-        };
-      } else {
-        arenaBounds = {
-          x: offsetX,
-          y: offsetY,
-          w: ROOM_W_PX * scale,
-          h: ROOM_H_PX * scale,
-        };
-      }
-      drawEnergyBackground(ctx, energyBg, viewW, viewH, arenaBounds);
-    }
+    // Energy + text background passes, both clipped out of the visible
+    // arena rect so they only show in the letterbox / camera margins.
+    const arenaBounds = computeArenaBounds();
+    drawEnergyBackground(ctx, energyBg, viewW, viewH, arenaBounds);
+    drawBackgroundTexts(ctx, bgText, viewW, viewH, arenaBounds);
 
     // screen shake — applied to the room transform only so HUD stays put
     let shakeX = 0;
