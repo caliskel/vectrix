@@ -1095,6 +1095,21 @@ export function start(canvas: HTMLCanvasElement): void {
     snapCameraToRoom();
     syncTutorialStateForRoom();
     syncRoomFx();
+    // Room 4 is the tutorial outro (narrator beats → auto-fade →
+    // /rooms.html). There's no door / completeTutorial() call in
+    // that flow, so without this the unlock flag never lands and
+    // rooms.html shows "STORY MODE LOCKED" after a clean playthrough.
+    // Setting it here means the moment the player crosses into the
+    // outro they're already considered done — a refresh mid-outro
+    // doesn't strip the unlock either.
+    if (id === "room4") {
+      try {
+        localStorage.setItem(TUTORIAL_COMPLETED_KEY, "true");
+      } catch {
+        // private mode / quota — rooms-game's locked overlay will
+        // catch this case and route them back to the tutorial.
+      }
+    }
   }
 
   function roomBounds(): WorldBounds {
