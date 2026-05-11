@@ -142,6 +142,12 @@ type CachedLayer = {
   canvas: HTMLCanvasElement;
   extentX: number;
   extentY: number;
+  // Wall count at cache time. Tutorial Room 0 mutates the walls array
+  // mid-room (phase 2 pushes the dashable dash gate); the array
+  // reference is unchanged but contents differ, so we also key on
+  // length here. Without this, the cached image stays from phase 1
+  // and the dash wall renders invisibly.
+  wallCount: number;
 };
 const layerCache = new WeakMap<Wall[], CachedLayer>();
 
@@ -157,17 +163,19 @@ type WallRipple = {
   age: number; // 0..RIPPLE_LIFETIME_SEC
 };
 
+// FX state is animation-only (timers + spawned entities). The walls
+// array is passed per call so tutorial Room 0's phase mutations
+// (.push of the dash wall, .filter reassign in combat) are picked up
+// without needing a separate sync step on every phase change.
 export type WallFx = {
-  walls: Wall[];
   marchOffset: number;
   pulses: PerimeterPulse[];
   ripples: WallRipple[];
   pulseTimer: number;
 };
 
-export function createWallFx(walls: Wall[]): WallFx {
+export function createWallFx(_walls?: Wall[]): WallFx {
   return {
-    walls,
     marchOffset: 0,
     pulses: [],
     ripples: [],
@@ -175,7 +183,7 @@ export function createWallFx(walls: Wall[]): WallFx {
   };
 }
 
-export function updateWallFx(fx: WallFx, dt: number): void {
+export function updateWallFx(fx: WallFx, dt: number, walls: Wall[]): void {
   fx.marchOffset = (fx.marchOffset + MARCHING_DASH_SPEED * dt) % 24;
 
   // Pulse spawn — pick a non-dashable wall (dashable walls are
@@ -185,13 +193,13 @@ export function updateWallFx(fx: WallFx, dt: number): void {
   if (fx.pulseTimer <= 0) {
     fx.pulseTimer = pickInterval(PERIMETER_PULSE_INTERVAL_MIN, PERIMETER_PULSE_INTERVAL_MAX);
     const eligible: number[] = [];
-    for (let i = 0; i < fx.walls.length; i++) {
-      const w = fx.walls[i];
+    for (let i = 0; i < walls.length; i++) {
+      const w = walls[i];
       if (!w.dashable && w.w >= 40 && w.h >= 40) eligible.push(i);
     }
     if (eligible.length > 0) {
       const idx = eligible[Math.floor(Math.random() * eligible.length)];
-      const w = fx.walls[idx];
+      const w = walls[idx];
       const perimeter = 2 * (w.w + w.h);
       fx.pulses.push({
         wallIndex: idx,
@@ -338,7 +346,12 @@ function getWallLayer(walls: Wall[]): CachedLayer | null {
   const extentY = Math.ceil(maxY + WALL_GLOW_BLUR);
 
   const cached = layerCache.get(walls);
-  if (cached && cached.extentX === extentX && cached.extentY === extentY) {
+  if (
+    cached &&
+    cached.extentX === extentX &&
+    cached.extentY === extentY &&
+    cached.wallCount === walls.length
+  ) {
     return cached;
   }
   const canvas = document.createElement("canvas");
@@ -347,7 +360,12 @@ function getWallLayer(walls: Wall[]): CachedLayer | null {
   const wctx = canvas.getContext("2d");
   if (!wctx) return null;
   paintWalls(wctx, walls);
-  const layer: CachedLayer = { canvas, extentX, extentY };
+  const layer: CachedLayer = {
+    canvas,
+    extentX,
+    extentY,
+    wallCount: walls.length,
+  };
   layerCache.set(walls, layer);
   return layer;
 }
@@ -369,10 +387,11 @@ export function drawWalls(
 export function drawWallOverlay(
   ctx: CanvasRenderingContext2D,
   fx: WallFx,
+  walls: Wall[],
 ): void {
-  if (fx.walls.length === 0) return;
+  if (walls.length === 0) return;
   const solidWalls: Wall[] = [];
-  for (const w of fx.walls) if (!w.dashable) solidWalls.push(w);
+  for (const w of walls) if (!w.dashable) solidWalls.push(w);
 
   // 1. Marching dashes inside the outline — subtle "energy flow".
   if (solidWalls.length > 0) {
@@ -405,7 +424,7 @@ export function drawWallOverlay(
     ctx.shadowColor = PERIMETER_PULSE_COLOR;
     ctx.shadowBlur = PERIMETER_PULSE_GLOW;
     for (const p of fx.pulses) {
-      const w = fx.walls[p.wallIndex];
+      const w = walls[p.wallIndex];
       if (!w) continue;
       const pos = perimeterPoint(w, p.progress % p.perimeter);
       ctx.beginPath();

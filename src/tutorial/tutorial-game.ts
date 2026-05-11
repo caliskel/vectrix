@@ -72,6 +72,13 @@ import {
   updateArenaBg,
   type ArenaBg,
 } from "../lib/arena-bg";
+import {
+  createDeathFx,
+  drawDeathFx,
+  shouldShowDeathOverlay,
+  updateDeathFx,
+  type DeathFx,
+} from "../lib/death-fx";
 import { drawNeon } from "../lib/neon";
 import { PALETTE } from "../lib/palette";
 import {
@@ -372,6 +379,7 @@ type GameState = {
   screenFlashInitial: number;
   screenFlashOpacity: number;
   failedSnapshot: FailedSnapshot | null;
+  deathFx: DeathFx | null;
 };
 
 export function start(canvas: HTMLCanvasElement): void {
@@ -788,6 +796,7 @@ export function start(canvas: HTMLCanvasElement): void {
     screenFlashInitial: 0,
     screenFlashOpacity: 0,
     failedSnapshot: null,
+    deathFx: null,
   };
 
   let currentRoom: Room = rooms.get("room0")!;
@@ -872,6 +881,7 @@ export function start(canvas: HTMLCanvasElement): void {
     state.screenFlashInitial = 0;
     state.screenFlashOpacity = 0;
     state.failedSnapshot = null;
+    state.deathFx = null;
     bullets = [];
     particles = [];
     rings = [];
@@ -1175,6 +1185,15 @@ export function start(canvas: HTMLCanvasElement): void {
     state.runState = "failed";
     eyeStartClosing(player);
     audio.play.runEnd();
+    state.deathFx = createDeathFx({
+      x: player.x,
+      y: player.y,
+      size: PLAYER_SIZE,
+      ringColor: profile.outerRing,
+      irisColor: profile.iris,
+    });
+    triggerShake(14, 0.45);
+    triggerScreenFlash(0.3, 0.55);
     const prev = Number.parseFloat(
       localStorage.getItem(ROOMS_BEST_KEY) ?? "0",
     );
@@ -1320,6 +1339,13 @@ export function start(canvas: HTMLCanvasElement): void {
       if (state.hitVignette > 0) {
         state.hitVignette = Math.max(0, state.hitVignette - dt);
       }
+      if (state.screenShakeRemaining > 0) {
+        state.screenShakeRemaining = Math.max(0, state.screenShakeRemaining - dt);
+      }
+      if (state.screenFlashRemaining > 0) {
+        state.screenFlashRemaining = Math.max(0, state.screenFlashRemaining - dt);
+      }
+      if (state.deathFx) updateDeathFx(state.deathFx, dt);
       // keep the eye animation alive (closing, blink decay) while overlay is up
       updateEye(player, dt, {
         threat: null,
@@ -1885,7 +1911,7 @@ export function start(canvas: HTMLCanvasElement): void {
     checkRoomCleared();
 
     updateArenaBg(arenaBg, dt);
-    updateWallFx(wallFx, dt);
+    updateWallFx(wallFx, dt, currentRoom.walls);
     tickScanlines(dt);
 
     // eye state: pupil tracks the closest threat in the room, dash ghosts
@@ -1985,7 +2011,7 @@ export function start(canvas: HTMLCanvasElement): void {
     );
 
     drawWalls(ctx, currentRoom.walls);
-    drawWallOverlay(ctx, wallFx);
+    drawWallOverlay(ctx, wallFx, currentRoom.walls);
     if (currentRoom.door) drawDoor(ctx, currentRoom.door);
 
     // tutorial markers — drawn after walls, before enemies. Active
@@ -2063,6 +2089,7 @@ export function start(canvas: HTMLCanvasElement): void {
     if (state.hitIframe > 0) {
       drawPlayer = Math.floor(state.hitIframe * 10) % 2 === 0;
     }
+    if (state.deathFx && state.deathFx.age > 0.04) drawPlayer = false;
 
     if (drawPlayer) {
       // Body layers come straight from the player profile in every
@@ -2105,6 +2132,10 @@ export function start(canvas: HTMLCanvasElement): void {
     if (currentKey && !currentKey.collected) drawKey(ctx, currentKey);
 
     drawFloatingTexts(ctx, floatingTexts);
+
+    // Death cinematic — drawn in world space so the explosion sits at
+    // the player's last known position even in scrolling rooms.
+    if (state.deathFx) drawDeathFx(ctx, state.deathFx);
 
     if (useCamera) ctx.restore();
 
@@ -2193,7 +2224,9 @@ export function start(canvas: HTMLCanvasElement): void {
     drawGodModeBadge(ctx, viewW);
     drawFpsOverlay(ctx, viewW);
 
-    if (state.runState === "failed") drawFailedOverlay();
+    if (state.runState === "failed" && shouldShowDeathOverlay(state.deathFx)) {
+      drawFailedOverlay();
+    }
     // The "completed" runState is rendered by a DOM overlay
     // (showTutorialCompleteOverlay) so the three CTAs can be real
     // anchors / buttons; no canvas overlay needed here.

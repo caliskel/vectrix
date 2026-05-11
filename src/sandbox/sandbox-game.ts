@@ -48,6 +48,13 @@ import {
   tickScanlines,
   type ArenaBg,
 } from "../lib/arena-bg";
+import {
+  createDeathFx,
+  drawDeathFx,
+  shouldShowDeathOverlay,
+  updateDeathFx,
+  type DeathFx,
+} from "../lib/death-fx";
 import { getBulletSprite, getBulletSpriteOffset } from "../lib/bullet-sprite";
 import { drawFpsOverlay, recordFrame } from "../lib/fps-meter";
 import { createSandboxPauseMenu } from "../lib/pause-menu";
@@ -407,6 +414,7 @@ type GameRunState = {
   particleSpawnTimer: number; // accumulates dt for the player trail particle emitter
   multTiersHit: Record<number, boolean>; // tracks 3/5/7/10 tiers crossed this run
   endSnapshot: EndSnapshot | null;
+  deathFx: DeathFx | null;
 };
 
 const MULT_TIER_PORTS = [3, 5, 7, 10];
@@ -431,6 +439,7 @@ const state: GameRunState = {
   particleSpawnTimer: 0,
   multTiersHit: {},
   endSnapshot: null,
+  deathFx: null,
 };
 
 let bullets: Bullet[] = [];
@@ -470,6 +479,7 @@ function resetRun() {
   state.passiveTimer = 0;
   state.multTiersHit = {};
   state.endSnapshot = null;
+  state.deathFx = null;
 
   player.x = viewW / 2;
   player.y = viewH / 2;
@@ -963,6 +973,15 @@ function endRun(reason: "timeout" | "ko") {
   state.endReason = reason;
   eyeStartClosing(player);
   audio.play.runEnd();
+  if (reason === "ko") {
+    state.deathFx = createDeathFx({
+      x: player.x,
+      y: player.y,
+      size: PLAYER_SIZE,
+      ringColor: profile.outerRing,
+      irisColor: profile.iris,
+    });
+  }
   const id = configIdFromSettings();
   const newBest = id ? setBestScoreIfBetter(id, state.score) : false;
   state.endSnapshot = {
@@ -992,6 +1011,7 @@ function frame(now: number) {
   bgFx.update(dt);
   if (arenaBg) updateArenaBg(arenaBg, dt);
   tickScanlines(dt);
+  if (state.deathFx) updateDeathFx(state.deathFx, dt);
 
   // age floating texts, rings, particles even after end so they finish out
   for (const t of floatingTexts) {
@@ -1498,6 +1518,10 @@ function render() {
   if (state.hitIframeTime > 0) {
     drawPlayer = Math.floor(state.hitIframeTime * 10) % 2 === 0;
   }
+  // While the death cinematic plays, the body is replaced entirely by
+  // the FX (ring fragments, shards, shockwaves). Hide the eye after
+  // the first frame so the explosion reads as the body shattering.
+  if (state.deathFx && state.deathFx.age > 0.04) drawPlayer = false;
 
   if (drawPlayer) {
     // Body layers (ring / iris / pupil) come straight from the player
@@ -1625,7 +1649,9 @@ function render() {
     ctx.restore();
   }
 
-  if (state.runState === "ended") {
+  if (state.deathFx) drawDeathFx(ctx, state.deathFx);
+
+  if (state.runState === "ended" && shouldShowDeathOverlay(state.deathFx)) {
     drawEndOverlay();
   }
 

@@ -83,6 +83,13 @@ import {
   updateArenaBg,
   type ArenaBg,
 } from "../lib/arena-bg";
+import {
+  createDeathFx,
+  drawDeathFx,
+  shouldShowDeathOverlay,
+  updateDeathFx,
+  type DeathFx,
+} from "../lib/death-fx";
 import { drawNeon } from "../lib/neon";
 import { PALETTE } from "../lib/palette";
 import {
@@ -388,6 +395,10 @@ type GameState = {
   screenFlashInitial: number;
   screenFlashOpacity: number;
   failedSnapshot: FailedSnapshot | null;
+  /** Active when the player has just died and the death cinematic is
+   *  playing. Drives the gating of the failed-overlay so the screen
+   *  doesn't cover up the explosion. Cleared on restartRun. */
+  deathFx: DeathFx | null;
   /** Cumulative time the campaign run has been "playing" — paused
    *  while the Sentinel cinematic phases (intro / dying) freeze the
    *  world, and while the failed/completed overlays are up. Read by
@@ -516,6 +527,7 @@ export function start(canvas: HTMLCanvasElement): void {
     screenFlashInitial: 0,
     screenFlashOpacity: 0,
     failedSnapshot: null,
+    deathFx: null,
     elapsed: 0,
     prevSentinelState: "none",
     prevBossPhase: 0,
@@ -597,6 +609,7 @@ export function start(canvas: HTMLCanvasElement): void {
     state.screenFlashInitial = 0;
     state.screenFlashOpacity = 0;
     state.failedSnapshot = null;
+    state.deathFx = null;
     state.elapsed = 0;
     state.prevSentinelState = "none";
     state.prevBossPhase = 0;
@@ -935,6 +948,15 @@ export function start(canvas: HTMLCanvasElement): void {
     state.runState = "failed";
     eyeStartClosing(player);
     audio.play.runEnd();
+    state.deathFx = createDeathFx({
+      x: player.x,
+      y: player.y,
+      size: PLAYER_SIZE,
+      ringColor: profile.outerRing,
+      irisColor: profile.iris,
+    });
+    triggerShake(14, 0.45);
+    triggerScreenFlash(0.3, 0.55);
     const prev = Number.parseFloat(
       localStorage.getItem(ROOMS_BEST_KEY) ?? "0",
     );
@@ -1159,6 +1181,15 @@ export function start(canvas: HTMLCanvasElement): void {
       if (state.hitVignette > 0) {
         state.hitVignette = Math.max(0, state.hitVignette - dt);
       }
+      // Decay shake/flash so the failRun-triggered punch winds down
+      // instead of holding indefinitely.
+      if (state.screenShakeRemaining > 0) {
+        state.screenShakeRemaining = Math.max(0, state.screenShakeRemaining - dt);
+      }
+      if (state.screenFlashRemaining > 0) {
+        state.screenFlashRemaining = Math.max(0, state.screenFlashRemaining - dt);
+      }
+      if (state.deathFx) updateDeathFx(state.deathFx, dt);
       // keep the eye animation alive (closing, blink decay) while overlay is up
       updateEye(player, dt, {
         threat: null,
@@ -1303,7 +1334,7 @@ export function start(canvas: HTMLCanvasElement): void {
     // Background + wall FX advance with realtime dt so the arena keeps
     // breathing even when the boss / cinematic timeScale slows world sim.
     updateArenaBg(arenaBg, dt);
-    updateWallFx(wallFx, dt);
+    updateWallFx(wallFx, dt, currentRoom.walls);
     tickScanlines(dt);
 
     // -------- running --------
@@ -1924,7 +1955,7 @@ export function start(canvas: HTMLCanvasElement): void {
     );
 
     drawWalls(ctx, currentRoom.walls);
-    drawWallOverlay(ctx, wallFx);
+    drawWallOverlay(ctx, wallFx, currentRoom.walls);
     if (currentRoom.door) drawDoor(ctx, currentRoom.door);
 
     // detection rings (drawn under everything so they read as a
@@ -1992,6 +2023,7 @@ export function start(canvas: HTMLCanvasElement): void {
     if (state.hitIframe > 0) {
       drawPlayer = Math.floor(state.hitIframe * 10) % 2 === 0;
     }
+    if (state.deathFx && state.deathFx.age > 0.04) drawPlayer = false;
 
     if (drawPlayer) {
       // Body layers come straight from the player profile in every
@@ -2034,6 +2066,10 @@ export function start(canvas: HTMLCanvasElement): void {
     if (currentKey && !currentKey.collected) drawKey(ctx, currentKey);
 
     drawFloatingTexts(ctx, floatingTexts);
+
+    // Death cinematic draws in world space so it tracks the player's
+    // last position even in scrolling rooms.
+    if (state.deathFx) drawDeathFx(ctx, state.deathFx);
 
     if (useCamera) ctx.restore();
 
@@ -2124,7 +2160,9 @@ export function start(canvas: HTMLCanvasElement): void {
     drawGodModeBadge(ctx, viewW);
     drawFpsOverlay(ctx, viewW);
 
-    if (state.runState === "failed") drawFailedOverlay();
+    if (state.runState === "failed" && shouldShowDeathOverlay(state.deathFx)) {
+      drawFailedOverlay();
+    }
 
     drawScanlines(ctx, viewW, viewH);
   }
