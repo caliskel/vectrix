@@ -135,6 +135,7 @@ import { buildRoom0 } from "./room0";
 import { buildRoom1 } from "./room1";
 import { buildRoom2 } from "./room2";
 import { buildRoom3 } from "./room3";
+import { buildRoomIntro } from "./roomIntro";
 import {
   drawMarker,
   markerOverlapsPlayer,
@@ -785,6 +786,7 @@ export function start(canvas: HTMLCanvasElement): void {
   }
 
   const rooms = new Map<string, Room>();
+  rooms.set("roomIntro", buildRoomIntro());
   rooms.set("room0", buildRoom0());
   rooms.set("room1", buildRoom1());
   rooms.set("room2", buildRoom2());
@@ -810,7 +812,7 @@ export function start(canvas: HTMLCanvasElement): void {
     deathFx: null,
   };
 
-  let currentRoom: Room = rooms.get("room0")!;
+  let currentRoom: Room = rooms.get("roomIntro")!;
   let arenaBg: ArenaBg = createArenaBg(
     currentRoom.width ?? ROOM_W_PX,
     currentRoom.height ?? ROOM_H_PX,
@@ -855,6 +857,7 @@ export function start(canvas: HTMLCanvasElement): void {
   syncTutorialStateForRoom();
 
   function rebuildAllRooms() {
+    rooms.set("roomIntro", buildRoomIntro());
     rooms.set("room0", buildRoom0());
     rooms.set("room1", buildRoom1());
     rooms.set("room2", buildRoom2());
@@ -884,7 +887,7 @@ export function start(canvas: HTMLCanvasElement): void {
   function restartRun() {
     audio.silence();
     rebuildAllRooms();
-    currentRoom = rooms.get("room0")!;
+    currentRoom = rooms.get("roomIntro")!;
     state.runState = "playing";
     state.hp = 3;
     state.score = 0;
@@ -2361,21 +2364,28 @@ export function start(canvas: HTMLCanvasElement): void {
       ctx.fillText("♥", heartsStart + i * heartSpacing, heartsY);
     }
 
-    const roomNum =
-      currentRoom.id === "room0"
-        ? 1
-        : currentRoom.id === "room1"
-          ? 2
-          : currentRoom.id === "room2"
-            ? 3
-            : currentRoom.id === "room3"
-              ? 4
-              : 1;
     const roomY = heartsY + 34;
     ctx.globalAlpha = 0.65;
     ctx.font = "500 13px ui-monospace, SFMono-Regular, Menlo, monospace";
     ctx.fillStyle = "#cbd5e1";
-    ctx.fillText(`${roomNum} / ${ROOM_TOTAL}`, cx, roomY);
+    // The intro room is the calm beat right after the cinematic —
+    // no counter, just a blank slot. Rooms 0..3 (markers / turret /
+    // watcher / hunter) get the 1..4 label.
+    if (currentRoom.id === "roomIntro") {
+      // Nothing — keep the HUD silent for the entry room.
+    } else {
+      const roomNum =
+        currentRoom.id === "room0"
+          ? 1
+          : currentRoom.id === "room1"
+            ? 2
+            : currentRoom.id === "room2"
+              ? 3
+              : currentRoom.id === "room3"
+                ? 4
+                : 1;
+      ctx.fillText(`${roomNum} / ${ROOM_TOTAL}`, cx, roomY);
+    }
     ctx.globalAlpha = 0.85;
 
     // Awareness indicator (top-center) — DETECTED red while any

@@ -11,7 +11,11 @@
 // room architecture, multi-shell capsule, full eye-orb hero, glass
 // crack propagation, volumetric beams, camera push-in.
 
-import { DASH_DURATION_MS, DASH_COOLDOWN_MS, PLAYER_SIZE } from "../lib/config";
+import {
+  BLINK_CLOSE_DURATION_MS,
+  BLINK_OPEN_DURATION_MS,
+  DASH_DURATION_MS,
+} from "../lib/config";
 import {
   createPlayer,
   drawPlayerEye,
@@ -39,12 +43,13 @@ const BRACKET_W = 70;
 const BRACKET_H = 22;
 const BRACKET_Y = CAPSULE_CY - CAPSULE_RY - 18;
 
-// Hero inside the capsule — mimics the in-game eye geometry so the
-// reveal feels continuous with gameplay. Sized down a touch so the
-// capsule "wraps" the body with some margin.
-const HERO_OUTER_R = 30;
-const HERO_IRIS_R = 22;
-const HERO_PUPIL_R = 8;
+// Hero inside the capsule. HERO_SIZE is the canonical eye diameter for
+// the cinematic — almost 2× the in-game PLAYER_SIZE (32) so the
+// capsule reads as a person-scale body, not a small token. The game's
+// drawPlayerEye renders at whatever size we pass, so the post-reveal
+// hero matches the dormant shell exactly.
+const HERO_SIZE = 60;
+const HERO_OUTER_R = HERO_SIZE / 2;
 
 // ---- Wires ----
 const WIRES: WireSpec[] = [
@@ -106,10 +111,12 @@ const PHASE_DURATIONS: Record<PhaseId, number> = {
   // Brief silence/blackout — the spark has merged, the room cuts to
   // pure darkness for a beat before the hero stirs.
   blackout: 0.9,
-  // Eye opens.
-  awaken: 1.6,
-  // "WHO AM I?" thought surfaces.
-  askname: 3.0,
+  // Eye opens slowly (heroBlinkOpenT-driven, not engine-rate).
+  awaken: 1.8,
+  // "who am i?" thought surfaces. Phase is long so the text only
+  // arrives ~3 s AFTER the eye fully opens — the body has a moment
+  // of silence first.
+  askname: 6.0,
   fadeout: 0.7,
 };
 
@@ -242,13 +249,23 @@ export type IntroState = {
   sparkPath: SparkPath | null;
   sparkPathT: number; // 0..1 along the current path
 
-  // In-game hero (drawPlayerEye) — used from awaken phase onward so
-  // the reveal lands on the same body the player will inhabit.
+  // In-game hero. Drawn via drawPlayerEye throughout — eye is held
+  // CLOSED via a pinned blink (eyelids covering the iris) until the
+  // awaken moment, when we release the blink and the engine animates
+  // it open. heroIrisT tweens the eyelid colour from black (dormant)
+  // to white (awakened). heroFrozen suppresses all engine updates
+  // (idle look, breath, etc.) so the dormant body is perfectly still.
   hero: Player;
   heroProfile: PlayerProfile;
-  // White "interior" glow when the spark merges with the body. Visible
-  // through the closed eye during blackout/early awaken, fades as the
-  // eye finishes opening.
+  heroFrozen: boolean;
+  heroIrisT: number;
+  // 0..1 — manual driver for the blink-open. 0 = eyelids fully cover
+  // the eye, 1 = eyelids fully retracted. Animated slowly across the
+  // awaken phase (~0.8 s) instead of the engine's 0.13 s default, so
+  // the wake reads as the body "opening its eye" not "blinking".
+  heroBlinkOpenT: number;
+  // White "interior" flash when the spark first merges — a brief
+  // glow on top of the body in the merge → blackout transition.
   interiorWhite: number;
 
   // Cutting sub-state. The sever phase replaces the previous instant
@@ -284,11 +301,16 @@ export function createIntroState(): IntroState {
   const hero = createPlayer();
   hero.x = CAPSULE_CX;
   hero.y = CAPSULE_CY;
-  // Eye starts closed — the body has been dormant. The closeAmount
-  // is animated back to 0 during the awaken phase via eyeStartClosing
-  // inversion (we just toggle isClosing).
-  hero.isClosing = true;
-  hero.closeAmount = 1;
+  hero.isClosing = false;
+  hero.closeAmount = 0;
+  // Pin the blink at "fully closed" — eyelids fully cover the iris
+  // from frame 0. heroFrozen below skips updateEye so the engine
+  // doesn't advance it until we release.
+  hero.blinkActive = true;
+  hero.blinkElapsed = BLINK_CLOSE_DURATION_MS / 1000;
+  hero.breathPhase = 0;
+  hero.pupilOffsetX = 0;
+  hero.pupilOffsetY = 0;
   return {
     time: 0,
     phase: "fadein",
@@ -326,6 +348,9 @@ export function createIntroState(): IntroState {
     sparkPathT: 0,
     hero,
     heroProfile,
+    heroFrozen: true,
+    heroIrisT: 0,
+    heroBlinkOpenT: 0,
     interiorWhite: 0,
     cuttingWireIndex: 0,
     cuttingSubPhase: "travel",
@@ -587,9 +612,9 @@ function onPhaseEnter(state: IntroState): void {
       state.cameraTargetScale = 1.05;
       break;
     case "awaken":
-      // Tell the game-engine eye to open. closeAmount animates back
-      // to 0 over CLOSE_DURATION; updateEye drives the transition.
-      state.hero.isClosing = false;
+      // The eye does NOT open at phase entry. The phase tick gates
+      // the open trigger so the white fills first, then fades, then
+      // the eye blinks open — matching the requested order.
       state.cameraTargetScale = 1.0;
       break;
     case "askname":
@@ -750,35 +775,63 @@ function tickByPhase(state: IntroState, dt: number): void {
       if (t > 0.85) {
         state.mergeFlash = (t - 0.85) / 0.15;
       }
-      // As we near the body, ramp up the interior white so the
-      // crossover from "spark outside" → "consciousness inside" reads.
+      // Final third: bright halo on top of the body (the spark
+      // physically sinking in).
       if (t > 0.7) {
         state.interiorWhite = (t - 0.7) / 0.3;
       }
       break;
     }
     case "blackout": {
-      // Pure dark beat. Interior glow holds at full brightness.
-      state.interiorWhite = 1;
+      // Room cuts to pure dark. The body's interior changes from
+      // BLACK to WHITE across this phase — the spark is settling in,
+      // recolouring the eyelid that's covering the closed eye.
+      const t = state.phaseTime / PHASE_DURATIONS.blackout;
+      state.heroIrisT = smoothstep(t);
+      // interiorWhite halo from merge fades through to support the
+      // change, then settles at 0.
+      state.interiorWhite = Math.max(0, 1 - t * 1.4);
       break;
     }
     case "awaken": {
       tickShards(state, dt);
-      // Interior white glow fades as the eye opens — by the end of
-      // awaken the in-game iris/pupil are fully visible.
+      // Two beats inside the awaken window:
+      //   0–25%  : hold the white circle, eyelids fully closed
+      //   25–95% : eyelids retract slowly (heroBlinkOpenT 0 → 1).
+      //            ~70% of the awaken duration is spent opening,
+      //            giving a ~1.1 s slow rise instead of a 130 ms
+      //            engine blink-open.
+      //   95–100%: eye fully open, hand off to the engine for ongoing
+      //            idle behaviour (no blinks for now since we just
+      //            triggered one — engine reschedules naturally).
       const t = state.phaseTime / PHASE_DURATIONS.awaken;
-      state.interiorWhite = Math.max(0, 1 - t * 1.4);
+      state.heroIrisT = 1;
+      state.interiorWhite = 0;
+      if (t < 0.25) {
+        state.heroBlinkOpenT = 0;
+      } else if (t < 0.95) {
+        state.heroBlinkOpenT = (t - 0.25) / 0.7;
+      } else {
+        state.heroBlinkOpenT = 1;
+        if (state.heroFrozen) {
+          state.heroFrozen = false;
+          state.hero.blinkActive = false;
+          state.hero.blinkElapsed = 0;
+        }
+      }
       state.sparkX = CAPSULE_CX;
       state.sparkY = CAPSULE_CY;
       break;
     }
     case "askname": {
       state.interiorWhite = 0;
+      state.heroIrisT = 1;
       break;
     }
     case "fadeout": {
       const t = state.phaseTime / PHASE_DURATIONS.fadeout;
       state.finalFlash = t;
+      state.heroIrisT = 1;
       break;
     }
   }
@@ -1196,14 +1249,30 @@ function advanceSparkPath(
 function tickHero(state: IntroState, dt: number): void {
   state.heroBreath += dt;
   state.heroFlicker += dt;
-  // Drive the game-engine eye every frame so blink/idle-look/breath
-  // animations match in-game exactly during the awaken+ phases. The
-  // hero position is pinned at the capsule center.
   state.hero.x = CAPSULE_CX;
   state.hero.y = CAPSULE_CY;
+  if (state.heroFrozen) {
+    // Body in stasis — no idle look, no blinking, no breath. The
+    // eyelid is driven manually via heroBlinkOpenT: at 0 the lids
+    // fully cover the eye, at 1 they're fully retracted. Mapped to
+    // the engine's blink timeline (BLINK_CLOSE+OPEN window) so
+    // drawPlayerEye renders the right eyelid height.
+    const closeSec = BLINK_CLOSE_DURATION_MS / 1000;
+    const openSec = BLINK_OPEN_DURATION_MS / 1000;
+    state.hero.blinkActive = true;
+    state.hero.blinkElapsed = closeSec + openSec * state.heroBlinkOpenT;
+    state.hero.breathPhase = 0;
+    state.hero.pupilOffsetX = 0;
+    state.hero.pupilOffsetY = 0;
+    state.hero.isClosing = false;
+    state.hero.closeAmount = 0;
+    return;
+  }
+  // Awaken+ — engine drives the blink-open + ongoing idle behaviour
+  // exactly as in gameplay.
   updateEye(state.hero, dt, {
     threat: null,
-    size: PLAYER_SIZE,
+    size: HERO_SIZE,
     dashDurationSec: DASH_DURATION_MS / 1000,
   });
 }
@@ -1306,15 +1375,11 @@ export function drawIntro(
   // visible through the blackout/awaken dim. Before the shatter the
   // hero lives inside the capsule (drawn there); during/after shatter
   // we render it here at the capsule center.
-  //   shatter / merge: empty shell (custom)
-  //   blackout / awaken / askname / fadeout: in-game hero via
-  //     drawPlayerEye, the same renderer used during gameplay.
+  // Same drawPlayerEye throughout — iris colour is driven by
+  // heroIrisT so the dormant body (black inside) and the awakened
+  // body (profile iris, default white) share the renderer.
   if (state.capsuleBroken) {
-    if (state.phase === "shatter" || state.phase === "merge") {
-      drawHeroOrb(ctx, state);
-    } else {
-      drawGameHero(ctx, state);
-    }
+    drawCinematicHero(ctx, state);
   }
 
   // Interior white glow — visible from blackout onward as the spark
@@ -1960,8 +2025,10 @@ function drawCapsule(ctx: CanvasRenderingContext2D, state: IntroState): void {
     ctx.fill();
   }
 
-  // The hero inside.
-  drawHeroOrb(ctx, state);
+  // The hero inside the capsule — same drawPlayerEye that runs in
+  // gameplay, with iris/pupil tinted to pure black for the dormant
+  // body. heroIrisT will animate them to the profile colour at wake.
+  drawCinematicHero(ctx, state);
 
   // Glass overlay — outer bright outline + a couple of inner contour
   // rings sells "glass tube".
@@ -2019,87 +2086,6 @@ function drawCapsuleCracks(ctx: CanvasRenderingContext2D, state: IntroState): vo
       ctx.lineTo(c.pts[i].x, c.pts[i].y);
     }
     ctx.stroke();
-  }
-  ctx.restore();
-}
-
-function drawHeroOrb(ctx: CanvasRenderingContext2D, state: IntroState): void {
-  // Empty-shell hero. Dormant state shows only the outer ring with
-  // pure darkness inside — the body is a vessel, vacant. As the spark
-  // merges (eyeOpen rises), the inner darkness gives way to an iris
-  // and pupil; the body becomes the awakened eye-orb seen in-game.
-  ctx.save();
-  ctx.translate(CAPSULE_CX, CAPSULE_CY);
-
-  // Subtle breathing only while fully dormant — the empty shell still
-  // pulses faintly under stasis.
-  const dormant = state.eyeOpen < 0.05;
-  const breath = dormant ? 1 + Math.sin(state.heroBreath * 1.6) * 0.025 : 1;
-  ctx.scale(breath, breath);
-
-  // Inner void — dark fill that occupies the shell interior when
-  // dormant. Fades out as the iris fills in.
-  const voidAlpha = 1 - state.eyeOpen;
-  if (voidAlpha > 0) {
-    ctx.fillStyle = `rgba(2, 4, 8, ${0.85 * voidAlpha})`;
-    ctx.shadowBlur = 0;
-    ctx.beginPath();
-    ctx.arc(0, 0, HERO_OUTER_R - 1.5, 0, Math.PI * 2);
-    ctx.fill();
-  }
-
-  // Outer ring — dim white outline when dormant, brightens on awaken.
-  const ringAlpha = 0.45 + state.eyeOpen * 0.55;
-  ctx.strokeStyle = `rgba(255, 255, 255, ${ringAlpha})`;
-  ctx.shadowColor = "#ffffff";
-  ctx.shadowBlur = state.eyeOpen > 0.4 ? 12 : 3;
-  ctx.lineWidth = 2.4;
-  ctx.beginPath();
-  ctx.arc(0, 0, HERO_OUTER_R, 0, Math.PI * 2);
-  ctx.stroke();
-
-  // Iris reveal — only once the spark has begun merging (eyeOpen > 0).
-  // The iris is drawn at full circular shape but with alpha tied to
-  // eyeOpen, so it FILLS IN rather than opening like an eyelid (which
-  // suited the previous design but didn't match "spark filling an
-  // empty shell").
-  if (state.eyeOpen > 0.02) {
-    const irisAlpha = Math.min(1, state.eyeOpen * 1.1);
-    ctx.fillStyle = `rgba(125, 211, 252, ${0.85 * irisAlpha})`;
-    ctx.shadowColor = "#7dd3fc";
-    ctx.shadowBlur = 10 * irisAlpha;
-    ctx.beginPath();
-    ctx.arc(0, 0, HERO_IRIS_R, 0, Math.PI * 2);
-    ctx.fill();
-    // Iris outline
-    ctx.strokeStyle = `rgba(255, 255, 255, ${0.4 * irisAlpha})`;
-    ctx.shadowBlur = 0;
-    ctx.lineWidth = 1.2;
-    ctx.beginPath();
-    ctx.arc(0, 0, HERO_IRIS_R, 0, Math.PI * 2);
-    ctx.stroke();
-  }
-
-  // Pupil — appears in the second half of the awakening, scales in.
-  if (state.eyeOpen > 0.45) {
-    const pupilT = (state.eyeOpen - 0.45) / 0.55;
-    ctx.fillStyle = `rgba(10, 14, 26, ${pupilT})`;
-    ctx.shadowBlur = 0;
-    ctx.beginPath();
-    ctx.arc(0, 0, HERO_PUPIL_R * (0.55 + pupilT * 0.45), 0, Math.PI * 2);
-    ctx.fill();
-  }
-
-  // Awaken halo — bright cyan glow once the eye is mostly filled.
-  if (state.eyeOpen > 0.65) {
-    const t = (state.eyeOpen - 0.65) / 0.35;
-    const halo = ctx.createRadialGradient(0, 0, 0, 0, 0, HERO_OUTER_R * 3.5);
-    halo.addColorStop(0, `rgba(0, 229, 255, ${0.55 * t})`);
-    halo.addColorStop(1, "rgba(0, 229, 255, 0)");
-    ctx.fillStyle = halo;
-    ctx.beginPath();
-    ctx.arc(0, 0, HERO_OUTER_R * 3.5, 0, Math.PI * 2);
-    ctx.fill();
   }
   ctx.restore();
 }
@@ -2270,19 +2256,62 @@ function drawSpark(ctx: CanvasRenderingContext2D, state: IntroState): void {
   ctx.restore();
 }
 
-function drawGameHero(ctx: CanvasRenderingContext2D, state: IntroState): void {
-  // Use the canonical in-game eye renderer so the awakened body
-  // matches gameplay 1:1. closeAmount on the Player struct drives the
-  // open/close animation; we toggle isClosing=false on awaken entry
-  // and updateEye handles the smooth ramp.
-  drawPlayerEye(ctx, state.hero, PLAYER_SIZE, {
+const DORMANT_INTERIOR_HEX = "#000000";
+
+function drawCinematicHero(
+  ctx: CanvasRenderingContext2D,
+  state: IntroState,
+): void {
+  // Same drawPlayerEye used in gameplay. The eye is held closed via a
+  // pinned blink (tickHero); the eyelid colour is what changes from
+  // dormant black to awakened white. The iris colour follows the
+  // SAME tween so the seam where the two eyelid rectangles meet
+  // (y = 0) doesn't expose the underlying iris as a thin white
+  // line. Pupil stays on the profile colour so when the eye opens
+  // we land on the canonical white-iris + black-pupil hero.
+  const lidColor = lerpHex(
+    DORMANT_INTERIOR_HEX,
+    state.heroProfile.outerRing,
+    state.heroIrisT,
+  );
+  const iris = lerpHex(
+    DORMANT_INTERIOR_HEX,
+    state.heroProfile.iris,
+    state.heroIrisT,
+  );
+  const profile: PlayerProfile = {
+    ...state.heroProfile,
+    iris,
+  };
+  drawPlayerEye(ctx, state.hero, HERO_SIZE, {
     ringColor: state.heroProfile.outerRing,
     pupilColor: state.heroProfile.pupil,
     ghostColor: state.heroProfile.outerRing,
     dashDurationSec: DASH_DURATION_MS / 1000,
-    dashCooldownSec: DASH_COOLDOWN_MS / 1000,
-    profile: state.heroProfile,
+    profile,
+    lidColor,
   });
+}
+
+function lerpHex(a: string, b: string, t: number): string {
+  // a / b are #RRGGBB. Returns same format. Channel-linear lerp; for
+  // black → white interpolation this gives a neutral grey midway,
+  // which reads as "fading in" rather than crossing through any hue.
+  const tt = t < 0 ? 0 : t > 1 ? 1 : t;
+  const ar = parseInt(a.slice(1, 3), 16);
+  const ag = parseInt(a.slice(3, 5), 16);
+  const ab = parseInt(a.slice(5, 7), 16);
+  const br = parseInt(b.slice(1, 3), 16);
+  const bg = parseInt(b.slice(3, 5), 16);
+  const bb = parseInt(b.slice(5, 7), 16);
+  const r = Math.round(ar + (br - ar) * tt);
+  const g = Math.round(ag + (bg - ag) * tt);
+  const bl = Math.round(ab + (bb - ab) * tt);
+  return `#${hex2(r)}${hex2(g)}${hex2(bl)}`;
+}
+
+function hex2(n: number): string {
+  return n.toString(16).padStart(2, "0");
 }
 
 function drawInteriorWhite(ctx: CanvasRenderingContext2D, alpha: number): void {
@@ -2312,21 +2341,18 @@ function drawInteriorWhite(ctx: CanvasRenderingContext2D, alpha: number): void {
 }
 
 function computeStageDark(state: IntroState): number {
-  // Final dim level held through askname; awaken fades from full
-  // black into that dim level over its duration.
-  const HOLD_DARK = 0.62;
+  // Room stays pitch-black from the moment the spark merges through
+  // the askname beat — only the hero (drawn after this overlay) and
+  // the small WHO AM I window are visible. The dark fades to 0 only
+  // during fadeout, just before the white wash + redirect.
   switch (state.phase) {
     case "blackout":
-      return 1;
-    case "awaken": {
-      const t = state.phaseTime / PHASE_DURATIONS.awaken;
-      return 1 - (1 - HOLD_DARK) * smoothstep(t);
-    }
+    case "awaken":
     case "askname":
-      return HOLD_DARK;
+      return 1;
     case "fadeout": {
       const t = state.phaseTime / PHASE_DURATIONS.fadeout;
-      return Math.max(0, HOLD_DARK - HOLD_DARK * t);
+      return Math.max(0, 1 - t);
     }
     default:
       return 0;
@@ -2334,32 +2360,58 @@ function computeStageDark(state: IntroState): number {
 }
 
 function drawAskNameText(ctx: CanvasRenderingContext2D, state: IntroState): void {
-  // Fade in over 0.6 s, hold, fade out at the tail of the phase.
-  const t = state.phaseTime / PHASE_DURATIONS.askname;
-  const fadeIn = 0.25;
-  const fadeOut = 0.85;
+  // Small floating window above the hero — appears only AFTER a
+  // ~3 s silent beat once the eye has opened, then fades in, holds,
+  // fades out. Timings expressed in absolute seconds within the
+  // askname phase rather than fractions, so the appearance delay is
+  // independent of the phase total.
+  const appearSec = 3.0;
+  const fadeInSec = 0.6;
+  const fadeOutSec = 0.8;
+  const totalSec = PHASE_DURATIONS.askname;
+  const visible = state.phaseTime - appearSec;
+  if (visible < 0) return;
   let alpha = 1;
-  if (t < fadeIn) alpha = t / fadeIn;
-  else if (t > fadeOut) alpha = Math.max(0, 1 - (t - fadeOut) / (1 - fadeOut));
+  if (visible < fadeInSec) alpha = visible / fadeInSec;
+  const tailStart = totalSec - appearSec - fadeOutSec;
+  if (visible > tailStart) {
+    alpha = Math.min(alpha, Math.max(0, 1 - (visible - tailStart) / fadeOutSec));
+  }
   if (alpha <= 0) return;
   ctx.save();
+  ctx.globalAlpha = alpha;
+  const text = "who am i?";
+  const boxW = 180;
+  const boxH = 46;
+  const boxX = CAPSULE_CX - boxW / 2;
+  const boxY = CAPSULE_CY - HERO_SIZE - 56;
+  // Backplate — dim translucent block so the text reads on black.
+  ctx.fillStyle = "rgba(8, 14, 26, 0.78)";
+  ctx.fillRect(boxX, boxY, boxW, boxH);
+  // Thin neon frame.
+  ctx.strokeStyle = "rgba(125, 211, 252, 0.7)";
+  ctx.shadowColor = "#7dd3fc";
+  ctx.shadowBlur = 10;
+  ctx.lineWidth = 1.2;
+  ctx.strokeRect(boxX + 0.5, boxY + 0.5, boxW - 1, boxH - 1);
+  // Cap brackets at the corners for sci-fi feel.
+  ctx.shadowBlur = 0;
+  ctx.lineWidth = 2;
+  const C = 9;
+  ctx.beginPath();
+  ctx.moveTo(boxX, boxY + C); ctx.lineTo(boxX, boxY); ctx.lineTo(boxX + C, boxY);
+  ctx.moveTo(boxX + boxW - C, boxY); ctx.lineTo(boxX + boxW, boxY); ctx.lineTo(boxX + boxW, boxY + C);
+  ctx.moveTo(boxX + boxW, boxY + boxH - C); ctx.lineTo(boxX + boxW, boxY + boxH); ctx.lineTo(boxX + boxW - C, boxY + boxH);
+  ctx.moveTo(boxX + C, boxY + boxH); ctx.lineTo(boxX, boxY + boxH); ctx.lineTo(boxX, boxY + boxH - C);
+  ctx.stroke();
+  // Text.
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  // Centred above the eye. Letter-spacing-like effect through manual
-  // tracking — Orbitron with extra space reads as a cold internal
-  // voice rather than overlaid UI.
-  const text = "WHO AM I?";
-  ctx.font = "500 38px Orbitron, ui-monospace, monospace";
-  ctx.globalAlpha = alpha * 0.95;
-  // Soft glow pass.
-  ctx.shadowColor = "#a5f3fc";
-  ctx.shadowBlur = 18;
-  ctx.fillStyle = "#cbd5e1";
-  ctx.fillText(text, CAPSULE_CX, CAPSULE_CY - 140);
-  // Crisp pass.
-  ctx.shadowBlur = 6;
+  ctx.font = "500 18px ui-monospace, SFMono-Regular, Menlo, monospace";
   ctx.fillStyle = "#ffffff";
-  ctx.fillText(text, CAPSULE_CX, CAPSULE_CY - 140);
+  ctx.shadowColor = "#a5f3fc";
+  ctx.shadowBlur = 4;
+  ctx.fillText(text, CAPSULE_CX, boxY + boxH / 2);
   ctx.restore();
 }
 

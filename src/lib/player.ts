@@ -903,6 +903,12 @@ export type EyeRenderOpts = {
   glowColor?: string;
   blurStrong?: number;
   blurSoft?: number;
+  /** Overrides the eyelid fill colour during a blink. Without this,
+   *  the eyelid uses ringColor (so a closed eye reads as the ring
+   *  "filling in"). The intro cinematic provides a tween from black
+   *  to white here so the dormant body's covered eye shows as black,
+   *  then fills with white when the spark inhabits it. */
+  lidColor?: string;
   /**
    * When provided, drives every body layer (ring / iris / pupil) and
    * the dash halo (via dashParticles) — the eye reads as the player's
@@ -1203,7 +1209,10 @@ export function drawPlayerEye(
     ctx.clip();
     const lidH = blink * r;
     const lidW = r * Math.max(stretchX, 1) * 2 + 4;
-    ctx.fillStyle = ringColor;
+    // Eyelid fill — defaults to the outer ring colour (so a natural
+    // blink reads as the ring "closing"), but the intro cinematic
+    // overrides this to drive the dormant → awake colour transition.
+    ctx.fillStyle = opts.lidColor ?? ringColor;
     ctx.fillRect(-lidW / 2, -r * Math.max(stretchY, 1) - 2, lidW, lidH + 2);
     ctx.fillRect(
       -lidW / 2,
