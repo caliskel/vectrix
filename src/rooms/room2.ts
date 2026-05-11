@@ -11,12 +11,10 @@ const DOOR_CENTER_Y = 450;
 const DOOR_W = 30;
 const DOOR_H = 120;
 
-// Arena with circular defence — two right-side turrets covering the
-// approach to the exit door, plus a Watcher in the middle. Open
-// layout: no internal cover, no column clipping. Forces distance
-// management; the right-side turret pair flanks the exit corridor
-// so the player has to clear them (or dash past) before they can
-// reach the door.
+// Arena with circular defence — four corner turrets and a Watcher in
+// the middle. Fully open: no internal cover, no column clipping for
+// bullets or beams. Forces distance management instead of cover-and-
+// peek.
 export function buildRoom2(): Room {
   const gapTop = DOOR_CENTER_Y - DOOR_H / 2;
   const gapBottom = DOOR_CENTER_Y + DOOR_H / 2;
@@ -36,7 +34,9 @@ export function buildRoom2(): Room {
     },
   ];
 
+  const turretTL = new Turret(250, 250);
   const turretTR = new Turret(1150, 250);
+  const turretBL = new Turret(250, 650);
   const turretBR = new Turret(1150, 650);
   const watcher = new Watcher(700, 450);
   // Watcher is the carrier — its kill spawns the key in the centre,
@@ -46,7 +46,7 @@ export function buildRoom2(): Room {
   return {
     id: "room2",
     walls,
-    enemies: [turretTR, turretBR, watcher],
+    enemies: [turretTL, turretTR, turretBL, turretBR, watcher],
     door: makeDoor(
       ROOM_W - WALL_T / 2,
       DOOR_CENTER_Y,
