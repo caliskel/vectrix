@@ -40,6 +40,14 @@ import {
   type KeybindProfile,
 } from "../lib/keybinds";
 import { BackgroundFx } from "../lib/bg-fx";
+import {
+  createArenaBg,
+  updateArenaBg,
+  drawArenaBg,
+  drawScanlines,
+  tickScanlines,
+  type ArenaBg,
+} from "../lib/arena-bg";
 import { getBulletSprite, getBulletSpriteOffset } from "../lib/bullet-sprite";
 import { drawFpsOverlay, recordFrame } from "../lib/fps-meter";
 import { createSandboxPauseMenu } from "../lib/pause-menu";
@@ -104,6 +112,7 @@ const canvas = document.getElementById("app") as HTMLCanvasElement;
 const ctx = canvas.getContext("2d")!;
 const post = new PostProcessor();
 const bgFx = new BackgroundFx();
+let arenaBg: ArenaBg | null = null;
 
 let dpr = window.devicePixelRatio || 1;
 let viewW = 0;
@@ -118,6 +127,7 @@ function resize() {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   rebuildGrid();
   bgFx.resize(viewW, viewH);
+  arenaBg = createArenaBg(viewW, viewH);
 }
 
 const GRID_STEP = 60;
@@ -980,6 +990,8 @@ function frame(now: number) {
   }
 
   bgFx.update(dt);
+  if (arenaBg) updateArenaBg(arenaBg, dt);
+  tickScanlines(dt);
 
   // age floating texts, rings, particles even after end so they finish out
   for (const t of floatingTexts) {
@@ -1399,6 +1411,7 @@ function render() {
   // arena" instead of being lost between lines.
   ctx.fillStyle = PALETTE.bg;
   ctx.fillRect(0, 0, viewW, viewH);
+  if (arenaBg) drawArenaBg(ctx, arenaBg);
   bgFx.drawBack(ctx, viewW, viewH);
   if (gridCanvas) {
     ctx.drawImage(gridCanvas, 0, 0, viewW, viewH);
@@ -1615,6 +1628,8 @@ function render() {
   if (state.runState === "ended") {
     drawEndOverlay();
   }
+
+  drawScanlines(ctx, viewW, viewH);
 }
 
 function drawHUD() {

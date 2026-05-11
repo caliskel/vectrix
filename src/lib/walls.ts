@@ -75,7 +75,8 @@ export function resolvePlayerWallCollisions(
   return resolveEntityWallCollisions(player, walls, halfSize);
 }
 
-// True if the bullet's center sits inside any wall's AABB.
+// True if the bullet's center sits inside any wall's AABB. Returns the
+// hit wall so callers can spawn an impact ripple at the contact point.
 export function bulletInsideWall(
   bx: number,
   by: number,
@@ -89,18 +90,54 @@ export function bulletInsideWall(
   return false;
 }
 
+// Variant that returns the first wall hit, for spawning impact FX on
+// the wall surface. Returns null when the point is outside every wall.
+export function findContainingWall(
+  bx: number,
+  by: number,
+  walls: Wall[],
+): Wall | null {
+  for (const w of walls) {
+    if (bx >= w.x && bx <= w.x + w.w && by >= w.y && by <= w.y + w.h) {
+      return w;
+    }
+  }
+  return null;
+}
+
 const WALL_FILL = "rgba(28, 35, 60, 0.85)";
 const WALL_STROKE = "#7dd3fc";
 const WALL_STROKE_ALPHA = 0.6;
 const WALL_GLOW_BLUR = 12;
 const DASHABLE_GLOW_BLUR = 14;
+const BRACKET_LEN_PX = 14;
+const BRACKET_INSET_PX = 2;
+const BRACKET_LINE_WIDTH = 2.5;
+const HATCH_SPACING_PX = 8;
+const HATCH_ALPHA = 0.05;
+const MARCHING_DASH_INSET_PX = 4;
+const MARCHING_DASH_PATTERN = [10, 14] as const;
+const MARCHING_DASH_SPEED = 28; // px/s lineDashOffset drift
+const MARCHING_DASH_ALPHA = 0.35;
+const PERIMETER_PULSE_INTERVAL_MIN = 4.0;
+const PERIMETER_PULSE_INTERVAL_MAX = 9.0;
+const PERIMETER_PULSE_SPEED = 380; // px/s along perimeter
+const PERIMETER_PULSE_HEAD_RADIUS = 3.2;
+const PERIMETER_PULSE_GLOW = 14;
+const PERIMETER_PULSE_COLOR = "#a5f3fc";
+const RIPPLE_LIFETIME_SEC = 0.45;
+const RIPPLE_RADIUS_START = 4;
+const RIPPLE_RADIUS_END = 28;
+const RIPPLE_LINE_WIDTH_START = 2.5;
+const RIPPLE_LINE_WIDTH_END = 0.5;
+const RIPPLE_GLOW = 10;
+const RIPPLE_COLOR = "#a5f3fc";
+const RIPPLE_FRAGMENT_COUNT = 0; // reserved for later; keep ring-only for now
 
 // Wall layer cache: walls don't move within a room, so we bake them
 // into an offscreen canvas the first frame the array is seen and blit
-// per frame afterwards. Keyed on the walls array reference + the
-// rendered extent, so a room transition (new walls array) builds a
-// fresh layer without leaking the old one. Two shadowBlur passes per
-// frame go away, plus the per-wall path setup.
+// per frame afterwards. Animated overlays (marching dashes, perimeter
+// pulses, impact ripples) draw live on top via drawWallOverlay.
 type CachedLayer = {
   canvas: HTMLCanvasElement;
   extentX: number;
@@ -108,8 +145,81 @@ type CachedLayer = {
 };
 const layerCache = new WeakMap<Wall[], CachedLayer>();
 
+type PerimeterPulse = {
+  wallIndex: number;
+  progress: number; // px travelled along the perimeter
+  perimeter: number;
+};
+
+type WallRipple = {
+  x: number;
+  y: number;
+  age: number; // 0..RIPPLE_LIFETIME_SEC
+};
+
+export type WallFx = {
+  walls: Wall[];
+  marchOffset: number;
+  pulses: PerimeterPulse[];
+  ripples: WallRipple[];
+  pulseTimer: number;
+};
+
+export function createWallFx(walls: Wall[]): WallFx {
+  return {
+    walls,
+    marchOffset: 0,
+    pulses: [],
+    ripples: [],
+    pulseTimer: pickInterval(PERIMETER_PULSE_INTERVAL_MIN, PERIMETER_PULSE_INTERVAL_MAX) * 0.5,
+  };
+}
+
+export function updateWallFx(fx: WallFx, dt: number): void {
+  fx.marchOffset = (fx.marchOffset + MARCHING_DASH_SPEED * dt) % 24;
+
+  // Pulse spawn — pick a non-dashable wall (dashable walls are
+  // semantic markers, the pulse would clash with their existing
+  // marching dashed outline).
+  fx.pulseTimer -= dt;
+  if (fx.pulseTimer <= 0) {
+    fx.pulseTimer = pickInterval(PERIMETER_PULSE_INTERVAL_MIN, PERIMETER_PULSE_INTERVAL_MAX);
+    const eligible: number[] = [];
+    for (let i = 0; i < fx.walls.length; i++) {
+      const w = fx.walls[i];
+      if (!w.dashable && w.w >= 40 && w.h >= 40) eligible.push(i);
+    }
+    if (eligible.length > 0) {
+      const idx = eligible[Math.floor(Math.random() * eligible.length)];
+      const w = fx.walls[idx];
+      const perimeter = 2 * (w.w + w.h);
+      fx.pulses.push({
+        wallIndex: idx,
+        progress: Math.random() * perimeter,
+        perimeter,
+      });
+    }
+  }
+  for (let i = fx.pulses.length - 1; i >= 0; i--) {
+    const p = fx.pulses[i];
+    p.progress += PERIMETER_PULSE_SPEED * dt;
+    if (p.progress > p.perimeter * 1.5) fx.pulses.splice(i, 1);
+  }
+
+  // Ripples — age out.
+  for (let i = fx.ripples.length - 1; i >= 0; i--) {
+    const r = fx.ripples[i];
+    r.age += dt;
+    if (r.age >= RIPPLE_LIFETIME_SEC) fx.ripples.splice(i, 1);
+  }
+}
+
+export function addWallImpact(fx: WallFx, x: number, y: number): void {
+  fx.ripples.push({ x, y, age: 0 });
+}
+
 function paintWalls(ctx: CanvasRenderingContext2D, walls: Wall[]): void {
-  // Single fill pass for all walls — same colour, batch as one path.
+  // 1. Solid fill — one batched pass.
   ctx.save();
   ctx.fillStyle = WALL_FILL;
   ctx.shadowBlur = 0;
@@ -118,7 +228,32 @@ function paintWalls(ctx: CanvasRenderingContext2D, walls: Wall[]): void {
   }
   ctx.restore();
 
-  // Stroke passes grouped by style so shadowBlur fires once per group.
+  // 2. Inner diagonal hatching — adds texture without adding visual
+  // weight. Clipped to each wall so the lines stop at the boundary.
+  ctx.save();
+  ctx.strokeStyle = WALL_STROKE;
+  ctx.globalAlpha = HATCH_ALPHA;
+  ctx.lineWidth = 1;
+  ctx.shadowBlur = 0;
+  for (const w of walls) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(w.x, w.y, w.w, w.h);
+    ctx.clip();
+    const minD = w.x - w.h;
+    const maxD = w.x + w.w;
+    ctx.beginPath();
+    for (let d = minD; d <= maxD; d += HATCH_SPACING_PX) {
+      ctx.moveTo(d, w.y);
+      ctx.lineTo(d + w.h, w.y + w.h);
+    }
+    ctx.stroke();
+    ctx.restore();
+  }
+  ctx.restore();
+
+  // 3. Outer stroke — grouped by style so shadowBlur fires once per
+  // group instead of per wall.
   const solidWalls: Wall[] = [];
   const dashableWalls: Wall[] = [];
   for (const w of walls) {
@@ -155,13 +290,42 @@ function paintWalls(ctx: CanvasRenderingContext2D, walls: Wall[]): void {
     ctx.stroke();
     ctx.restore();
   }
+
+  // 4. Corner brackets — sit on top of the outline. Brighter, thicker
+  // strokes at each corner make the wall read as a "technical" panel
+  // rather than a flat box. Skipped for dashable walls so their
+  // signature dashed silhouette stays unambiguous.
+  if (solidWalls.length > 0) {
+    ctx.save();
+    ctx.strokeStyle = WALL_STROKE;
+    ctx.shadowColor = WALL_STROKE;
+    ctx.shadowBlur = WALL_GLOW_BLUR;
+    ctx.globalAlpha = 0.95;
+    ctx.lineWidth = BRACKET_LINE_WIDTH;
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    for (const w of solidWalls) {
+      const len = Math.min(BRACKET_LEN_PX, Math.min(w.w, w.h) * 0.3);
+      const x1 = w.x + BRACKET_INSET_PX;
+      const y1 = w.y + BRACKET_INSET_PX;
+      const x2 = w.x + w.w - BRACKET_INSET_PX;
+      const y2 = w.y + w.h - BRACKET_INSET_PX;
+      // top-left
+      ctx.moveTo(x1, y1 + len); ctx.lineTo(x1, y1); ctx.lineTo(x1 + len, y1);
+      // top-right
+      ctx.moveTo(x2 - len, y1); ctx.lineTo(x2, y1); ctx.lineTo(x2, y1 + len);
+      // bottom-right
+      ctx.moveTo(x2, y2 - len); ctx.lineTo(x2, y2); ctx.lineTo(x2 - len, y2);
+      // bottom-left
+      ctx.moveTo(x1 + len, y2); ctx.lineTo(x1, y2); ctx.lineTo(x1, y2 - len);
+    }
+    ctx.stroke();
+    ctx.restore();
+  }
 }
 
 function getWallLayer(walls: Wall[]): CachedLayer | null {
   if (walls.length === 0) return null;
-  // Compute layer extent from the walls themselves so we don't have
-  // to pass roomW/roomH — handles tutorial rooms / future arenas
-  // with the same code path.
   let maxX = 0;
   let maxY = 0;
   for (const w of walls) {
@@ -198,3 +362,94 @@ export function drawWalls(
   ctx.drawImage(layer.canvas, 0, 0);
 }
 
+// Animated overlay — drawn on top of the cached wall layer each frame.
+// Marching dashes (perimeter flow), data pulses traversing a wall's
+// perimeter, and bullet-impact ripples. Skipped per-wall via dashable
+// or zero-area filters where appropriate.
+export function drawWallOverlay(
+  ctx: CanvasRenderingContext2D,
+  fx: WallFx,
+): void {
+  if (fx.walls.length === 0) return;
+  const solidWalls: Wall[] = [];
+  for (const w of fx.walls) if (!w.dashable) solidWalls.push(w);
+
+  // 1. Marching dashes inside the outline — subtle "energy flow".
+  if (solidWalls.length > 0) {
+    ctx.save();
+    ctx.strokeStyle = WALL_STROKE;
+    ctx.globalAlpha = MARCHING_DASH_ALPHA;
+    ctx.lineWidth = 1;
+    ctx.setLineDash([...MARCHING_DASH_PATTERN]);
+    ctx.lineDashOffset = -fx.marchOffset;
+    ctx.shadowColor = WALL_STROKE;
+    ctx.shadowBlur = 6;
+    ctx.beginPath();
+    for (const w of solidWalls) {
+      const ix = w.x + MARCHING_DASH_INSET_PX + 0.5;
+      const iy = w.y + MARCHING_DASH_INSET_PX + 0.5;
+      const iw = w.w - MARCHING_DASH_INSET_PX * 2 - 1;
+      const ih = w.h - MARCHING_DASH_INSET_PX * 2 - 1;
+      if (iw <= 0 || ih <= 0) continue;
+      ctx.rect(ix, iy, iw, ih);
+    }
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // 2. Perimeter data pulses — bright head dot tracking around the
+  // wall's perimeter clockwise from the top-left.
+  if (fx.pulses.length > 0) {
+    ctx.save();
+    ctx.fillStyle = PERIMETER_PULSE_COLOR;
+    ctx.shadowColor = PERIMETER_PULSE_COLOR;
+    ctx.shadowBlur = PERIMETER_PULSE_GLOW;
+    for (const p of fx.pulses) {
+      const w = fx.walls[p.wallIndex];
+      if (!w) continue;
+      const pos = perimeterPoint(w, p.progress % p.perimeter);
+      ctx.beginPath();
+      ctx.arc(pos.x, pos.y, PERIMETER_PULSE_HEAD_RADIUS, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  // 3. Impact ripples — small expanding ring at the bullet hit point.
+  if (fx.ripples.length > 0) {
+    ctx.save();
+    ctx.strokeStyle = RIPPLE_COLOR;
+    ctx.shadowColor = RIPPLE_COLOR;
+    ctx.shadowBlur = RIPPLE_GLOW;
+    for (const r of fx.ripples) {
+      const u = r.age / RIPPLE_LIFETIME_SEC;
+      const radius = RIPPLE_RADIUS_START + (RIPPLE_RADIUS_END - RIPPLE_RADIUS_START) * u;
+      const lw = RIPPLE_LINE_WIDTH_START + (RIPPLE_LINE_WIDTH_END - RIPPLE_LINE_WIDTH_START) * u;
+      ctx.globalAlpha = 1 - u;
+      ctx.lineWidth = lw;
+      ctx.beginPath();
+      ctx.arc(r.x, r.y, radius, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+  // RIPPLE_FRAGMENT_COUNT reserved for future spark particles on
+  // impact; the ring alone reads clearly so we ship without.
+  void RIPPLE_FRAGMENT_COUNT;
+}
+
+function perimeterPoint(w: Wall, s: number): { x: number; y: number } {
+  // Walk the rectangle perimeter starting at top-left going clockwise:
+  // top edge (w.w) → right edge (w.h) → bottom edge (w.w) → left edge (w.h).
+  const top = w.w;
+  const right = top + w.h;
+  const bottom = right + w.w;
+  if (s < top) return { x: w.x + s, y: w.y };
+  if (s < right) return { x: w.x + w.w, y: w.y + (s - top) };
+  if (s < bottom) return { x: w.x + w.w - (s - right), y: w.y + w.h };
+  return { x: w.x, y: w.y + w.h - (s - bottom) };
+}
+
+function pickInterval(min: number, max: number): number {
+  return min + Math.random() * (max - min);
+}

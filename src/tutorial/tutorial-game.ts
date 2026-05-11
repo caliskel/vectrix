@@ -64,6 +64,14 @@ import {
   type ImpactContext,
 } from "../lib/impacts";
 import { drawRoomGrid } from "../lib/grid";
+import {
+  createArenaBg,
+  drawArenaBg,
+  drawScanlines,
+  tickScanlines,
+  updateArenaBg,
+  type ArenaBg,
+} from "../lib/arena-bg";
 import { drawNeon } from "../lib/neon";
 import { PALETTE } from "../lib/palette";
 import {
@@ -93,10 +101,15 @@ import { createPauseMenu } from "../lib/pause-menu";
 import { PostProcessor, DEFAULT_POST } from "../lib/postprocess";
 import { type Bounds, hitBounds } from "../lib/types";
 import {
-  bulletInsideWall,
+  addWallImpact,
+  createWallFx,
+  drawWallOverlay,
   drawWalls,
+  findContainingWall,
   resolvePlayerWallCollisions,
+  updateWallFx,
   type Wall,
+  type WallFx,
 } from "../lib/walls";
 import { TrainingDummy } from "../lib/enemies/training-dummy";
 import { createMarker } from "../lib/markers";
@@ -778,6 +791,19 @@ export function start(canvas: HTMLCanvasElement): void {
   };
 
   let currentRoom: Room = rooms.get("room0")!;
+  let arenaBg: ArenaBg = createArenaBg(
+    currentRoom.width ?? ROOM_W_PX,
+    currentRoom.height ?? ROOM_H_PX,
+  );
+  let wallFx: WallFx = createWallFx(currentRoom.walls);
+
+  function syncRoomFx() {
+    arenaBg = createArenaBg(
+      currentRoom.width ?? ROOM_W_PX,
+      currentRoom.height ?? ROOM_H_PX,
+    );
+    wallFx = createWallFx(currentRoom.walls);
+  }
 
   // overlay button bounds (CSS pixel space)
   let tryAgainBounds: Bounds | null = null;
@@ -859,6 +885,7 @@ export function start(canvas: HTMLCanvasElement): void {
     resetEyeState(player);
     snapCameraToRoom();
     syncTutorialStateForRoom();
+    syncRoomFx();
   }
 
   function transitionToRoom(id: string) {
@@ -875,6 +902,7 @@ export function start(canvas: HTMLCanvasElement): void {
     spawnPlayerInCurrentRoom();
     snapCameraToRoom();
     syncTutorialStateForRoom();
+    syncRoomFx();
   }
 
   function roomBounds(): WorldBounds {
@@ -1702,7 +1730,11 @@ export function start(canvas: HTMLCanvasElement): void {
     bullets = bullets.filter((b) => {
       if (b.x < -40 || b.x > worldW + 40) return false;
       if (b.y < -40 || b.y > worldH + 40) return false;
-      if (bulletInsideWall(b.x, b.y, currentRoom.walls)) return false;
+      const hitWall = findContainingWall(b.x, b.y, currentRoom.walls);
+      if (hitWall) {
+        addWallImpact(wallFx, b.x, b.y);
+        return false;
+      }
       return true;
     });
 
@@ -1852,6 +1884,10 @@ export function start(canvas: HTMLCanvasElement): void {
     tickHint(dt);
     checkRoomCleared();
 
+    updateArenaBg(arenaBg, dt);
+    updateWallFx(wallFx, dt);
+    tickScanlines(dt);
+
     // eye state: pupil tracks the closest threat in the room, dash ghosts
     // also spawn here while dashing
     updateEye(player, dt, {
@@ -1937,6 +1973,8 @@ export function start(canvas: HTMLCanvasElement): void {
       ctx.translate(-camera.x, -camera.y);
     }
 
+    drawArenaBg(ctx, arenaBg);
+
     // Minimalist world-space grid. Clamped to the room's logical
     // bounds so it stops at the perimeter walls and never bleeds into
     // the letterbox.
@@ -1947,6 +1985,7 @@ export function start(canvas: HTMLCanvasElement): void {
     );
 
     drawWalls(ctx, currentRoom.walls);
+    drawWallOverlay(ctx, wallFx);
     if (currentRoom.door) drawDoor(ctx, currentRoom.door);
 
     // tutorial markers — drawn after walls, before enemies. Active
@@ -2158,6 +2197,8 @@ export function start(canvas: HTMLCanvasElement): void {
     // The "completed" runState is rendered by a DOM overlay
     // (showTutorialCompleteOverlay) so the three CTAs can be real
     // anchors / buttons; no canvas overlay needed here.
+
+    drawScanlines(ctx, viewW, viewH);
   }
 
   function showTutorialCompleteOverlay(): void {

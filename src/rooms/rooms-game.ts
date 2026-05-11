@@ -75,6 +75,14 @@ import {
   type ImpactContext,
 } from "../lib/impacts";
 import { drawRoomGrid } from "../lib/grid";
+import {
+  createArenaBg,
+  drawArenaBg,
+  drawScanlines,
+  tickScanlines,
+  updateArenaBg,
+  type ArenaBg,
+} from "../lib/arena-bg";
 import { drawNeon } from "../lib/neon";
 import { PALETTE } from "../lib/palette";
 import {
@@ -106,10 +114,15 @@ import { BackgroundFx } from "../lib/bg-fx";
 import { PostProcessor, DEFAULT_POST } from "../lib/postprocess";
 import { type Bounds, hitBounds } from "../lib/types";
 import {
-  bulletInsideWall,
+  addWallImpact,
+  createWallFx,
+  drawWallOverlay,
   drawWalls,
+  findContainingWall,
   resolvePlayerWallCollisions,
+  updateWallFx,
   type Wall,
+  type WallFx,
 } from "../lib/walls";
 import { buildRoom1 } from "./room1";
 import { buildRoom2 } from "./room2";
@@ -509,6 +522,19 @@ export function start(canvas: HTMLCanvasElement): void {
   };
 
   let currentRoom: Room = rooms.get("room1")!;
+  let arenaBg: ArenaBg = createArenaBg(
+    currentRoom.width ?? ROOM_W_PX,
+    currentRoom.height ?? ROOM_H_PX,
+  );
+  let wallFx: WallFx = createWallFx(currentRoom.walls);
+
+  function syncRoomFx() {
+    arenaBg = createArenaBg(
+      currentRoom.width ?? ROOM_W_PX,
+      currentRoom.height ?? ROOM_H_PX,
+    );
+    wallFx = createWallFx(currentRoom.walls);
+  }
 
   // overlay button bounds (CSS pixel space)
   let tryAgainBounds: Bounds | null = null;
@@ -586,6 +612,7 @@ export function start(canvas: HTMLCanvasElement): void {
     applyInitialKey();
     resetEyeState(player);
     snapCameraToRoom();
+    syncRoomFx();
   }
 
   function transitionToRoom(id: string) {
@@ -601,6 +628,7 @@ export function start(canvas: HTMLCanvasElement): void {
     spawnPlayerInCurrentRoom();
     applyInitialKey();
     snapCameraToRoom();
+    syncRoomFx();
     // Sentinel owns its own intro state — entering Room 5 lands the
     // boss in `state: "intro"` from the constructor; no external
     // priming is needed.
@@ -1272,6 +1300,12 @@ export function start(canvas: HTMLCanvasElement): void {
       state.elapsed += dt;
     }
 
+    // Background + wall FX advance with realtime dt so the arena keeps
+    // breathing even when the boss / cinematic timeScale slows world sim.
+    updateArenaBg(arenaBg, dt);
+    updateWallFx(wallFx, dt);
+    tickScanlines(dt);
+
     // -------- running --------
 
     if (isActionPressed("dash", keys, keybinds)) {
@@ -1694,7 +1728,11 @@ export function start(canvas: HTMLCanvasElement): void {
     bullets = bullets.filter((b) => {
       if (b.x < -40 || b.x > worldW + 40) return false;
       if (b.y < -40 || b.y > worldH + 40) return false;
-      if (bulletInsideWall(b.x, b.y, currentRoom.walls)) return false;
+      const hitWall = findContainingWall(b.x, b.y, currentRoom.walls);
+      if (hitWall) {
+        addWallImpact(wallFx, b.x, b.y);
+        return false;
+      }
       return true;
     });
 
@@ -1871,6 +1909,11 @@ export function start(canvas: HTMLCanvasElement): void {
       ctx.translate(-camera.x, -camera.y);
     }
 
+    // DEEP FIELD background — radial gradient, parallax dots, grid
+    // pulses, radar sweeps. Painted under the grid so the foreground
+    // (bullets, enemies, player) keeps full contrast.
+    drawArenaBg(ctx, arenaBg);
+
     // Minimalist world-space grid. Clamped to the room's logical
     // bounds so it stops at the perimeter walls and never bleeds into
     // the letterbox.
@@ -1881,6 +1924,7 @@ export function start(canvas: HTMLCanvasElement): void {
     );
 
     drawWalls(ctx, currentRoom.walls);
+    drawWallOverlay(ctx, wallFx);
     if (currentRoom.door) drawDoor(ctx, currentRoom.door);
 
     // detection rings (drawn under everything so they read as a
@@ -2081,6 +2125,8 @@ export function start(canvas: HTMLCanvasElement): void {
     drawFpsOverlay(ctx, viewW);
 
     if (state.runState === "failed") drawFailedOverlay();
+
+    drawScanlines(ctx, viewW, viewH);
   }
 
   function drawBossOverlay() {
