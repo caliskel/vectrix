@@ -18,7 +18,6 @@ import {
   BLINK_CLOSE_DURATION_MS,
   DASH_DURATION_MS,
   PLAYER_MAX_SPEED,
-  PLAYER_SIZE,
   PLAYER_WALK_FACTOR,
 } from "../lib/config";
 import {
@@ -53,9 +52,17 @@ const CANVAS_W = 1200;
 const CANVAS_H = 800;
 const EYE_CX = 600;
 const EYE_CY = 420;
-const HERO_SIZE = PLAYER_SIZE;
-const HERO_SCALE_VOID = 1.8; // void render scales the hero up so the
-                             // tiny in-game size still reads cinematic
+// HERO_SIZE matches the intro cinematic (60 px) so the cached ring
+// sprite is generated at a high enough resolution to stay crisp when
+// the letterbox transform upscales the canonical canvas onto a
+// large window. The in-game PLAYER_SIZE (32) is intentionally
+// rejected here — its sprite cache is too low-res to survive the
+// 1.6×+ letterbox magnification cleanly and read as "pixelated."
+const HERO_SIZE = 60;
+// Void scene scale matches the intro's narration phase
+// (PULLBACK_SCALE_END = 0.45) so the hero sits at the same small
+// "glyph in the void" composition during the narrator beats.
+const HERO_SCALE_VOID = 0.45;
 const ACCEL_FACTOR = 9;
 const FRICTION = 8.0;
 
@@ -132,22 +139,30 @@ for (const beat of NARRATION_BEATS) {
 const PROFANITY_GLYPHS = "!@#$%&*?^~+=";
 const PROFANITY_COUNT = 6;
 
-// "TO BE CONTINUED" scramble schedule. Sized for a 15-char title at a
-// slightly slower settle than the askname so the resolution reads as
-// considered, not snappy.
+// "TO BE CONTINUED" scramble schedule. The user asked for the SAME
+// style as the tutorial's "who was that?" boot thought (default
+// drawScrambleText font + scramble effect) but recoloured to match
+// the tutorial hint banner at the bottom of the screen. Slow settle
+// reads as a deliberate end-of-act beat rather than a quick thought.
 const TBC_TEXT = "TO BE CONTINUED";
 const TBC_SCRAMBLE_SCHEDULE: ScrambleSchedule = makeScrambleSchedule({
   appearStart: 0.4,
   fadeInDuration: 0.6,
   settleDuration: 1.9,
   // Long hold — this is the final beat of the game, not a transient
-  // thought. Big honking total totalDuration so the scramble never
-  // fades back out while the player is exploring the room.
+  // thought. Big honking holdDuration so the scramble never fades
+  // back out while the player explores the room.
   holdDuration: 9_000,
   fadeOutDuration: 0.4,
 });
-const TBC_COLOR = "#22d3ee"; // turquoise / bright cyan
-const TBC_SHADOW = "#06b6d4";
+// Matches the tutorial hint banner colour (HINT_TEXT_COLOR =
+// "#7dd3fc"). Per the user's note, the "WHITE / specific font" feel
+// they want is the *scramble style* of "who was that?" — kept by
+// using drawScrambleText's default font — paired with the hint
+// banner colour for cohesion with the rest of the tutorial-style
+// presentation.
+const TBC_COLOR = "#7dd3fc";
+const TBC_SHADOW = "#7dd3fc";
 
 export type EpilogueState = {
   time: number;
@@ -252,12 +267,13 @@ function onPhaseEnter(state: EpilogueState): void {
     }
     state.profanityStart = 0;
     // Reset player velocity so the room starts still even if a stray
-    // accel slipped through from the void scene (it shouldn't, but
-    // belt-and-braces).
+    // accel slipped through from the void scene. Spawn near the
+    // bottom-centre so the hero stands clear of the "TO BE CONTINUED"
+    // title pinned at the canvas centre.
     state.hero.vx = 0;
     state.hero.vy = 0;
     state.hero.x = CANVAS_W / 2;
-    state.hero.y = CANVAS_H / 2 + 60;
+    state.hero.y = CANVAS_H - 200;
   }
 }
 
@@ -314,9 +330,11 @@ function tickRoomScene(state: EpilogueState, dt: number): void {
   }
   player.x += player.vx * dt;
   player.y += player.vy * dt;
-  // Perimeter clamp — same 30 px wall thickness as the in-game rooms
-  // so the hero stops at the same visual edge they're used to.
-  const half = PLAYER_SIZE / 2;
+  // Perimeter clamp — uses the cinematic HERO_SIZE (60) so the visual
+  // hero edge stops at the wall rather than the smaller in-game
+  // PLAYER_SIZE (32). 30 px wall thickness matches every other room
+  // in the game.
+  const half = HERO_SIZE / 2;
   const WALL_T = 30;
   const minX = WALL_T + half;
   const maxX = CANVAS_W - WALL_T - half;
@@ -448,24 +466,24 @@ function drawRoomScene(
   ctx.strokeRect(WALL_T / 2, WALL_T / 2, CANVAS_W - WALL_T, CANVAS_H - WALL_T);
   ctx.restore();
 
-  // "TO BE CONTINUED" — turquoise scramble headline near the top,
-  // resolves left-to-right via the same drawScrambleText helper the
-  // intro uses for "who am i?". Held indefinitely (long holdDuration
-  // in the schedule) so the title stays legible while the player
-  // wanders the room.
+  // "TO BE CONTINUED" — pinned to the centre of the room. Uses
+  // drawScrambleText with the DEFAULT font ("300 22px ui-monospace,
+  // SFMono-Regular, Menlo, monospace") so the scramble effect, weight
+  // and size match the tutorial's "who was that?" exactly. Colour is
+  // the tutorial hint-banner cyan so the line reads as part of the
+  // tutorial visual language. Resolves left-to-right, then holds
+  // legible while the player walks the room.
   drawScrambleText(
     ctx,
     TBC_TEXT,
     state.profanityStart,
     TBC_SCRAMBLE_SCHEDULE,
     CANVAS_W / 2,
-    180,
+    CANVAS_H / 2,
     {
       color: TBC_COLOR,
       shadowColor: TBC_SHADOW,
-      shadowBlur: 14,
-      font:
-        "500 56px ui-monospace, 'SF Mono', Consolas, 'Liberation Mono', monospace",
+      shadowBlur: 6,
     },
   );
 
