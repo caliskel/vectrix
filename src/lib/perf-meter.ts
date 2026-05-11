@@ -17,6 +17,13 @@
 // route, this is its companion).
 
 const SECTIONS = [
+  // === update pass ===
+  "update",
+  "upd_enemies",
+  "upd_bullets",
+  "upd_player",
+  "upd_audio",
+  // === render pass ===
   "bg",
   "energy",
   "bgtext",

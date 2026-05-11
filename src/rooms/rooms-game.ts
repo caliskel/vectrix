@@ -1300,6 +1300,8 @@ export function start(canvas: HTMLCanvasElement): void {
       return;
     }
 
+    perfBegin("update");
+
     // Post-tutorial fade-in and boot thought. Both only tick when the
     // player arrived from tutorial; menu entries leave both at zero.
     if (roomsFadeIn > 0) {
@@ -1789,11 +1791,13 @@ export function start(canvas: HTMLCanvasElement): void {
     // freshly-promoted aggro state immediately. Trigger ctx lets the
     // awareness module spawn the alert ring + particle burst directly
     // into the per-room lists.
+    perfBegin("upd_enemies");
     const awarenessTrigger = { particles, rings };
     for (const e of currentRoom.enemies) {
       updateEnemyAwareness(e, player.x, player.y, dt, awarenessTrigger);
     }
     for (const e of currentRoom.enemies) e.update(enemyCtx);
+    perfEnd("upd_enemies");
 
     // Sentinel transitions (combat → dying → defeated) drive score
     // and the Game Complete overlay; pendingShake* gets drained.
@@ -1924,6 +1928,7 @@ export function start(canvas: HTMLCanvasElement): void {
     }
 
     // bullet movement + wall expiry (no bouncing in rooms)
+    perfBegin("upd_bullets");
     for (const b of bullets) {
       b.x += b.vx * dt;
       b.y += b.vy * dt;
@@ -1996,6 +2001,7 @@ export function start(canvas: HTMLCanvasElement): void {
         }
       }
     }
+    perfEnd("upd_bullets");
 
     // key tick + pickup
     if (currentKey) {
@@ -2091,6 +2097,7 @@ export function start(canvas: HTMLCanvasElement): void {
       roomBounds(),
     );
 
+    perfEnd("update");
     render();
     requestAnimationFrame(frame);
   }
