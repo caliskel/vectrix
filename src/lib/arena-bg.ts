@@ -91,6 +91,14 @@ export type ArenaBg = {
   sweeps: RadarSweep[];
   pulseTimer: number;
   sweepTimer: number;
+  // Pre-baked light sprite (spark glow + vignette stacked) — blitted
+  // at the player position each frame to avoid recomputing two full-
+  // arena radial gradient fills per frame (the dominant cost on the
+  // bigger camera rooms before this cache). Built lazily on first
+  // draw because document isn't always available at createArenaBg
+  // call time (e.g. during module init in tests).
+  lightSprite: HTMLCanvasElement | null;
+  lightSpriteHalf: number;
 };
 
 export function createArenaBg(width: number, height: number): ArenaBg {
@@ -112,7 +120,51 @@ export function createArenaBg(width: number, height: number): ArenaBg {
     sweeps: [],
     pulseTimer: pickInterval(GRID_PULSE_INTERVAL_MIN, GRID_PULSE_INTERVAL_MAX) * 0.5,
     sweepTimer: pickInterval(RADAR_SWEEP_INTERVAL_MIN, RADAR_SWEEP_INTERVAL_MAX) * 0.5,
+    lightSprite: null,
+    lightSpriteHalf: 0,
   };
+}
+
+// Pre-render the combined spark glow + vignette into a square canvas
+// big enough to cover the radial gradient extents. Drawn each frame
+// at the player position via drawImage, eliminating two full-arena
+// radial-gradient fillRect passes that were costing ~5-8ms on the
+// bigger camera rooms.
+function buildLightSprite(width: number, height: number): {
+  sprite: HTMLCanvasElement | null;
+  half: number;
+} {
+  if (typeof document === "undefined") return { sprite: null, half: 0 };
+  const sparkRadius = Math.max(width, height) * 0.45;
+  const vignetteOuter = Math.max(width, height) * 0.85;
+  // Sprite has to cover the larger of the two radii to avoid edge
+  // clipping. Add a small pad so the gradient's last stop is exactly
+  // transparent at the sprite border.
+  const half = Math.ceil(vignetteOuter) + 4;
+  const size = half * 2;
+  const c = document.createElement("canvas");
+  c.width = size;
+  c.height = size;
+  const ctx = c.getContext("2d");
+  if (!ctx) return { sprite: null, half: 0 };
+  // Spark glow — small inner halo.
+  const spark = ctx.createRadialGradient(half, half, 0, half, half, sparkRadius);
+  spark.addColorStop(0, RADIAL_INNER_RGBA);
+  spark.addColorStop(1, RADIAL_OUTER_RGBA);
+  ctx.fillStyle = spark;
+  ctx.fillRect(0, 0, size, size);
+  // Vignette — pushes far edges to near-black. Inner stop at 0.35
+  // of max(w,h) so the dark band lands the same on any aspect.
+  const vignetteInner = Math.max(width, height) * 0.35;
+  const vignette = ctx.createRadialGradient(
+    half, half, vignetteInner,
+    half, half, vignetteOuter,
+  );
+  vignette.addColorStop(0, VIGNETTE_INNER_RGBA);
+  vignette.addColorStop(1, VIGNETTE_OUTER_RGBA);
+  ctx.fillStyle = vignette;
+  ctx.fillRect(0, 0, size, size);
+  return { sprite: c, half };
 }
 
 export function updateArenaBg(bg: ArenaBg, dt: number): void {
@@ -228,38 +280,25 @@ export function drawArenaBg(
 ): void {
   const { width: w, height: h } = bg;
 
-  // 1. Radial gradient — anchored at the light source (the player's
-  // spark when provided; otherwise arena center as fallback). Tying
-  // the light to the player reframes the world from "arena with a
-  // centered glow" to "dark hall around the one consciousness still
-  // burning". Critical visual for the dead-network theme.
+  // 1. Combined spark glow + vignette — pre-baked into one sprite
+  // (lazy on first draw) and blitted at the light anchor. Replaces
+  // two full-arena radial-gradient fillRects per frame.
   const lx = lightAnchor ? lightAnchor.x : w / 2;
   const ly = lightAnchor ? lightAnchor.y : h / 2;
-  const sparkRadius = Math.max(w, h) * 0.45;
-  const sparkGrad = ctx.createRadialGradient(lx, ly, 0, lx, ly, sparkRadius);
-  sparkGrad.addColorStop(0, RADIAL_INNER_RGBA);
-  sparkGrad.addColorStop(1, RADIAL_OUTER_RGBA);
   ctx.save();
   ctx.shadowBlur = 0;
-  ctx.fillStyle = sparkGrad;
-  ctx.fillRect(0, 0, w, h);
-
-  // 1b. Vignette — same anchor; pushes the far edges into deeper
-  // darkness so the spark reads as the only light source.
-  const vignetteInner = Math.max(w, h) * 0.35;
-  const vignetteOuter = Math.max(w, h) * 0.85;
-  const vignetteGrad = ctx.createRadialGradient(
-    lx,
-    ly,
-    vignetteInner,
-    lx,
-    ly,
-    vignetteOuter,
-  );
-  vignetteGrad.addColorStop(0, VIGNETTE_INNER_RGBA);
-  vignetteGrad.addColorStop(1, VIGNETTE_OUTER_RGBA);
-  ctx.fillStyle = vignetteGrad;
-  ctx.fillRect(0, 0, w, h);
+  if (!bg.lightSprite) {
+    const baked = buildLightSprite(bg.width, bg.height);
+    bg.lightSprite = baked.sprite;
+    bg.lightSpriteHalf = baked.half;
+  }
+  if (bg.lightSprite) {
+    ctx.drawImage(
+      bg.lightSprite,
+      lx - bg.lightSpriteHalf,
+      ly - bg.lightSpriteHalf,
+    );
+  }
 
   // 2. Parallax dots — back to front so brighter near-layer paints on top.
   for (let i = 0; i < DOT_LAYERS.length; i++) {
