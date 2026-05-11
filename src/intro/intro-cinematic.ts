@@ -296,18 +296,36 @@ function tickPhase(state: IntroState, dt: number): void {
       break;
     }
     case "awaken": {
-      // Finish iris colour shift in the first ~30% of the phase.
+      // Iris / ring / lid colour finishes shifting in the first ~30%.
       state.heroIrisT = Math.min(1, state.heroIrisT + dt / 0.6);
       // Bloom decays as the body becomes the only luminous element.
       state.heroBloom = Math.max(0, 1 - u * 0.7);
-      // Slow lid-lift during 25% → 95%.
-      const openU =
-        u < 0.25 ? 0 : u > 0.95 ? 1 : (u - 0.25) / 0.7;
-      state.heroBlinkOpenT = openU;
-      // Final scale push to full.
+      // Final scale push.
       state.heroScale = lerp(0.82, HERO_SCALE_FULL, easeOutCubic(u));
-      // Hand control back to the engine right at the end — it'll
-      // schedule natural blinks during askname.
+      // Eye-opening choreography — five staged beats across the 2 s
+      // phase instead of a single linear sweep. Reads as a real
+      // waking eye: hesitate, crack, hold, snap, settle.
+      //   0.00–0.12 : hold closed with a faint micro-tremor (the
+      //               body "deciding" to wake)
+      //   0.12–0.26 : drowsy crack to ~18 % open
+      //   0.26–0.40 : hold the crack with a tiny breath wobble
+      //   0.40–0.60 : snap open (easeOutCubic) all the way to 100 %
+      //   0.60–1.00 : wide open. Engine handoff at 0.95 so it can
+      //               schedule natural blinks during askname.
+      if (u < 0.12) {
+        const wiggle = Math.sin(state.time * 24) * 0.015;
+        state.heroBlinkOpenT = Math.max(0, wiggle);
+      } else if (u < 0.26) {
+        const k = (u - 0.12) / 0.14;
+        state.heroBlinkOpenT = easeOutCubic(k) * 0.18;
+      } else if (u < 0.40) {
+        state.heroBlinkOpenT = 0.18 + Math.sin(state.time * 5.5) * 0.012;
+      } else if (u < 0.60) {
+        const k = (u - 0.40) / 0.20;
+        state.heroBlinkOpenT = 0.18 + easeOutCubic(k) * (1 - 0.18);
+      } else {
+        state.heroBlinkOpenT = 1;
+      }
       if (u >= 0.95 && state.heroFrozen) {
         state.heroFrozen = false;
         state.hero.blinkActive = false;
@@ -689,18 +707,20 @@ function drawHeroBloom(
 }
 
 function drawHero(ctx: CanvasRenderingContext2D, state: IntroState): void {
-  // Same drawPlayerEye used in gameplay. Three colour fields lerp
-  // from dormant black/slate to the profile palette over heroIrisT,
-  // so the same renderer covers both the empty-shell silhouette and
-  // the awakened hero without any state-handoff.
+  // Same drawPlayerEye used in gameplay. EVERY body colour lerps from
+  // dormant black/slate to the profile palette over heroIrisT, so the
+  // same renderer covers both the empty-shell silhouette and the
+  // awakened hero. Critically the pupil is also lerped — drawPlayerEye
+  // draws the iris/pupil/highlight BEFORE clipping in the eyelids,
+  // and the eyelid seam at y=0 leaks a sub-pixel hairline of whatever
+  // sits underneath. If the pupil stayed white during dormant, that
+  // hairline read as a bright white horizontal line through a
+  // pitch-black eye.
   const ringColor = lerpHex(
     RING_DORMANT_HEX,
     state.heroProfile.outerRing,
     state.heroIrisT,
   );
-  // Lid colour MUST track the ring so the seam between the two
-  // eyelid halves doesn't expose the underlying iris as a hairline
-  // when the eye is mid-blink.
   const lidColor = lerpHex(
     DORMANT_HEX,
     state.heroProfile.outerRing,
@@ -711,11 +731,16 @@ function drawHero(ctx: CanvasRenderingContext2D, state: IntroState): void {
     state.heroProfile.iris,
     state.heroIrisT,
   );
+  const pupilColor = lerpHex(
+    DORMANT_HEX,
+    state.heroProfile.pupil,
+    state.heroIrisT,
+  );
   const profile: PlayerProfile = { ...state.heroProfile, iris };
   const size = HERO_SIZE * state.heroScale;
   drawPlayerEye(ctx, state.hero, size, {
     ringColor,
-    pupilColor: state.heroProfile.pupil,
+    pupilColor,
     ghostColor: state.heroProfile.outerRing,
     dashDurationSec: DASH_DURATION_MS / 1000,
     profile,
