@@ -259,33 +259,142 @@ best-score keys: `dash-prototype:score:Default|Easy|Normal|Hard`.
 
 ## Main menu structure
 
-`index.html` is the landing page that picks between the modes and a
-couple of side panels. Same neon palette as the rest of the game,
-zero framework — pure HTML / CSS / a small TS module
-(`src/landing/main.ts`).
+`index.html` is the VECTRIX landing page — full-viewport retrofuture
+arcade menu, animated bg, animated logo, eye preview, six menu
+buttons, footer. Pure HTML / CSS / TS (`src/landing/main.ts` plus a
+canvas helper at `src/landing/menu-bg.ts`). Fonts: `Orbitron` for
+display (the logo, overlay titles) and `Space Mono` for body /
+labels / buttons, loaded from Google Fonts with `Courier New` /
+generic monospace fallbacks.
 
-Layout: two stacked grids under the DASH title.
+Vertical column layout, centered:
 
-**Row 1 — play modes** (`.modes`, 3 columns, large cards):
+  LOGO → TAGLINE → EYE-PREVIEW → BUTTON STACK → FOOTER
 
-| card     | accent             | action                                             |
-| -------- | ------------------ | -------------------------------------------------- |
-| TUTORIAL | green `#4ade80`    | `<a href="/tutorial.html">` (locked → unlock copy) |
-| ROOMS    | cyan `--player-dash` | `<a href="/rooms.html">` (locked until tutorial)  |
-| SANDBOX  | purple `--player`  | `<a href="/sandbox.html">`                         |
+**Animated background** (`menu-bg.ts`) — full-viewport canvas pinned
+behind the menu via `position: fixed; z-index: 0`. Five layered
+effects driven by one rAF loop:
 
-**Row 2 — utilities** (`.utilities`, 3 columns, shorter cards):
+1. Solid `PALETTE.bg` fill + a soft radial gradient from center
+   (~40, 60, 100, alpha 0.22 at center → transparent) for depth.
+2. Faint cyan grid (80 px spacing, color `rgba(0, 229, 255, 0.06)`)
+   that scrolls diagonally at ~18 / 14 px/s.
+3. Horizontal scanlines (4 px spacing, color `rgba(255, 255, 255,
+   0.025)`) scrolling down at 30 px/s — CRT feel.
+4. 16 dust particles (1–2 px white, alpha 0.15) drifting at
+   5–15 px/s in random directions, looping at edges.
+5. Glitch overlays. Micro-glitches every 8–15 s: a horizontal strip
+   (20–40 px tall) is `drawImage`d onto itself with an 8–20 px
+   horizontal offset + red tint (`rgba(255, 45, 85, 0.18)` via
+   source-atop composite) for 80 ms — CRT tearing. Big glitches
+   every 30–60 s: full-screen white flash (alpha 0.08) for 60 ms +
+   the caller-provided `onBigGlitch` callback fires for an audio
+   crackle cue.
 
-| card     | accent             | action                                             |
-| -------- | ------------------ | -------------------------------------------------- |
-| PLAYER   | yellow `#ffd60a`   | opens the Player overlay (color picker + preview)  |
-| CONTROLS | cyan `#7dd3fc`     | opens the Controls overlay (keybind editor)        |
-| ABOUT    | neutral `--text`   | opens the About overlay (cheat sheet)              |
+**VECTRIX logo** — `<h1 class="logo">` with one `<span class="logo-
+letter" data-letter="V">…</span>` per letter. CSS handles three
+animations:
 
-All overlays share the same dark backdrop (`rgba(10,14,26,0.92)` +
-backdrop-filter blur), a centered frame, an `×` corner button, and
-the global Esc handler. Tab is preventDefault'd while any overlay
-is open so focus doesn't leak under the modal.
+- **Letter entrance** — each letter starts opacity 0 / scale 1.3 and
+  runs `@keyframes letter-enter` (280 ms cubic-bezier, "pop").
+  `main.ts` stamps `animation-delay` on each letter (80 ms apart)
+  so they cascade in.
+- **Breathing** — infinite `@keyframes logo-breathing` swells the
+  text-shadow glow over 2.5 s (white core + cyan halo ±50 %).
+- **RGB-split glitch** — when `main.ts` adds `.glitch` to the logo
+  for 60 ms (or 200 ms for the rare longer one, ~15 % roll), the
+  `::before` / `::after` pseudo-elements paint a red copy 4 px left
+  and a cyan copy 4 px right (both alpha 0.55), and the whole logo
+  shifts 6 px right. Triggered on a 10–25 s random interval via
+  `scheduleLogoGlitch()`.
+
+Glow recipe (also used in the breathing keyframe):
+`0 0 8px rgba(255,255,255,0.9), 0 0 20px rgba(0,229,255,0.6),
+0 0 40px rgba(0,229,255,0.3)`.
+
+**Tagline** — "vector odyssey" in Space Mono 18 px / letter-spacing
+6 px / `rgba(125, 211, 252, 0.7)`. Fades in 600 ms after the logo
+starts (matches the cascade end).
+
+**Eye preview** — 200 × 200 canvas (`#eye-preview-canvas`) with a
+cyan circle ring (`.eye-preview-ring`, 90 px radius outline at alpha
+0.2) framing it. Reuses `createPlayer` / `updateEye` / `drawPlayerEye`
+from `lib/player.ts`: a `Player` is created at canvas center, the
+window-level `mousemove` listener captures global cursor coords,
+and each rAF tick converts them into canvas-local coords (via
+`getBoundingClientRect`) for the `threat` argument to `updateEye`.
+When the pointer hasn't been seen yet or is far outside the canvas
+(±200 px), `threat` is `null` and the eye falls back to idle-look
+behavior. Colors are read from `loadPlayerProfile()` and refreshed
+on `storage` events + on Save in the Player overlay (same tab).
+
+**Menu button stack** — `.menu-buttons` flex column, six rows. Each
+`.menu-btn` is an `<a>` or `<button>` (overlay launchers are
+buttons), shape: `▶  LABEL / subtitle`, 60–70 px tall. Three
+visual states:
+
+- **Idle**: bg `rgba(20, 25, 43, 0.5)`, border `rgba(255, 255, 255,
+  0.1)`, label white 24 px / letter-spacing 4 px, subtitle muted
+  slate 12 px.
+- **Hover / focus** (`:hover:not(.locked)`): bg `rgba(0, 229, 255,
+  0.1)`, border cyan, label gets a cyan text-shadow, the ▶ arrow
+  translates 6 px right via CSS transition, and the whole button
+  scales 1.02. All transitions 200 ms.
+- **Locked** (only on PLAY ROOMS while tutorial isn't completed):
+  alpha 0.4, cursor `not-allowed`, hover ignored, subtitle text
+  swaps to "🔒 Complete tutorial first". When the tutorial-completed
+  flag flips (this tab via the local Save path or another tab via
+  `storage`), `applyTutorialState()` re-renders the button state.
+
+Entrance: each button cascades in 100 ms apart starting at 1100 ms
+(after the logo / tagline land). `main.ts` stamps the per-button
+`animation-delay` inline and adds the `.entered` class to swap in
+the `@keyframes btn-in` (translateY 20 → 0, opacity 0 → 1, 400 ms).
+
+Click feedback: the `.flash` overlay inside each button gets the
+`btn-flash` keyframe (cyan alpha 0.3 → 0 over 200 ms) on every
+click. For anchor buttons (Tutorial / Rooms / Sandbox), `main.ts`
+preventDefaults the navigation and re-schedules `window.location.href
+= href` after 120 ms so the flash + click sound play before the
+page swaps. Overlay buttons open the overlay immediately; the flash
+animates on top.
+
+Button list:
+
+| id            | label       | subtitle                              | target              |
+| ------------- | ----------- | ------------------------------------- | ------------------- |
+| `btn-tutorial`| TUTORIAL    | "Learn the basics" / "Replay tutorial"| `/tutorial.html`    |
+| `btn-rooms`   | PLAY ROOMS  | "Story mode" / "🔒 Complete tutorial first" (locked) | `/rooms.html` |
+| —             | SANDBOX     | "Practice freely"                      | `/sandbox.html`     |
+| —             | PLAYER      | "Customize your character"             | opens Player overlay|
+| —             | CONTROLS    | "Rebind keys"                          | opens Controls ovl. |
+| —             | ABOUT       | "Credits and info"                     | opens About overlay |
+
+**UI sounds** — every non-locked button fires `audio.play.uiHover()`
+on mouseenter / focus and `audio.play.uiClick()` on click. The
+menu bg's `onBigGlitch` callback also fires `audio.play.uiStatic()`
+so the visual flash is paired with a CRT-style noise crackle. Setup
+methods live in `audio.ts` (`setupUiCues`): hover is a bit-crushed
+880 Hz triangle tick (-8 dB master, 30 ms decay), click is a
+bit-crushed 440 Hz triangle with a faux-chorus second voice at
++12 cents (~452 Hz, +3 ms offset), and static is a tight bandpassed
+white-noise burst.
+
+**Footer** — under the buttons: a 200 px wide `rgba(255,255,255,
+0.1)` divider, then "version 0.1 — vectrix" in Space Mono 11 px,
+letter-spacing 2 px, muted slate alpha 0.4. Fades in last (1500 ms
+after page load).
+
+**Overlays — same as before.** Player / Controls / About markup +
+behavior unchanged from the previous design: same dark backdrop
+(`rgba(10,14,26,0.92)` + backdrop-filter blur), centered frame,
+`×` corner button, global Esc handler. Tab is preventDefault'd
+while any overlay is open so focus doesn't leak under the modal.
+
+Mobile layout: at `max-width: 600px` the logo shrinks
+(`clamp(40px, 14vw, 80px)` + letter-spacing 6 px), tagline tightens
+(14 px / spacing 4 px), eye preview drops to 150 px, and button
+labels shrink to 20 px / spacing 3 px. Vertical column stays.
 
 ### Player overlay
 

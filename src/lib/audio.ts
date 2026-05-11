@@ -110,6 +110,12 @@ class AudioEngine {
   private bossRingDetachSynth?: Synth;
   private bossRingDetachFilter?: Filter;
 
+  // Menu UI cues — short ticks for hover / click on the landing
+  // page. Bit-crushed for that retrofuture arcade tone.
+  private uiHoverSynth?: Synth;
+  private uiClickSynth?: Synth;
+  private uiStaticNoise?: NoiseSynth; // big-glitch flash crackle
+
   // Sound 7: mult tier up
   private multSynth?: Synth;
 
@@ -157,6 +163,7 @@ class AudioEngine {
     this.setupBossSweepReverse();
     this.setupBossEyeHit();
     this.setupBossRingDetach();
+    this.setupUiCues();
     this.setupMultUp();
     this.setupRunEnd();
     // Any tracks registered before init() get loaded now.
@@ -747,6 +754,9 @@ class AudioEngine {
       this.bossEyeHitNoise?.triggerRelease();
       this.bossRingDetachMembrane?.triggerRelease();
       this.bossRingDetachSynth?.triggerRelease();
+      this.uiHoverSynth?.triggerRelease();
+      this.uiClickSynth?.triggerRelease();
+      this.uiStaticNoise?.triggerRelease();
       this.multSynth?.triggerRelease();
       this.endSynth?.releaseAll();
     } catch {}
@@ -790,6 +800,9 @@ class AudioEngine {
     bossSweepReverse: (high: boolean): void => this.playBossSweepReverse(high),
     bossEyeHit: (): void => this.playBossEyeHit(),
     bossRingDetach: (): void => this.playBossRingDetach(),
+    uiHover: (): void => this.playUiHover(),
+    uiClick: (): void => this.playUiClick(),
+    uiStatic: (): void => this.playUiStatic(),
     smash: (strength: number): void => this.playSmash(strength),
     multUp: (tier: number): void => this.playMultUp(tier),
     runEnd: (): void => this.playRunEnd(),
@@ -1091,6 +1104,35 @@ class AudioEngine {
     } catch {}
   }
 
+  // Menu UI cues. Hover: tight 880 Hz triangle through crusher,
+  // very quiet. Click: 440 Hz triangle through crusher + soft
+  // chorus-like detune via two-voice retrigger. Static: short
+  // bandpassed white-noise burst for the bg big-glitch flash.
+  private setupUiCues(): void {
+    const hoverCrusher = new BitCrusher(4).connect(this.sfx!);
+    this.uiHoverSynth = new Synth({
+      oscillator: { type: "triangle" },
+      envelope: { attack: 0.001, decay: 0.04, sustain: 0, release: 0.01 },
+      volume: -8,
+    }).connect(hoverCrusher);
+    const clickCrusher = new BitCrusher(5).connect(this.sfx!);
+    this.uiClickSynth = new Synth({
+      oscillator: { type: "triangle" },
+      envelope: { attack: 0.001, decay: 0.1, sustain: 0, release: 0.03 },
+      volume: -4,
+    }).connect(clickCrusher);
+    const staticBp = new Filter({
+      type: "bandpass",
+      frequency: 2400,
+      Q: 1.4,
+    }).connect(this.sfx!);
+    this.uiStaticNoise = new NoiseSynth({
+      noise: { type: "white" },
+      envelope: { attack: 0.001, decay: 0.05, sustain: 0, release: 0.02 },
+      volume: -12,
+    }).connect(staticBp);
+  }
+
   private playBossRingDetach(): void {
     if (!this.bossRingDetachMembrane || !this.bossRingDetachSynth) return;
     if (!this.bossRingDetachFilter) return;
@@ -1113,6 +1155,31 @@ class AudioEngine {
         t + 0.5,
       );
       this.bossRingDetachSynth.triggerAttackRelease(120, 0.5, t, 0.7);
+    } catch {}
+  }
+
+  private playUiHover(): void {
+    if (!this.uiHoverSynth) return;
+    try {
+      this.uiHoverSynth.triggerAttackRelease(880, 0.03, toneNow(), 0.4);
+    } catch {}
+  }
+
+  private playUiClick(): void {
+    if (!this.uiClickSynth) return;
+    try {
+      const t = toneNow();
+      this.uiClickSynth.triggerAttackRelease(440, 0.08, t, 0.6);
+      // Faux-chorus — second voice a quartertone up at -3 ms gives a
+      // light shimmer without a real Chorus node.
+      this.uiClickSynth.triggerAttackRelease(452, 0.08, t + 0.003, 0.4);
+    } catch {}
+  }
+
+  private playUiStatic(): void {
+    if (!this.uiStaticNoise) return;
+    try {
+      this.uiStaticNoise.triggerAttackRelease(0.04, toneNow(), 0.5);
     } catch {}
   }
 

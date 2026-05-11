@@ -4,6 +4,12 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>VECTRIX</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Space+Mono:wght@400;700&display=swap"
+      rel="stylesheet"
+    />
     <style>
       :root {
         --bg: #0a0e1a;
@@ -14,188 +20,272 @@
         --bullet: #ff2d55;
         --muted: #7d8590;
         --text: #cbd5e1;
+        --font-display: "Orbitron", "Space Mono", "Courier New", monospace;
+        --font-mono: "Space Mono", "Courier New", ui-monospace, monospace;
       }
       * { box-sizing: border-box; }
       html, body {
         margin: 0;
         padding: 0;
-        height: 100%;
+        min-height: 100%;
+        width: 100%;
         background: var(--bg);
-        font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        font-family: var(--font-mono);
         color: var(--text);
-        background-image:
-          linear-gradient(var(--grid) 1px, transparent 1px),
-          linear-gradient(90deg, var(--grid) 1px, transparent 1px);
-        background-size: 60px 60px;
-        background-position: 0 0;
-      }
-      body {
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        flex-direction: column;
-        gap: 36px;
-        overflow: hidden;
-      }
-      .title {
-        font-size: clamp(72px, 14vw, 168px);
-        font-weight: 700;
-        letter-spacing: 0.18em;
-        margin: 0;
-        color: var(--player);
-        text-shadow:
-          0 0 8px var(--player),
-          0 0 24px var(--player),
-          0 0 56px rgba(168, 85, 247, 0.45);
-        user-select: none;
-      }
-      .subtitle {
-        margin-top: -22px;
-        font-size: 13px;
-        letter-spacing: 0.5em;
-        text-transform: uppercase;
-        color: var(--muted);
-        opacity: 0.7;
-      }
-      .menu-stack {
-        display: flex;
-        flex-direction: column;
-        gap: 16px;
-      }
-      .modes {
-        display: grid;
-        grid-template-columns: repeat(3, minmax(200px, 220px));
-        gap: 22px;
-        justify-content: center;
-      }
-      @media (max-width: 760px) {
-        .modes {
-          grid-template-columns: repeat(2, minmax(200px, 220px));
-        }
-      }
-      /* Utility row — same column count as `.modes` but shorter
-         cards so the visual hierarchy reads "play modes on top,
-         tools on the bottom." */
-      .utilities {
-        display: grid;
-        grid-template-columns: repeat(3, minmax(150px, 180px));
-        gap: 14px;
-        justify-content: center;
-      }
-      @media (max-width: 760px) {
-        .utilities {
-          grid-template-columns: repeat(2, minmax(150px, 180px));
-        }
-      }
-      .mode {
-        display: block;
-        text-align: left;
-        text-decoration: none;
-        color: var(--text);
-        font-family: inherit;
-        background: rgba(20, 25, 43, 0.65);
-        border: 1px solid rgba(216, 180, 254, 0.18);
-        border-radius: 10px;
-        padding: 22px 26px;
-        cursor: pointer;
-        transition: transform 0.15s, border-color 0.15s, box-shadow 0.15s;
-      }
-      .mode:hover {
-        transform: translateY(-2px);
-        border-color: var(--player-dash);
-        box-shadow: 0 0 0 1px rgba(216, 180, 254, 0.2),
-          0 18px 40px rgba(168, 85, 247, 0.18);
-      }
-      .mode .label {
-        font-size: 22px;
-        font-weight: 600;
-        letter-spacing: 0.2em;
-      }
-      .mode .desc {
-        margin-top: 8px;
-        font-size: 12px;
-        color: var(--muted);
-        letter-spacing: 0.04em;
-      }
-      /* Utility-row cards are shorter + use a smaller label so
-         they read as secondary against the play modes above. */
-      .utility {
-        display: block;
-        text-align: left;
-        text-decoration: none;
-        color: var(--text);
-        font-family: inherit;
-        background: rgba(20, 25, 43, 0.55);
-        border: 1px solid rgba(216, 180, 254, 0.14);
-        border-radius: 8px;
-        padding: 14px 18px;
-        cursor: pointer;
-        transition: transform 0.15s, border-color 0.15s, box-shadow 0.15s;
-      }
-      .utility:hover {
-        transform: translateY(-2px);
-        border-color: rgba(125, 211, 252, 0.55);
-        box-shadow: 0 0 0 1px rgba(125, 211, 252, 0.15),
-          0 14px 28px rgba(125, 211, 252, 0.12);
-      }
-      .utility .label {
-        font-size: 16px;
-        font-weight: 600;
-        letter-spacing: 0.18em;
-      }
-      .utility .desc {
-        margin-top: 4px;
-        font-size: 11px;
-        color: var(--muted);
-        letter-spacing: 0.04em;
-      }
-      .utility--player .label {
-        color: var(--player-yellow);
-        text-shadow: 0 0 10px rgba(255, 214, 10, 0.45);
-      }
-      .utility--controls .label {
-        color: var(--player-dash);
-        text-shadow: 0 0 10px rgba(125, 211, 252, 0.5);
-      }
-      .utility--about .label {
-        color: var(--text);
-        text-shadow: 0 0 10px rgba(203, 213, 225, 0.3);
-      }
-      .mode--sandbox .label {
-        color: var(--player);
-        text-shadow: 0 0 12px rgba(168, 85, 247, 0.55);
-      }
-      .mode--rooms .label {
-        color: var(--player-dash);
-        text-shadow: 0 0 12px rgba(0, 229, 255, 0.5);
-      }
-      .mode--tutorial .label {
-        color: #4ade80;
-        text-shadow: 0 0 12px rgba(74, 222, 128, 0.55);
-      }
-      .mode.locked {
-        opacity: 0.45;
-        cursor: not-allowed;
-        pointer-events: none;
-      }
-      .mode.locked .label {
-        text-shadow: none;
-      }
-      .mode--player .label {
-        color: var(--player-yellow);
-        text-shadow: 0 0 12px rgba(255, 214, 10, 0.5);
-      }
-      .version {
-        position: fixed;
-        bottom: 14px;
-        right: 18px;
-        font-size: 11px;
-        color: var(--muted);
-        opacity: 0.6;
-        letter-spacing: 0.08em;
+        overflow-x: hidden;
+        overflow-y: auto;
       }
 
-      /* === Overlays === */
+      /* Full-viewport canvas behind everything. menu-bg.ts paints it. */
+      #menu-bg-canvas {
+        position: fixed;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        z-index: 0;
+        pointer-events: none;
+      }
+
+      .menu-shell {
+        position: relative;
+        z-index: 1;
+        width: 100%;
+        min-height: 100vh;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 32px 24px;
+        gap: 18px;
+      }
+
+      /* === Logo === */
+      .logo {
+        font-family: var(--font-display);
+        font-weight: 700;
+        font-size: clamp(56px, 12vw, 120px);
+        letter-spacing: 10px;
+        color: #ffffff;
+        margin: 0;
+        display: inline-flex;
+        line-height: 1;
+        user-select: none;
+        text-shadow:
+          0 0 8px rgba(255, 255, 255, 0.9),
+          0 0 20px rgba(0, 229, 255, 0.6),
+          0 0 40px rgba(0, 229, 255, 0.3);
+        animation: logo-breathing 2.5s ease-in-out infinite;
+      }
+      @keyframes logo-breathing {
+        0%, 100% {
+          text-shadow:
+            0 0 8px rgba(255, 255, 255, 0.9),
+            0 0 20px rgba(0, 229, 255, 0.6),
+            0 0 40px rgba(0, 229, 255, 0.3);
+        }
+        50% {
+          text-shadow:
+            0 0 12px rgba(255, 255, 255, 1),
+            0 0 28px rgba(0, 229, 255, 0.85),
+            0 0 56px rgba(0, 229, 255, 0.45);
+        }
+      }
+      .logo-letter {
+        position: relative;
+        display: inline-block;
+        opacity: 0;
+        transform: scale(1.3);
+        animation: letter-enter 280ms cubic-bezier(0.2, 1.2, 0.4, 1) forwards;
+      }
+      @keyframes letter-enter {
+        0% { opacity: 0; transform: scale(1.3); }
+        60% { opacity: 1; }
+        100% { opacity: 1; transform: scale(1); }
+      }
+      /* RGB-split glitch — toggled by main.ts adding/removing the class. */
+      .logo.glitch {
+        transform: translateX(6px);
+      }
+      .logo.glitch .logo-letter::before,
+      .logo.glitch .logo-letter::after {
+        content: attr(data-letter);
+        position: absolute;
+        top: 0;
+        left: 0;
+        pointer-events: none;
+      }
+      .logo.glitch .logo-letter::before {
+        color: rgba(255, 45, 85, 0.55);
+        transform: translateX(-4px);
+        text-shadow: none;
+      }
+      .logo.glitch .logo-letter::after {
+        color: rgba(0, 229, 255, 0.55);
+        transform: translateX(4px);
+        text-shadow: none;
+      }
+
+      .tagline {
+        font-family: var(--font-mono);
+        font-size: 18px;
+        letter-spacing: 6px;
+        text-transform: lowercase;
+        color: rgba(125, 211, 252, 0.7);
+        margin: 0;
+        opacity: 0;
+        animation: tagline-in 500ms ease-out 600ms forwards;
+        user-select: none;
+      }
+      @keyframes tagline-in {
+        from { opacity: 0; transform: translateY(6px); }
+        to   { opacity: 1; transform: translateY(0); }
+      }
+
+      /* === Eye preview === */
+      .eye-preview-wrap {
+        width: 200px;
+        height: 200px;
+        position: relative;
+        opacity: 0;
+        animation: tagline-in 600ms ease-out 900ms forwards;
+      }
+      .eye-preview-ring {
+        position: absolute;
+        inset: 10px;
+        border-radius: 50%;
+        border: 1px solid rgba(0, 229, 255, 0.2);
+        pointer-events: none;
+      }
+      #eye-preview-canvas {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        display: block;
+      }
+
+      /* === Menu buttons === */
+      .menu-buttons {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        width: min(440px, 92vw);
+      }
+      .menu-btn {
+        display: grid;
+        grid-template-columns: 22px 1fr;
+        align-items: center;
+        gap: 16px;
+        padding: 14px 24px;
+        background: rgba(20, 25, 43, 0.5);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 4px;
+        color: var(--text);
+        text-decoration: none;
+        font-family: var(--font-mono);
+        cursor: pointer;
+        text-align: left;
+        overflow: hidden;
+        position: relative;
+        opacity: 0;
+        transform: translateY(20px);
+        transition:
+          background 0.2s,
+          border-color 0.2s,
+          transform 0.2s,
+          color 0.2s;
+      }
+      .menu-btn.entered {
+        animation: btn-in 400ms ease-out forwards;
+      }
+      @keyframes btn-in {
+        from { opacity: 0; transform: translateY(20px); }
+        to   { opacity: 1; transform: translateY(0); }
+      }
+      .menu-btn .arrow {
+        font-size: 14px;
+        color: rgba(0, 229, 255, 0.6);
+        transition: transform 0.2s, color 0.2s;
+      }
+      .menu-btn .label {
+        font-size: 24px;
+        font-weight: 700;
+        letter-spacing: 4px;
+        color: #ffffff;
+        line-height: 1.1;
+        transition: text-shadow 0.2s, color 0.2s;
+      }
+      .menu-btn .desc {
+        margin-top: 4px;
+        font-size: 12px;
+        letter-spacing: 1px;
+        color: rgba(148, 163, 184, 0.7);
+      }
+      .menu-btn:hover:not(.locked),
+      .menu-btn:focus-visible:not(.locked) {
+        background: rgba(0, 229, 255, 0.1);
+        border-color: rgba(0, 229, 255, 0.4);
+        transform: scale(1.02) translateY(0);
+      }
+      .menu-btn:hover:not(.locked) .arrow,
+      .menu-btn:focus-visible:not(.locked) .arrow {
+        transform: translateX(6px);
+        color: var(--player-dash);
+      }
+      .menu-btn:hover:not(.locked) .label,
+      .menu-btn:focus-visible:not(.locked) .label {
+        color: #ffffff;
+        text-shadow: 0 0 12px rgba(0, 229, 255, 0.75);
+      }
+      .menu-btn .flash {
+        position: absolute;
+        inset: 0;
+        background: rgba(0, 229, 255, 0.3);
+        opacity: 0;
+        pointer-events: none;
+      }
+      .menu-btn.clicked .flash {
+        animation: btn-flash 200ms ease-out;
+      }
+      @keyframes btn-flash {
+        from { opacity: 0.3; }
+        to   { opacity: 0; }
+      }
+      .menu-btn.locked {
+        opacity: 0.4;
+        cursor: not-allowed;
+      }
+      .menu-btn.locked .label {
+        color: rgba(203, 213, 225, 0.6);
+      }
+      .menu-btn.locked .arrow {
+        color: rgba(148, 163, 184, 0.3);
+      }
+
+      /* === Footer === */
+      .footer {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 8px;
+        margin-top: 6px;
+        opacity: 0;
+        animation: tagline-in 500ms ease-out 1500ms forwards;
+      }
+      .footer .divider {
+        width: 200px;
+        height: 1px;
+        background: rgba(255, 255, 255, 0.1);
+      }
+      .footer .version {
+        font-family: var(--font-mono);
+        font-size: 11px;
+        letter-spacing: 2px;
+        color: rgba(148, 163, 184, 0.4);
+        text-transform: lowercase;
+      }
+
+      /* === Overlays — kept from previous design === */
       .overlay {
         position: fixed;
         inset: 0;
@@ -205,7 +295,7 @@
         display: flex;
         align-items: center;
         justify-content: center;
-        z-index: 100;
+        z-index: 200;
         padding: 24px;
       }
       .overlay[hidden] { display: none; }
@@ -242,6 +332,7 @@
         color: var(--player-yellow);
         margin: 0 0 22px;
         text-shadow: 0 0 12px rgba(255, 214, 10, 0.45);
+        font-family: var(--font-display);
       }
       .overlay-content {
         display: flex;
@@ -315,7 +406,7 @@
         margin-top: 20px;
       }
       .btn {
-        font-family: inherit;
+        font-family: var(--font-mono);
         font-size: 12px;
         letter-spacing: 0.18em;
         font-weight: 600;
@@ -342,10 +433,7 @@
         color: #ffffff;
       }
 
-      /* === Controls overlay === */
-      #overlay-controls .overlay-frame {
-        max-width: 540px;
-      }
+      #overlay-controls .overlay-frame { max-width: 540px; }
       .controls-overlay-title {
         color: var(--player-dash);
         text-shadow: 0 0 12px rgba(125, 211, 252, 0.45);
@@ -362,9 +450,7 @@
         gap: 10px 16px;
         align-items: center;
       }
-      .controls-row-header {
-        display: contents;
-      }
+      .controls-row-header { display: contents; }
       .controls-row-header div {
         font-size: 10px;
         font-weight: 600;
@@ -389,7 +475,7 @@
         background: transparent;
         border: 1px solid rgba(125, 211, 252, 0.3);
         color: var(--text);
-        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-family: var(--font-mono);
         font-size: 13px;
         font-weight: 600;
         letter-spacing: 0.05em;
@@ -426,13 +512,9 @@
         transition: opacity 0.2s;
         text-transform: uppercase;
       }
-      .controls-toast.visible {
-        opacity: 1;
-      }
-
-      /* === About overlay === */
+      .controls-toast.visible { opacity: 1; }
       .about-body {
-        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-family: var(--font-mono);
         font-size: 13px;
         line-height: 1.6;
         color: var(--text);
@@ -443,42 +525,84 @@
         font-weight: 600;
       }
 
+      @media (max-width: 600px) {
+        .logo { font-size: clamp(40px, 14vw, 80px); letter-spacing: 6px; }
+        .tagline { font-size: 14px; letter-spacing: 4px; }
+        .eye-preview-wrap { width: 150px; height: 150px; }
+        .menu-btn .label { font-size: 20px; letter-spacing: 3px; }
+      }
     </style>
   </head>
   <body>
-    <h1 class="title">VECTRIX</h1>
-    <div class="subtitle">arcade prototype</div>
-    <div class="menu-stack">
-      <nav class="modes">
-        <a class="mode mode--tutorial" id="link-tutorial" href="/tutorial.html">
-          <div class="label">TUTORIAL</div>
-          <div class="desc" id="link-tutorial-desc">Learn the basics</div>
+    <canvas id="menu-bg-canvas"></canvas>
+
+    <main class="menu-shell">
+      <h1 class="logo" id="logo" aria-label="VECTRIX">
+        <span class="logo-letter" data-letter="V">V</span><span class="logo-letter" data-letter="E">E</span><span class="logo-letter" data-letter="C">C</span><span class="logo-letter" data-letter="T">T</span><span class="logo-letter" data-letter="R">R</span><span class="logo-letter" data-letter="I">I</span><span class="logo-letter" data-letter="X">X</span>
+      </h1>
+      <div class="tagline">vector odyssey</div>
+
+      <div class="eye-preview-wrap">
+        <div class="eye-preview-ring"></div>
+        <canvas id="eye-preview-canvas" width="200" height="200"></canvas>
+      </div>
+
+      <nav class="menu-buttons" id="menu-buttons">
+        <a class="menu-btn" data-btn="tutorial" id="btn-tutorial" href="/tutorial.html">
+          <span class="arrow">▶</span>
+          <div>
+            <div class="label">TUTORIAL</div>
+            <div class="desc" id="btn-tutorial-desc">Learn the basics</div>
+          </div>
+          <div class="flash"></div>
         </a>
-        <a class="mode mode--rooms" id="link-rooms" href="/rooms.html">
-          <div class="label">ROOMS</div>
-          <div class="desc" id="link-rooms-desc">Story mode</div>
+        <a class="menu-btn" data-btn="rooms" id="btn-rooms" href="/rooms.html">
+          <span class="arrow">▶</span>
+          <div>
+            <div class="label">PLAY ROOMS</div>
+            <div class="desc" id="btn-rooms-desc">Story mode</div>
+          </div>
+          <div class="flash"></div>
         </a>
-        <a class="mode mode--sandbox" href="/sandbox.html">
-          <div class="label">SANDBOX</div>
-          <div class="desc">Endless practice mode</div>
+        <a class="menu-btn" data-btn="sandbox" href="/sandbox.html">
+          <span class="arrow">▶</span>
+          <div>
+            <div class="label">SANDBOX</div>
+            <div class="desc">Practice freely</div>
+          </div>
+          <div class="flash"></div>
         </a>
+        <button type="button" class="menu-btn" data-btn="player" data-overlay="player">
+          <span class="arrow">▶</span>
+          <div>
+            <div class="label">PLAYER</div>
+            <div class="desc">Customize your character</div>
+          </div>
+          <div class="flash"></div>
+        </button>
+        <button type="button" class="menu-btn" data-btn="controls" data-overlay="controls">
+          <span class="arrow">▶</span>
+          <div>
+            <div class="label">CONTROLS</div>
+            <div class="desc">Rebind keys</div>
+          </div>
+          <div class="flash"></div>
+        </button>
+        <button type="button" class="menu-btn" data-btn="about" data-overlay="about">
+          <span class="arrow">▶</span>
+          <div>
+            <div class="label">ABOUT</div>
+            <div class="desc">Credits and info</div>
+          </div>
+          <div class="flash"></div>
+        </button>
       </nav>
-      <nav class="utilities">
-        <button type="button" class="utility utility--player" data-overlay="player">
-          <div class="label">PLAYER</div>
-          <div class="desc">colors</div>
-        </button>
-        <button type="button" class="utility utility--controls" data-overlay="controls">
-          <div class="label">CONTROLS</div>
-          <div class="desc">keyboard bindings</div>
-        </button>
-        <button type="button" class="utility utility--about" data-overlay="about">
-          <div class="label">ABOUT</div>
-          <div class="desc">cheat sheet</div>
-        </button>
-      </nav>
-    </div>
-    <div class="version">v0.0.0</div>
+
+      <div class="footer">
+        <div class="divider"></div>
+        <div class="version">version 0.1 — vectrix</div>
+      </div>
+    </main>
 
     <div class="overlay" id="overlay-player" hidden>
       <div class="overlay-frame">

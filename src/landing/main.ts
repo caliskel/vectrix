@@ -21,10 +21,13 @@ import {
   type KeybindProfile,
   type KeybindSlot,
 } from "../lib/keybinds";
+import { startMenuBg } from "./menu-bg";
 
 const PREVIEW_PLAYER_SIZE = 110;
 const PREVIEW_CANVAS_SIZE = 300;
 const FAKE_DASH_DURATION_SEC = 0.12;
+const EYE_PREVIEW_SIZE = 200;
+const EYE_PREVIEW_PLAYER_SIZE = 64;
 
 function $<T extends HTMLElement>(sel: string): T | null {
   return document.querySelector<T>(sel);
@@ -42,47 +45,46 @@ const previewPlayer = createPlayer();
 previewPlayer.x = PREVIEW_CANVAS_SIZE / 2;
 previewPlayer.y = PREVIEW_CANVAS_SIZE / 2;
 
-// Reflect tutorial-completed state in the menu — ROOMS card stays
-// locked until the player has been through the tutorial, and the
-// tutorial card swaps its blurb to "Replay" once it's done.
+// === Tutorial gate ===
+//
+// ROOMS button stays locked until the tutorial is completed; TUTORIAL
+// button changes its desc text after completion.
 function applyTutorialState(): void {
   const completed =
     localStorage.getItem("dash-proto:tutorial-completed") === "true";
-  const tutDesc = document.getElementById("link-tutorial-desc");
+  const tutDesc = document.getElementById("btn-tutorial-desc");
   if (tutDesc) {
     tutDesc.textContent = completed ? "Replay tutorial" : "Learn the basics";
   }
-  const roomsLink = document.getElementById("link-rooms");
-  const roomsDesc = document.getElementById("link-rooms-desc");
-  if (roomsLink && roomsDesc) {
+  const roomsBtn = document.getElementById("btn-rooms");
+  const roomsDesc = document.getElementById("btn-rooms-desc");
+  if (roomsBtn && roomsDesc) {
     if (!completed) {
-      roomsLink.classList.add("locked");
-      roomsLink.setAttribute("aria-disabled", "true");
+      roomsBtn.classList.add("locked");
+      roomsBtn.setAttribute("aria-disabled", "true");
       roomsDesc.textContent = "🔒 Complete tutorial first";
     } else {
-      roomsLink.classList.remove("locked");
-      roomsLink.removeAttribute("aria-disabled");
+      roomsBtn.classList.remove("locked");
+      roomsBtn.removeAttribute("aria-disabled");
       roomsDesc.textContent = "Story mode";
     }
   }
 }
 applyTutorialState();
-// Re-read the flag whenever the user comes back to the tab — covers
-// returning from /tutorial.html via in-page navigation, the bfcache
-// pageshow event, and the cross-tab `storage` event when localStorage
-// is mutated elsewhere. Without this the menu would stay locked even
-// after the player completes the tutorial in another tab.
 window.addEventListener("focus", applyTutorialState);
 window.addEventListener("pageshow", applyTutorialState);
 window.addEventListener("storage", applyTutorialState);
 
-// Menu music. We try to start immediately on script load — browsers
-// that already have a user-activation flag for this origin (i.e. the
-// player has clicked anywhere on the site in this session) will
-// autoplay. Cold-load visitors hit the autoplay policy: AudioContext
-// stays suspended until the first gesture, and the keydown / click
-// fallback below resumes it. audio.init() retries Tone.start() on
-// every call, so re-firing on a gesture wakes the suspended context.
+// === Animated menu background ===
+const bgCanvas = need<HTMLCanvasElement>("#menu-bg-canvas");
+startMenuBg(bgCanvas, {
+  // Audio crackle layered on every big-glitch flash. Quiet on its own,
+  // but the visual flash + the static makes the moment feel like a
+  // real CRT artifact, not just a styled effect.
+  onBigGlitch: () => audio.play.uiStatic(),
+});
+
+// === Menu music — same flow as before, eager start + gesture fallback ===
 audio.setMusicTrack("menu", encodeURI("/audio/menu/Neon Drift Menu.mp3"));
 audio.playMusic("menu", 1.0);
 audio.init();
@@ -94,6 +96,164 @@ window.addEventListener("keydown", kickMenuMusic, { once: false });
 window.addEventListener("click", kickMenuMusic, { once: false });
 window.addEventListener("touchstart", kickMenuMusic, { once: false });
 
+// === Logo entrance + glitch ===
+//
+// Letter-by-letter entrance via CSS keyframe + per-letter animation
+// delay. Glitch effect (RGB split + horizontal shift) triggered
+// periodically from JS — toggling the `.glitch` class on #logo
+// activates the ::before/::after pseudo-elements baked into CSS.
+const logoEl = document.getElementById("logo");
+if (logoEl) {
+  logoEl.querySelectorAll<HTMLElement>(".logo-letter").forEach((el, i) => {
+    el.style.animationDelay = `${i * 80}ms`;
+  });
+  scheduleLogoGlitch();
+}
+
+function scheduleLogoGlitch(): void {
+  // 10–25 s between micro-glitches; ~1 in 6 chance for a longer one.
+  const delay = 10000 + Math.random() * 15000;
+  window.setTimeout(() => {
+    if (!logoEl) return;
+    const isLong = Math.random() < 0.15;
+    logoEl.classList.add("glitch");
+    window.setTimeout(
+      () => {
+        logoEl.classList.remove("glitch");
+        scheduleLogoGlitch();
+      },
+      isLong ? 200 : 60,
+    );
+  }, delay);
+}
+
+// === Button entrance + hover/click sounds + flash ===
+//
+// Cascade slide-in from bottom — 100 ms between buttons. The `.entered`
+// class swaps in the keyframe; without it the buttons stay at their
+// pre-animation state (opacity 0 / translateY 20px) defined inline in
+// the stylesheet so we never get the FOUC of fully-visible buttons.
+const buttonEls = Array.from(
+  document.querySelectorAll<HTMLElement>(".menu-btn"),
+);
+buttonEls.forEach((btn, i) => {
+  btn.style.animationDelay = `${1100 + i * 100}ms`;
+  btn.classList.add("entered");
+
+  btn.addEventListener("mouseenter", () => {
+    if (btn.classList.contains("locked")) return;
+    audio.play.uiHover();
+  });
+  btn.addEventListener("focus", () => {
+    if (btn.classList.contains("locked")) return;
+    audio.play.uiHover();
+  });
+  btn.addEventListener("click", (e) => {
+    if (btn.classList.contains("locked")) {
+      e.preventDefault();
+      return;
+    }
+    audio.play.uiClick();
+    // Cyan flash overlay. For navigation buttons we delay the actual
+    // page nav by 120 ms so the flash gets to play; data-overlay
+    // buttons open their overlay immediately, the flash plays on top.
+    btn.classList.remove("clicked");
+    // Force reflow so re-adding the class restarts the animation.
+    void btn.offsetWidth;
+    btn.classList.add("clicked");
+    const isAnchor = btn instanceof HTMLAnchorElement;
+    if (isAnchor) {
+      e.preventDefault();
+      const href = btn.getAttribute("href");
+      if (href) {
+        window.setTimeout(() => {
+          window.location.href = href;
+        }, 120);
+      }
+    }
+  });
+});
+
+// === Eye preview that tracks the cursor ===
+//
+// Separate from the Player-overlay preview canvas; lives in the main
+// menu and uses pointer position relative to the canvas as a virtual
+// "threat" so the pupil tilts toward the mouse via the existing
+// updateEye() logic.
+const eyeCanvas = need<HTMLCanvasElement>("#eye-preview-canvas");
+const eyePlayer = createPlayer();
+eyePlayer.x = EYE_PREVIEW_SIZE / 2;
+eyePlayer.y = EYE_PREVIEW_SIZE / 2;
+let mouseX = -9999;
+let mouseY = -9999;
+let mouseSeen = false;
+window.addEventListener("mousemove", (e) => {
+  mouseX = e.clientX;
+  mouseY = e.clientY;
+  mouseSeen = true;
+});
+(function initEyeCanvas() {
+  const dpr = window.devicePixelRatio || 1;
+  eyeCanvas.width = EYE_PREVIEW_SIZE * dpr;
+  eyeCanvas.height = EYE_PREVIEW_SIZE * dpr;
+  eyeCanvas.style.width = `${EYE_PREVIEW_SIZE}px`;
+  eyeCanvas.style.height = `${EYE_PREVIEW_SIZE}px`;
+  const ctx = eyeCanvas.getContext("2d");
+  if (ctx) ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+})();
+
+let eyeLast = performance.now();
+let eyeProfile = loadPlayerProfile();
+// React to a Save in the Player overlay so the menu preview updates
+// in real time without a reload.
+window.addEventListener("storage", () => {
+  eyeProfile = loadPlayerProfile();
+});
+
+function eyeFrame(now: number) {
+  let dt = (now - eyeLast) / 1000;
+  eyeLast = now;
+  if (dt > 0.05) dt = 0.05;
+
+  // Convert global mouse coords → eye-canvas local coords. If the
+  // pointer hasn't moved yet OR is far from the canvas, fall back to
+  // idle-look (null threat) so the eye breathes instead of pinning.
+  const rect = eyeCanvas.getBoundingClientRect();
+  const localX = mouseX - rect.left;
+  const localY = mouseY - rect.top;
+  const inRange =
+    mouseSeen &&
+    localX > -200 &&
+    localX < rect.width + 200 &&
+    localY > -200 &&
+    localY < rect.height + 200;
+  const threat = inRange
+    ? { x: localX, y: localY }
+    : null;
+
+  updateEye(eyePlayer, dt, {
+    threat,
+    size: EYE_PREVIEW_PLAYER_SIZE,
+    dashDurationSec: FAKE_DASH_DURATION_SEC,
+  });
+
+  const ctx = eyeCanvas.getContext("2d");
+  if (ctx) {
+    ctx.clearRect(0, 0, EYE_PREVIEW_SIZE, EYE_PREVIEW_SIZE);
+    drawPlayerEye(ctx, eyePlayer, EYE_PREVIEW_PLAYER_SIZE, {
+      ringColor: eyeProfile.outerRing,
+      glowColor: eyeProfile.outerRing,
+      pupilColor: eyeProfile.pupil,
+      irisColor: eyeProfile.iris,
+      ghostColor: "#00e5ff",
+      dashDurationSec: FAKE_DASH_DURATION_SEC,
+    });
+  }
+  requestAnimationFrame(eyeFrame);
+}
+requestAnimationFrame(eyeFrame);
+
+// === Overlays (unchanged behavior from previous design) ===
 type OverlayName = "player" | "controls" | "about";
 
 function setOverlay(name: OverlayName | null) {
@@ -125,9 +285,6 @@ document.querySelectorAll<HTMLElement>("[data-close]").forEach((el) => {
 });
 
 window.addEventListener("keydown", (e) => {
-  // Controls overlay capture mode owns its own keydown — it
-  // installs a higher-priority listener while capturing so we
-  // never see those events here.
   if (!activeOverlay) return;
   if (e.key === "Escape") {
     e.preventDefault();
@@ -135,7 +292,6 @@ window.addEventListener("keydown", (e) => {
     return;
   }
   if (e.key === "Tab") {
-    // overlays don't need focus traversal — keep tab from leaking through
     e.preventDefault();
   }
 });
@@ -194,13 +350,14 @@ saveBtn.addEventListener("click", () => {
     dashParticles: pickerDashParticles.value,
   };
   savePlayerProfile(profile);
+  // Refresh the menu eye-preview right away — the storage event
+  // doesn't fire for same-tab writes.
+  eyeProfile = profile;
   setOverlay(null);
 });
 
 function onPlayerOpen() {
   applyProfileToPickers(loadPlayerProfile());
-  // restart the preview player so it doesn't carry over a half-finished
-  // blink or pupil offset from a previous open
   previewPlayer.pupilOffsetX = 0;
   previewPlayer.pupilOffsetY = 0;
   previewPlayer.shakeTime = 0;
@@ -250,8 +407,6 @@ function previewFrame(now: number) {
       glowColor: pickerOuter.value,
       pupilColor: pickerPupil.value,
       irisColor: pickerIris.value,
-      // dash eye stays canonical cyan in-game; the preview never enters
-      // a dash state but keep this consistent in case the caller does
       ghostColor: "#00e5ff",
       dashDurationSec: FAKE_DASH_DURATION_SEC,
     });
@@ -264,22 +419,7 @@ function previewFrame(now: number) {
   }
 }
 
-// === Controls overlay wiring ===
-//
-// Six action rows (movement / dash / walk) × two slots (primary +
-// secondary). Click any cell → capture mode: the next non-reserved
-// keydown writes that code into the slot and auto-saves. Esc inside
-// capture cancels without changing the binding; Esc outside capture
-// closes the overlay.
-//
-// Reserved system keys (Escape / Tab / F1) are rejected during
-// capture; primary slots can never be set to null (the action would
-// have no key); secondary slots can be cleared by binding them to
-// the same value as primary, which the capture path then forces to
-// null. Duplicate cleanup: binding a key already used by another
-// slot clears that other slot first (primary clears can't, so the
-// new owner wins).
-
+// === Controls overlay ===
 const controlsTableEl = document.getElementById(
   "controls-table",
 ) as HTMLDivElement | null;
@@ -310,8 +450,6 @@ function showControlsToast(message: string): void {
 
 function renderControlsTable(): void {
   if (!controlsTableEl) return;
-  // Tear the previous rows out (keeping the header row untouched
-  // since it's marked with a static class).
   Array.from(controlsTableEl.children).forEach((child) => {
     if (!child.classList.contains("controls-row-header")) {
       controlsTableEl.removeChild(child);
@@ -374,15 +512,10 @@ function applyCapture(code: string): void {
   }
   const target = capturing;
   const slot: KeybindSlot = currentKeybinds[target.action];
-
-  // If this code is already in any slot, evict it from there. For
-  // a primary that "loses" its only code we'd leave the action
-  // empty — disallow.
   for (const otherAction of KEYBIND_ACTIONS) {
     if (otherAction === target.action) continue;
     const other = currentKeybinds[otherAction];
     if (other.primary === code) {
-      // Would orphan another action's primary — forbid the bind.
       showControlsToast(
         `${formatKeybindLabel(code)} ALREADY ON ${KEYBIND_LABELS[otherAction]}`,
       );
@@ -392,28 +525,21 @@ function applyCapture(code: string): void {
       other.secondary = null;
     }
   }
-  // Inside the same action: setting one slot to the value of the
-  // other clears the duplicate.
   if (target.slot === "primary") {
     if (slot.secondary === code) slot.secondary = null;
     slot.primary = code;
   } else {
-    // Secondary equal to primary → clear it (the player's way of
-    // emptying a secondary cell).
     if (slot.primary === code) {
       slot.secondary = null;
     } else {
       slot.secondary = code;
     }
   }
-
   saveKeybinds(currentKeybinds);
   cancelControlsCapture();
   renderControlsTable();
 }
 
-// Capture-mode keydown intercept. Installed once; gates on
-// `capturing !== null` so it's idle most of the time.
 window.addEventListener(
   "keydown",
   (e) => {
@@ -426,8 +552,6 @@ window.addEventListener(
     }
     applyCapture(e.code);
   },
-  // Capture phase so we beat the higher-up listener that would
-  // close the overlay on Escape.
   true,
 );
 
@@ -446,12 +570,6 @@ if (controlsResetBtn) {
 }
 
 // === About overlay ===
-//
-// Static cheat sheet + dynamic controls list pulled from the
-// current keybind profile. The body rebuilds on every open so a
-// rebind in Controls shows up immediately when the player opens
-// About after.
-
 const aboutBodyEl = document.getElementById(
   "about-body",
 ) as HTMLDivElement | null;
