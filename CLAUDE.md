@@ -9,6 +9,38 @@ codebase:
 - **Rooms** — story / scripted-encounter mode. Currently a placeholder
   stub; the room engine and content are next.
 
+## Collaboration rules (READ FIRST)
+
+These exist because of failures already paid for in real sessions. Treat
+them as hard rules, not advice.
+
+- **"Literally copy X" means open X's source and mirror every call,
+  1-to-1, in order.** Trigger phrases from the user: `буквально`,
+  `скопируй`, `1-в-1`, `все модули которые юзает`, `literally copy`,
+  `copy verbatim`. When any of these appear:
+  1. Open the reference function (e.g. `tutorial-game.ts → render()`).
+  2. Enumerate **every** call in order.
+  3. Replicate **all of them** in the new scene — including the ones
+     that don't seem visually important (camera updates, `BackgroundFx`,
+     `EnergyBackground`, `BackgroundText`, `wallFx`, `scanlines`, the
+     `updateArenaBg` tick, etc.).
+  4. No creative substitutions, no "minimum viable" subset, no own
+     design choices (different hero size, decorative additions,
+     repositioned UI) unless the user explicitly opts in.
+  5. If a call in the reference can't be ported, say so out loud — do
+     not silently drop or replace it.
+  This rule was paid for with six iterations on the boss epilogue room
+  scene where each pass ported only 2–3 of the tutorial's nine render
+  modules and rebuilt the rest by hand. The user had to say "literally
+  copy" four times. Don't repeat that failure.
+- **"Make it look like the tutorial / rooms / X" is the same rule.**
+  Even without the explicit trigger phrase, when the user is comparing
+  the new screen to an existing one, the bar is 1-to-1 mirroring of
+  the reference's pipeline. Diverge only when asked.
+- **Same applies to other "match X" requests** — physics behaviour, UI
+  styles, state-machine flows. Open the reference, list every call
+  site, replicate; don't reinvent.
+
 ## Stack
 
 - TypeScript (strict, no decorators, no JSX) — `tsc --noEmit` is the
