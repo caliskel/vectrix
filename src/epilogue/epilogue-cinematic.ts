@@ -3,16 +3,16 @@
 //   1. Void scene: narrator speaks three English lines over the same
 //      drifting grid + dust used in the intro, so the cinematic reads
 //      as a bookend to the opening.
-//   2. Playable "to be continued" room (tutorial-sized): the hero can
-//      walk around with the same physics they used in-game. A turquoise
-//      "TO BE CONTINUED" headline resolves in via the same scramble-
-//      text effect the intro used for "who am i?", and six random
-//      profanity glyphs vibrate just below the hero — comic grumble
-//      after a hard fight. Movement only, no enemies, no exit; the
-//      footer hint tells the player to press a key to return to menu.
+//   2. Playable "to be continued" room: tutorial-sized 1200×800
+//      arena rendered with the SAME arenaBg + flickering grid + walls
+//      the tutorial uses, so the screen reads as a known tutorial
+//      room. The hero walks around with gameplay physics. A scramble-
+//      text "TO BE CONTINUED" sits dead-centre, styled like the
+//      tutorial's "who was that?" first-thought line.
 //
-// Pure canvas 2D. Reuses void-bg, drawPlayerEye, the typewriter pattern
-// from intro-cinematic.ts, and the scramble-text helper.
+// Pure canvas 2D. Reuses void-bg for the cinematic, arena-bg + grid +
+// walls for the room (same modules the tutorial render path uses),
+// drawPlayerEye for the hero, and the scramble-text helper.
 
 import {
   BLINK_CLOSE_DURATION_MS,
@@ -41,6 +41,18 @@ import {
   tickVoidBg,
   type VoidBgState,
 } from "../lib/void-bg";
+import {
+  createArenaBg,
+  drawArenaBg,
+  type ArenaBg,
+} from "../lib/arena-bg";
+import {
+  createGridNodeState,
+  drawRoomGrid,
+  updateGridNodes,
+  type GridNodeState,
+} from "../lib/grid";
+import { drawWalls, type Wall } from "../lib/walls";
 import {
   drawScrambleText,
   makeScrambleSchedule,
@@ -134,10 +146,7 @@ for (const beat of NARRATION_BEATS) {
   beat.eraseDuration = (beat.text.length * NARRATION_ERASE_SPEED_MS) / 1000;
 }
 
-// Profanity glyphs — six chars drawn under the hero in the room scene,
-// vibrating in place. Set picked to read as cartoon-profanity.
-const PROFANITY_GLYPHS = "!@#$%&*?^~+=";
-const PROFANITY_COUNT = 6;
+const WALL_T = 30;
 
 // "TO BE CONTINUED" scramble schedule. The user asked for the SAME
 // style as the tutorial's "who was that?" boot thought (default
@@ -178,15 +187,20 @@ export type EpilogueState = {
   keybinds: KeybindProfile;
   keys: Set<string>;
 
+  // Void cinematic background.
   bg: VoidBgState;
+
+  // Room scene visuals — same primitives the tutorial render path
+  // uses, so the epilogue room reads as a known tutorial room.
+  roomWalls: Wall[];
+  roomArenaBg: ArenaBg;
+  roomGridNodes: GridNodeState;
 
   narratorBeatIdx: number;
   narratorCharsLast: number;
-
-  // "Room scene" props — 6 fixed glyphs chosen once on entry, plus a
-  // random per-glyph phase so the vibration looks individual.
-  profanity: { ch: string; phase: number; speed: number }[];
-  profanityStart: number;
+  // Phase-local timer driving the scramble title schedule. Starts at
+  // 0 when the room scene begins.
+  roomAge: number;
 };
 
 export function createEpilogueState(): EpilogueState {
@@ -201,16 +215,15 @@ export function createEpilogueState(): EpilogueState {
   hero.breathPhase = 0;
   hero.pupilOffsetX = 0;
   hero.pupilOffsetY = 0;
-  const profanity: { ch: string; phase: number; speed: number }[] = [];
-  for (let i = 0; i < PROFANITY_COUNT; i++) {
-    profanity.push({
-      ch: PROFANITY_GLYPHS[
-        Math.floor(Math.random() * PROFANITY_GLYPHS.length)
-      ],
-      phase: Math.random() * Math.PI * 2,
-      speed: 6 + Math.random() * 4,
-    });
-  }
+  // Room walls — perimeter only, matching the tutorial Room 0 layout
+  // minus the exit door gap (the epilogue room has no door; the
+  // player returns to the main menu via Enter / Escape).
+  const roomWalls: Wall[] = [
+    { x: 0, y: 0, w: CANVAS_W, h: WALL_T },
+    { x: 0, y: CANVAS_H - WALL_T, w: CANVAS_W, h: WALL_T },
+    { x: 0, y: 0, w: WALL_T, h: CANVAS_H },
+    { x: CANVAS_W - WALL_T, y: 0, w: WALL_T, h: CANVAS_H },
+  ];
   return {
     time: 0,
     phase: "fadein",
@@ -221,10 +234,12 @@ export function createEpilogueState(): EpilogueState {
     keybinds: loadKeybinds(),
     keys: new Set<string>(),
     bg: createVoidBg(CANVAS_W, CANVAS_H),
+    roomWalls,
+    roomArenaBg: createArenaBg(CANVAS_W, CANVAS_H),
+    roomGridNodes: createGridNodeState(CANVAS_W, CANVAS_H),
     narratorBeatIdx: -1,
     narratorCharsLast: 0,
-    profanity,
-    profanityStart: 0,
+    roomAge: 0,
   };
 }
 
@@ -241,8 +256,10 @@ export function updateEpilogue(state: EpilogueState, dt: number): void {
     }
   }
   if (state.phase === "roompresent") {
-    state.profanityStart += dt;
+    state.roomAge += dt;
     tickRoomScene(state, dt);
+    // Flicker / pulse the tutorial-style grid every frame.
+    updateGridNodes(state.roomGridNodes, dt);
   }
   // Idle hero animation — same engine sandbox/rooms use, so blinks
   // and breath read the same. Drives pupil / breath even during the
@@ -257,15 +274,7 @@ export function updateEpilogue(state: EpilogueState, dt: number): void {
 
 function onPhaseEnter(state: EpilogueState): void {
   if (state.phase === "roompresent") {
-    // Re-roll the profanity once the room scene starts.
-    for (const p of state.profanity) {
-      p.ch =
-        PROFANITY_GLYPHS[
-          Math.floor(Math.random() * PROFANITY_GLYPHS.length)
-        ];
-      p.phase = Math.random() * Math.PI * 2;
-    }
-    state.profanityStart = 0;
+    state.roomAge = 0;
     // Reset player velocity so the room starts still even if a stray
     // accel slipped through from the void scene. Spawn near the
     // bottom-centre so the hero stands clear of the "TO BE CONTINUED"
@@ -431,52 +440,25 @@ function drawRoomScene(
   ctx: CanvasRenderingContext2D,
   state: EpilogueState,
 ): void {
-  // Match the tutorial / rooms canonical stage so the screen reads as
-  // "a room we know." Dark backplate + faint cyan grid + perimeter
-  // wall outline, lifted from the rooms-game render path but pared
-  // down to the static essentials.
-  ctx.fillStyle = "#04060a";
-  ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
-  // Faint grid.
-  ctx.save();
-  ctx.strokeStyle = "rgba(0, 229, 255, 0.05)";
-  ctx.lineWidth = 1;
-  const step = 60;
-  ctx.beginPath();
-  for (let x = step; x < CANVAS_W; x += step) {
-    ctx.moveTo(x, 0);
-    ctx.lineTo(x, CANVAS_H);
-  }
-  for (let y = step; y < CANVAS_H; y += step) {
-    ctx.moveTo(0, y);
-    ctx.lineTo(CANVAS_W, y);
-  }
-  ctx.stroke();
-  ctx.restore();
-  // Perimeter wall — same 30 px wall thickness used everywhere else.
-  const WALL_T = 30;
-  ctx.save();
-  ctx.fillStyle = "rgba(20, 25, 43, 0.9)";
-  ctx.fillRect(0, 0, CANVAS_W, WALL_T);
-  ctx.fillRect(0, CANVAS_H - WALL_T, CANVAS_W, WALL_T);
-  ctx.fillRect(0, 0, WALL_T, CANVAS_H);
-  ctx.fillRect(CANVAS_W - WALL_T, 0, WALL_T, CANVAS_H);
-  ctx.strokeStyle = "rgba(255, 255, 255, 0.08)";
-  ctx.lineWidth = 1;
-  ctx.strokeRect(WALL_T / 2, WALL_T / 2, CANVAS_W - WALL_T, CANVAS_H - WALL_T);
-  ctx.restore();
+  // === Visuals lifted directly from the tutorial render path ===
+  // 1. arena background (parallax dots + cached light sprite around
+  //    the player), 2. flickering grid nodes, 3. perimeter walls
+  //    rendered by the canonical drawWalls layer. Same three calls
+  //    in the same order as tutorial-game.ts → drawRoom().
+  drawArenaBg(ctx, state.roomArenaBg, { x: state.hero.x, y: state.hero.y });
+  drawRoomGrid(ctx, CANVAS_W, CANVAS_H, state.roomGridNodes);
+  drawWalls(ctx, state.roomWalls);
 
-  // "TO BE CONTINUED" — pinned to the centre of the room. Uses
+  // "TO BE CONTINUED" — pinned dead-centre of the room. Uses
   // drawScrambleText with the DEFAULT font ("300 22px ui-monospace,
   // SFMono-Regular, Menlo, monospace") so the scramble effect, weight
   // and size match the tutorial's "who was that?" exactly. Colour is
-  // the tutorial hint-banner cyan so the line reads as part of the
-  // tutorial visual language. Resolves left-to-right, then holds
-  // legible while the player walks the room.
+  // the tutorial hint-banner cyan (#7dd3fc) so the line reads as part
+  // of the tutorial visual language.
   drawScrambleText(
     ctx,
     TBC_TEXT,
-    state.profanityStart,
+    state.roomAge,
     TBC_SCRAMBLE_SCHEDULE,
     CANVAS_W / 2,
     CANVAS_H / 2,
@@ -488,8 +470,7 @@ function drawRoomScene(
   );
 
   // Hero — drawn at his live (x, y) from the movement physics. Same
-  // engine the in-game player uses.
-  ctx.save();
+  // drawPlayerEye renderer the in-game player uses.
   drawPlayerEye(ctx, state.hero, HERO_SIZE, {
     ringColor: state.heroProfile.outerRing,
     pupilColor: state.heroProfile.pupil,
@@ -497,50 +478,12 @@ function drawRoomScene(
     dashDurationSec: DASH_DURATION_MS / 1000,
     profile: state.heroProfile,
   });
-  ctx.restore();
 
-  // Profanity glyphs — six chars under the hero, vibrating in place.
-  // Anchored to the hero's live position so the cursing follows him
-  // around the room.
-  const glyphAnchorY = state.hero.y + HERO_SIZE * 1.7;
-  const glyphSpacing = 30;
-  const rowWidth = (PROFANITY_COUNT - 1) * glyphSpacing;
-  const rowLeft = state.hero.x - rowWidth / 2;
-  // Fade in over the first 0.8 s so the line doesn't snap on the
-  // moment the room appears.
-  const glyphFade = Math.min(1, state.profanityStart / 0.8);
+  // Footer hint — quiet "PRESS ENTER → MAIN MENU" so the player has
+  // a clear exit. Menu nav is keyboard-only (Enter / Escape) so a
+  // stray click doesn't bounce the player out.
   ctx.save();
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.font =
-    "700 32px ui-monospace, 'SF Mono', Consolas, 'Liberation Mono', monospace";
-  for (let i = 0; i < state.profanity.length; i++) {
-    const p = state.profanity[i];
-    const t = state.profanityStart * p.speed + p.phase;
-    const dx = Math.sin(t * 1.7) * 3.5;
-    const dy = Math.cos(t) * 2.5;
-    const rot = Math.sin(t * 0.8) * 0.18;
-    const flicker = 0.7 + Math.abs(Math.sin(t * 2.2)) * 0.3;
-    const x = rowLeft + i * glyphSpacing + dx;
-    const y = glyphAnchorY + dy;
-    ctx.save();
-    ctx.translate(x, y);
-    ctx.rotate(rot);
-    ctx.globalAlpha = glyphFade * flicker;
-    ctx.fillStyle = "#ff2d55";
-    ctx.shadowColor = "#ff5577";
-    ctx.shadowBlur = 10;
-    ctx.fillText(p.ch, 0, 0);
-    ctx.restore();
-  }
-  ctx.restore();
-
-  // Footer hint — "PRESS ENTER → MAIN MENU" so the player has a clear
-  // exit that doesn't collide with movement keys. WASD / Shift /
-  // Space (the gameplay bindings) are owned by the room movement
-  // here, so the menu nav is gated to Enter / Escape.
-  ctx.save();
-  ctx.globalAlpha = Math.min(1, state.profanityStart / 1.6) * 0.55;
+  ctx.globalAlpha = Math.min(1, state.roomAge / 1.6) * 0.55;
   ctx.textAlign = "center";
   ctx.textBaseline = "bottom";
   ctx.font = "500 12px ui-monospace, SFMono-Regular, Menlo, monospace";
