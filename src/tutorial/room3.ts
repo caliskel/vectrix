@@ -31,7 +31,10 @@ export function buildRoom3(): Room {
   return {
     id: "room3",
     walls,
-    enemies: [new Hunter(950, 400)],
+    // Two hunters — a vertical pair forming a wedge the player must
+    // dash through. Spread symmetrically above + below the door y so
+    // the threat reads from both sides on entry.
+    enemies: [new Hunter(900, 280), new Hunter(900, 520)],
     door: makeDoor(
       ROOM_W - WALL_T / 2,
       DOOR_CENTER_Y,
@@ -39,7 +42,7 @@ export function buildRoom3(): Room {
       DOOR_H,
       "closed",
     ),
-    nextRoomId: null,
+    nextRoomId: "room4",
     spawnX: 150,
     spawnY: 400,
   };

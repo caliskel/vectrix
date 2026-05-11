@@ -2,6 +2,11 @@ import { audio } from "../lib/audio";
 import { createDevMenu, type DevMenu } from "../lib/dev-menu";
 import { drawFpsOverlay, recordFrame } from "../lib/fps-meter";
 import {
+  drawScrambleText,
+  isScrambleTextDone,
+  makeScrambleSchedule,
+} from "../lib/scramble-text";
+import {
   drawGodModeBadge,
   isGodMode,
   setGodMode,
@@ -545,6 +550,38 @@ export function start(canvas: HTMLCanvasElement): void {
   };
 
   let currentRoom: Room = rooms.get("room1")!;
+  // First-arrival sequence — gated on a sessionStorage flag set by
+  // tutorial-game right before its outro redirect. When set, we fade
+  // in from black (matching the tutorial's fade-out) and show the
+  // hero's first thought in this room. When unset (entry from the
+  // landing-page Rooms button, or a reload), we cold-start without
+  // any of this. Flag is consumed once so a reload doesn't replay.
+  const FROM_TUTORIAL_KEY = "dash-proto:from-tutorial";
+  let arrivedFromTutorial = false;
+  try {
+    arrivedFromTutorial =
+      sessionStorage.getItem(FROM_TUTORIAL_KEY) === "true";
+    if (arrivedFromTutorial) sessionStorage.removeItem(FROM_TUTORIAL_KEY);
+  } catch {
+    arrivedFromTutorial = false;
+  }
+  let roomsFadeIn = arrivedFromTutorial ? 1.0 : 0;
+  const ROOMS_FADE_IN_DURATION_SEC = 2.5;
+  // Hero's first thought on landing in the campaign. Scrambled glyphs
+  // → "how do i do this?" — same effect as "who am i?" in the intro
+  // and "who was that?" at the tutorial start. Only ticks when the
+  // player arrived from the tutorial; menu entries skip the timer.
+  const ROOMS_BOOT_THOUGHT_TEXT = "how do i do this?";
+  const roomsBootThoughtSchedule = makeScrambleSchedule({
+    // Start surfacing after the fade-in has mostly cleared so the
+    // text isn't competing with darkness.
+    appearStart: 3.0,
+    fadeInDuration: 0.5,
+    settleDuration: 2.3,
+    holdDuration: 1.0,
+    fadeOutDuration: 0.9,
+  });
+  let roomsBootThoughtAge = 0;
   let arenaBg: ArenaBg = createArenaBg(
     currentRoom.width ?? ROOM_W_PX,
     currentRoom.height ?? ROOM_H_PX,
@@ -1165,6 +1202,18 @@ export function start(canvas: HTMLCanvasElement): void {
       render();
       requestAnimationFrame(frame);
       return;
+    }
+
+    // Post-tutorial fade-in and boot thought. Both only tick when the
+    // player arrived from tutorial; menu entries leave both at zero.
+    if (roomsFadeIn > 0) {
+      roomsFadeIn = Math.max(0, roomsFadeIn - dt / ROOMS_FADE_IN_DURATION_SEC);
+    }
+    if (
+      arrivedFromTutorial &&
+      !isScrambleTextDone(roomsBootThoughtAge, roomsBootThoughtSchedule)
+    ) {
+      roomsBootThoughtAge += dt;
     }
 
     bgFx.update(dt);
@@ -2096,6 +2145,21 @@ export function start(canvas: HTMLCanvasElement): void {
 
     drawFloatingTexts(ctx, floatingTexts);
 
+    // First-arrival thought — only renders when arrivedFromTutorial,
+    // and only in room1 (where the player lands). Stays under the
+    // camera transform so the text sits anchored just under the
+    // hero in world space.
+    if (arrivedFromTutorial && currentRoom.id === "room1") {
+      drawScrambleText(
+        ctx,
+        ROOMS_BOOT_THOUGHT_TEXT,
+        roomsBootThoughtAge,
+        roomsBootThoughtSchedule,
+        player.x,
+        player.y + 80,
+      );
+    }
+
     // Death cinematic draws in world space so it tracks the player's
     // last position even in scrolling rooms.
     if (state.deathFx) drawDeathFx(ctx, state.deathFx);
@@ -2194,6 +2258,17 @@ export function start(canvas: HTMLCanvasElement): void {
     }
 
     drawScanlines(ctx, viewW, viewH);
+
+    // Post-tutorial fade-in — sits ON TOP of everything (HUD, scan
+    // lines, vignettes) so the entire screen comes up from black
+    // smoothly when the player arrives from the tutorial's outro
+    // fade. No-op when entering rooms from the menu.
+    if (roomsFadeIn > 0) {
+      ctx.save();
+      ctx.fillStyle = `rgba(0, 0, 0, ${Math.min(1, roomsFadeIn)})`;
+      ctx.fillRect(0, 0, viewW, viewH);
+      ctx.restore();
+    }
   }
 
   function drawBossOverlay() {

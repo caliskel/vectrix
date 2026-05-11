@@ -135,6 +135,7 @@ import { buildRoom0 } from "./room0";
 import { buildRoom1 } from "./room1";
 import { buildRoom2 } from "./room2";
 import { buildRoom3 } from "./room3";
+import { buildRoom4 } from "./room4";
 import { buildRoomIntro } from "./roomIntro";
 import {
   drawScrambleText,
@@ -142,6 +143,12 @@ import {
   makeScrambleSchedule,
   type ScrambleSchedule,
 } from "../lib/scramble-text";
+import {
+  createVoidBg,
+  drawVoidBg,
+  tickVoidBg,
+  type VoidBgState,
+} from "../lib/void-bg";
 import {
   drawMarker,
   markerOverlapsPlayer,
@@ -797,6 +804,7 @@ export function start(canvas: HTMLCanvasElement): void {
   rooms.set("room1", buildRoom1());
   rooms.set("room2", buildRoom2());
   rooms.set("room3", buildRoom3());
+  rooms.set("room4", buildRoom4());
 
   const state: GameState = {
     runState: "playing",
@@ -842,6 +850,47 @@ export function start(canvas: HTMLCanvasElement): void {
     fadeOutDuration: 0.8,
   });
   let bootThoughtAge = 0;
+
+  // Tutorial outro state — driven only while currentRoom.id is
+  // "room4". On entry, a black overlay fades out (1 → 0) so the
+  // transition from the hunter arena feels like a slow blink into
+  // the void rather than a hard cut. After the narrator's last
+  // beat, a separate fade IN (0 → 1) takes over and the page
+  // navigates to /rooms.html when it lands at full black.
+  let room4Age = 0;
+  let room4FadeIn = 0;
+  let room4FadeOut = 0;
+  let room4Redirected = false;
+  const outroBg: VoidBgState = createVoidBg(ROOM_W_PX, ROOM_H_PX);
+  const OUTRO_BEATS: { text: string; typeStart: number; typeDuration: number; holdDuration: number; fadeDuration: number }[] = [
+    {
+      text: "Well done. You handled the first task.",
+      typeStart: 1.4,
+      typeDuration: 2.5,
+      holdDuration: 1.6,
+      fadeDuration: 0.45,
+    },
+    {
+      text: "Now go and kill the Sentinel.",
+      typeStart: 6.5,
+      typeDuration: 2.0,
+      holdDuration: 1.8,
+      fadeDuration: 0.5,
+    },
+  ];
+  const OUTRO_NARRATION_END_SEC = 11.5;
+  // Long, deliberate fade — the hand-off into /rooms.html should feel
+  // like the camera slowly closing its eyes, not a cut. Paired with
+  // rooms-game's own fade-in from black (gated on the
+  // `from-tutorial` sessionStorage flag) so both sides of the page
+  // nav share matching dark frames.
+  const OUTRO_FADEOUT_DURATION_SEC = 3.0;
+  const ROOMS_HREF = `${import.meta.env.BASE_URL}rooms.html`;
+  // sessionStorage key — set immediately before the redirect so
+  // rooms-game knows the player just finished the tutorial and
+  // should see a fade-in plus the "how do i do this?" thought.
+  // Cleared on the rooms-game side after the first read.
+  const FROM_TUTORIAL_KEY = "dash-proto:from-tutorial";
   let arenaBg: ArenaBg = createArenaBg(
     currentRoom.width ?? ROOM_W_PX,
     currentRoom.height ?? ROOM_H_PX,
@@ -891,6 +940,7 @@ export function start(canvas: HTMLCanvasElement): void {
     rooms.set("room1", buildRoom1());
     rooms.set("room2", buildRoom2());
     rooms.set("room3", buildRoom3());
+    rooms.set("room4", buildRoom4());
   }
 
   /**
@@ -910,7 +960,19 @@ export function start(canvas: HTMLCanvasElement): void {
     hintPendingText = null;
     if (currentRoom.id === "room0") {
       room0Enter("movement");
+    } else if (currentRoom.id === "room1") {
+      // First combat room — explicit prompt so the player knows what
+      // to do with the turret. Hint clears automatically when the
+      // turret dies (handled in the room-cleared branch below).
+      showHint("NOW KILL IT");
     }
+    // Reset the outro sequencer whenever we enter or leave room4 so
+    // the narrator + fadeout always start from age 0. room4FadeIn is
+    // only armed when we ARRIVE in room4, not on leaving.
+    room4Age = 0;
+    room4FadeOut = 0;
+    room4Redirected = false;
+    room4FadeIn = currentRoom.id === "room4" ? 1.0 : 0;
   }
 
   function restartRun() {
@@ -1339,6 +1401,14 @@ export function start(canvas: HTMLCanvasElement): void {
     state.clearFlash = ROOM_CLEAR_FLASH;
     door.state = "open";
     audio.play.multUp(5); // placeholder sting
+    // Drop the room-specific prompt as soon as the room is solved.
+    // The door's open visual is its own feedback — the hint becomes
+    // stale once the threat is gone.
+    if (currentRoom.id === "room1" && hintText === "NOW KILL IT") {
+      hintState = "hiding";
+      hintAge = 0;
+      hintPendingText = null;
+    }
   }
 
   // ------- frame loop -------
@@ -1352,6 +1422,41 @@ export function start(canvas: HTMLCanvasElement): void {
     if (dt > 0.05) dt = 0.05;
 
     if (menu.isOpen() || devMenu.isOpen()) {
+      render();
+      requestAnimationFrame(frame);
+      return;
+    }
+
+    // Tutorial outro — narrator beats + fade to /rooms.html. Same
+    // pattern as the old roomIntro bridge: skip gameplay entirely
+    // while the cinematic plays, keep the eye animation alive so the
+    // hero reads as present in the void, then redirect once the
+    // fade-out has fully landed.
+    if (currentRoom.id === "room4") {
+      room4Age += dt;
+      if (room4FadeIn > 0) room4FadeIn = Math.max(0, room4FadeIn - dt / 1.0);
+      tickVoidBg(outroBg, dt, ROOM_W_PX, ROOM_H_PX, 1);
+      if (room4Age >= OUTRO_NARRATION_END_SEC) {
+        room4FadeOut = Math.min(
+          1,
+          room4FadeOut + dt / OUTRO_FADEOUT_DURATION_SEC,
+        );
+        if (room4FadeOut >= 1 && !room4Redirected) {
+          room4Redirected = true;
+          try {
+            sessionStorage.setItem(FROM_TUTORIAL_KEY, "true");
+          } catch {
+            // private mode / quota — rooms-game falls back to its
+            // default cold-start (no fade, no boot thought).
+          }
+          window.location.href = ROOMS_HREF;
+        }
+      }
+      updateEye(player, dt, {
+        threat: null,
+        size: PLAYER_SIZE,
+        dashDurationSec: DASH_DURATION_MS / 1000,
+      });
       render();
       requestAnimationFrame(frame);
       return;
@@ -2029,7 +2134,117 @@ export function start(canvas: HTMLCanvasElement): void {
 
   // ------- render -------
 
+  function drawRoom4Outro() {
+    const baseScale = Math.min(viewW / ROOM_W_PX, viewH / ROOM_H_PX);
+    const renderW = ROOM_W_PX * baseScale;
+    const renderH = ROOM_H_PX * baseScale;
+    const offX = (viewW - renderW) / 2;
+    const offY = (viewH - renderH) / 2;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.fillStyle = "#000000";
+    ctx.fillRect(0, 0, viewW, viewH);
+    ctx.setTransform(
+      baseScale * dpr,
+      0,
+      0,
+      baseScale * dpr,
+      offX * dpr,
+      offY * dpr,
+    );
+    const focalX = ROOM_W_PX / 2;
+    const focalY = ROOM_H_PX / 2;
+    drawVoidBg(ctx, outroBg, ROOM_W_PX, ROOM_H_PX, focalX, focalY);
+    // Hero at spawn (room centre). Standard gameplay render so the
+    // body stays consistent with what the player just saw in the
+    // tutorial rooms.
+    drawPlayerEye(ctx, player, PLAYER_SIZE, {
+      ringColor: profile.outerRing,
+      pupilColor: profile.pupil,
+      ghostColor: profile.outerRing,
+      dashDurationSec: DASH_DURATION_MS / 1000,
+      profile,
+    });
+    // Narrator beats — typewriter at the top of the stage, same
+    // visual treatment as the intro cinematic so the player reads
+    // the voice as the same entity.
+    drawOutroNarration(ctx, focalX, 120);
+    // Fade overlays sit on top of the canonical stage so the
+    // letterbox bars darken with the scene. The arrival fade-in
+    // (room4FadeIn) and the departure fade-out (room4FadeOut) never
+    // overlap: room4FadeIn lands at 0 well before room4FadeOut rises.
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const overlay = Math.max(room4FadeIn, room4FadeOut);
+    if (overlay > 0) {
+      ctx.fillStyle = `rgba(0, 0, 0, ${overlay})`;
+      ctx.fillRect(0, 0, viewW, viewH);
+    }
+  }
+
+  function drawOutroNarration(
+    ctx2: CanvasRenderingContext2D,
+    centerX: number,
+    topY: number,
+  ): void {
+    const t = room4Age;
+    let active: typeof OUTRO_BEATS[number] | null = null;
+    for (const beat of OUTRO_BEATS) {
+      const end =
+        beat.typeStart + beat.typeDuration + beat.holdDuration + beat.fadeDuration;
+      if (t >= beat.typeStart && t < end) {
+        active = beat;
+        break;
+      }
+    }
+    if (!active) return;
+
+    const rel = t - active.typeStart;
+    const typedT = Math.min(1, rel / active.typeDuration);
+    const charsVisible = Math.max(
+      0,
+      Math.min(active.text.length, Math.floor(active.text.length * typedT)),
+    );
+    const partial = active.text.slice(0, charsVisible);
+
+    let alpha = 1;
+    const fadeInSec = 0.25;
+    if (rel < fadeInSec) alpha = rel / fadeInSec;
+    const holdEnd = active.typeDuration + active.holdDuration;
+    if (rel > holdEnd) {
+      alpha = Math.min(
+        alpha,
+        Math.max(0, 1 - (rel - holdEnd) / active.fadeDuration),
+      );
+    }
+    if (alpha <= 0) return;
+
+    const showCursor =
+      rel < holdEnd &&
+      (rel < active.typeDuration || Math.floor(rel * 2.5) % 2 === 0);
+    const display = partial + (showCursor ? "▍" : "");
+
+    ctx2.save();
+    ctx2.globalAlpha = alpha;
+    ctx2.textAlign = "center";
+    ctx2.textBaseline = "top";
+    ctx2.font =
+      "500 24px ui-monospace, 'SF Mono', 'Consolas', 'Liberation Mono', monospace";
+    ctx2.fillStyle = "#7dd3fc";
+    ctx2.shadowColor = "#38bdf8";
+    ctx2.shadowBlur = 12;
+    ctx2.fillText(display, centerX, topY);
+    ctx2.restore();
+  }
+
   function render() {
+    // Tutorial outro — void backdrop + hero + narrator beats + a
+    // hard fade-to-black at the end. No HUD, no walls, no arena bg.
+    // Matches the cinematic's visual language so the handoff into
+    // /rooms.html reads as a continuation, not a new scene.
+    if (currentRoom.id === "room4") {
+      drawRoom4Outro();
+      return;
+    }
+
     // letterbox: clear in CSS pixels, then transform into room space
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.fillStyle = PALETTE.bg;
