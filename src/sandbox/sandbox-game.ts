@@ -39,7 +39,9 @@ import {
   loadKeybinds,
   type KeybindProfile,
 } from "../lib/keybinds";
+import { BackgroundFx } from "../lib/bg-fx";
 import { createSandboxPauseMenu } from "../lib/pause-menu";
+import { PostProcessor, DEFAULT_POST } from "../lib/postprocess";
 import { createMenu } from "../lib/settings-menu";
 import {
   PICKUP_COLORS,
@@ -97,6 +99,8 @@ audio.init();
 
 const canvas = document.getElementById("app") as HTMLCanvasElement;
 const ctx = canvas.getContext("2d")!;
+const post = new PostProcessor();
+const bgFx = new BackgroundFx();
 
 let dpr = window.devicePixelRatio || 1;
 let viewW = 0;
@@ -110,6 +114,7 @@ function resize() {
   canvas.height = Math.floor(viewH * dpr);
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   rebuildGrid();
+  bgFx.resize(viewW, viewH);
 }
 
 const GRID_STEP = 60;
@@ -970,6 +975,8 @@ function frame(now: number) {
     return;
   }
 
+  bgFx.update(dt);
+
   // age floating texts, rings, particles even after end so they finish out
   for (const t of floatingTexts) {
     t.age += dt;
@@ -1382,13 +1389,17 @@ function multColor(m: number): string {
 }
 
 function render() {
-  // background + grid (cached offscreen canvas)
+  // Solid bg → ambient pulse → grid lines → ambient dust. Order matters:
+  // grid sits ABOVE the pulse so the cells stay legible, and dust sits
+  // above the grid so the foreground reads as "things drifting in the
+  // arena" instead of being lost between lines.
+  ctx.fillStyle = PALETTE.bg;
+  ctx.fillRect(0, 0, viewW, viewH);
+  bgFx.drawBack(ctx, viewW, viewH);
   if (gridCanvas) {
     ctx.drawImage(gridCanvas, 0, 0, viewW, viewH);
-  } else {
-    ctx.fillStyle = PALETTE.bg;
-    ctx.fillRect(0, 0, viewW, viewH);
   }
+  bgFx.drawFront(ctx);
 
   ctx.save();
   ctx.strokeStyle = "rgba(255,255,255,0.6)";
@@ -1600,6 +1611,8 @@ function render() {
     ctx.fillRect(0, 0, viewW, viewH);
     ctx.restore();
   }
+
+  post.apply(ctx, DEFAULT_POST);
 
   drawHUD();
   drawGodModeBadge(ctx, viewW);

@@ -29,8 +29,10 @@ export function drawRoomGrid(
   ctx.restore();
 }
 
-// Build an offscreen canvas with the arena background + grid pattern.
-// Caller redraws this on resize and blits via drawImage each frame.
+// Build an offscreen canvas with the arena grid pattern on a transparent
+// background. Caller paints PALETTE.bg first (so backgrounds like the
+// synthwave pulse can show through between grid cells), then blits this
+// via drawImage each frame.
 export function createGridCanvas(
   viewW: number,
   viewH: number,
@@ -42,8 +44,6 @@ export function createGridCanvas(
   const gctx = gc.getContext("2d");
   if (!gctx) return null;
   gctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  gctx.fillStyle = PALETTE.bg;
-  gctx.fillRect(0, 0, viewW, viewH);
   gctx.strokeStyle = PALETTE.bgGrid;
   gctx.lineWidth = 1;
   gctx.beginPath();

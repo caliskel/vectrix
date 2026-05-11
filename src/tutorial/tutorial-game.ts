@@ -86,7 +86,9 @@ import {
   triggerPlayerSmash,
   updateEye,
 } from "../lib/player";
+import { BackgroundFx } from "../lib/bg-fx";
 import { createPauseMenu } from "../lib/pause-menu";
+import { PostProcessor, DEFAULT_POST } from "../lib/postprocess";
 import { type Bounds, hitBounds } from "../lib/types";
 import {
   bulletInsideWall,
@@ -361,6 +363,8 @@ export function start(canvas: HTMLCanvasElement): void {
   const rawCtx = canvas.getContext("2d");
   if (!rawCtx) return;
   const ctx: CanvasRenderingContext2D = rawCtx;
+  const post = new PostProcessor();
+  const bgFx = new BackgroundFx();
 
   const settings: Settings = loadSettings();
   // Keybinds — global profile from the landing-page Controls
@@ -412,6 +416,7 @@ export function start(canvas: HTMLCanvasElement): void {
     canvas.width = Math.floor(viewW * dpr);
     canvas.height = Math.floor(viewH * dpr);
     recomputeLayout();
+    bgFx.resize(viewW, viewH);
   }
   resize();
   window.addEventListener("resize", resize);
@@ -1250,6 +1255,8 @@ export function start(canvas: HTMLCanvasElement): void {
       return;
     }
 
+    bgFx.update(dt);
+
     // age FX always so they finish out even after fail
     for (const t of floatingTexts) {
       t.age += dt;
@@ -1896,6 +1903,7 @@ export function start(canvas: HTMLCanvasElement): void {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.fillStyle = PALETTE.bg;
     ctx.fillRect(0, 0, viewW, viewH);
+    bgFx.drawBack(ctx, viewW, viewH);
 
     // screen shake — applied to the room transform only so HUD stays put
     let shakeX = 0;
@@ -2110,6 +2118,8 @@ export function start(canvas: HTMLCanvasElement): void {
     // back to CSS pixels for full-screen overlays + HUD
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
+    bgFx.drawFront(ctx);
+
     // global white impact flash — alpha fades over the remaining window
     if (state.screenFlashRemaining > 0 && state.screenFlashInitial > 0) {
       const t = state.screenFlashRemaining / state.screenFlashInitial;
@@ -2163,6 +2173,8 @@ export function start(canvas: HTMLCanvasElement): void {
       ctx.fillRect(0, 0, viewW, viewH);
       ctx.restore();
     }
+
+    post.apply(ctx, DEFAULT_POST);
 
     drawHUD();
     drawTutorialHint();
