@@ -3,16 +3,18 @@
 //   1. Void scene: narrator speaks three English lines over the same
 //      drifting grid + dust used in the intro, so the cinematic reads
 //      as a bookend to the opening.
-//   2. Playable "to be continued" room: tutorial-sized 1200×800
-//      arena rendered with the SAME arenaBg + flickering grid + walls
-//      the tutorial uses, so the screen reads as a known tutorial
-//      room. The hero walks around with gameplay physics. A scramble-
-//      text "TO BE CONTINUED" sits dead-centre, styled like the
+//   2. Playable "to be continued" room: a one-to-one clone of the
+//      tutorial Room 0 visual stack — same camera follow, same
+//      BackgroundFx + EnergyBackground + BackgroundText margin
+//      effects, same animated arenaBg, same flickering grid nodes,
+//      same wall layer + wallFx, same scanlines. Only the
+//      onboarding-specific layers (markers, door, HUD, hint banner)
+//      are dropped. "TO BE CONTINUED" sits at the world centre in
+//      the cyan colour of the tutorial hint banner, styled like the
 //      tutorial's "who was that?" first-thought line.
 //
-// Pure canvas 2D. Reuses void-bg for the cinematic, arena-bg + grid +
-// walls for the room (same modules the tutorial render path uses),
-// drawPlayerEye for the hero, and the scramble-text helper.
+// Pure canvas 2D. Reuses void-bg for the cinematic and the full
+// tutorial render pipeline for the room.
 
 import {
   BLINK_CLOSE_DURATION_MS,
@@ -45,6 +47,9 @@ import {
 import {
   createArenaBg,
   drawArenaBg,
+  drawScanlines,
+  tickScanlines,
+  updateArenaBg,
   type ArenaBg,
 } from "../lib/arena-bg";
 import {
@@ -53,30 +58,54 @@ import {
   updateGridNodes,
   type GridNodeState,
 } from "../lib/grid";
-import { drawWalls, type Wall } from "../lib/walls";
+import {
+  createWallFx,
+  drawWallOverlay,
+  drawWalls,
+  updateWallFx,
+  type Wall,
+  type WallFx,
+} from "../lib/walls";
+import {
+  createCamera,
+  snapCamera,
+  updateCamera,
+  type Camera,
+} from "../lib/camera";
+import { BackgroundFx } from "../lib/bg-fx";
+import {
+  createEnergyBackground,
+  drawEnergyBackground,
+  updateEnergyBackground,
+  type ArenaScreenBounds,
+  type EnergyBackground,
+} from "../lib/background-energy";
+import {
+  createBackgroundTextState,
+  drawBackgroundTexts,
+  updateBackgroundTexts,
+  type BackgroundTextState,
+} from "../lib/background-text";
 import {
   drawScrambleText,
   makeScrambleSchedule,
   type ScrambleSchedule,
 } from "../lib/scramble-text";
+import { PALETTE } from "../lib/palette";
 import { audio } from "../lib/audio";
 
-const CANVAS_W = 1200;
-const CANVAS_H = 800;
-const EYE_CX = 600;
+// Canonical room dimensions — match the tutorial exactly so the
+// hero scale, camera maths, and bg modules all stay 1:1 with what
+// the player saw in the tutorial.
+const ROOM_W_PX = 1200;
+const ROOM_H_PX = 800;
+const EYE_CX = ROOM_W_PX / 2;
 const EYE_CY = 420;
-// HERO_SIZE matches the in-game player — same value the tutorial
-// and rooms render path uses for drawPlayerEye. Anything bigger
-// makes the hero look out of scale next to the tutorial-sized
-// 1200×800 walls (which is exactly what was happening when this
-// was 60).
 const HERO_SIZE = PLAYER_SIZE;
-// Void scene scale — small "glyph in the void" composition during
-// the narrator beats. With HERO_SIZE=32 the effective visual is ~27 px,
-// matching the intro narration phase's pullback-end size.
 const HERO_SCALE_VOID = 0.85;
 const ACCEL_FACTOR = 9;
 const FRICTION = 8.0;
+const WALL_T = 30;
 
 type PhaseId =
   | "fadein"
@@ -96,12 +125,8 @@ const PHASE_ORDER: PhaseId[] = [
 const PHASE_DURATIONS: Record<PhaseId, number> = {
   fadein: 1.5,
   settle: 1.5,
-  // Three English beats with reverse-type erase between them — total
-  // ~18.5 s, sized to match the intro's narration pacing.
   narration: 18.5,
   voidfade: 1.5,
-  // Sentinel for "stays until input"; never reached by the auto-
-  // advance because updateEpilogue clamps phaseTime in this state.
   roompresent: 9_999,
 };
 
@@ -115,10 +140,6 @@ type NarrationBeat = {
   eraseDuration: number;
 };
 
-// English narrator beats. Pacing follows the intro: typing speed
-// roughly tracks ~70 ms/char, holdDuration covers the legibility
-// window before reverse-type erase kicks in. typeStarts retimed so
-// later beats begin AFTER the previous one fully erases.
 const NARRATION_BEATS: NarrationBeat[] = [
   {
     text: "Oh? I didn't expect you to win.",
@@ -146,30 +167,14 @@ for (const beat of NARRATION_BEATS) {
   beat.eraseDuration = (beat.text.length * NARRATION_ERASE_SPEED_MS) / 1000;
 }
 
-const WALL_T = 30;
-
-// "TO BE CONTINUED" scramble schedule. The user asked for the SAME
-// style as the tutorial's "who was that?" boot thought (default
-// drawScrambleText font + scramble effect) but recoloured to match
-// the tutorial hint banner at the bottom of the screen. Slow settle
-// reads as a deliberate end-of-act beat rather than a quick thought.
 const TBC_TEXT = "TO BE CONTINUED";
 const TBC_SCRAMBLE_SCHEDULE: ScrambleSchedule = makeScrambleSchedule({
   appearStart: 0.4,
   fadeInDuration: 0.6,
   settleDuration: 1.9,
-  // Long hold — this is the final beat of the game, not a transient
-  // thought. Big honking holdDuration so the scramble never fades
-  // back out while the player explores the room.
   holdDuration: 9_000,
   fadeOutDuration: 0.4,
 });
-// Matches the tutorial hint banner colour (HINT_TEXT_COLOR =
-// "#7dd3fc"). Per the user's note, the "WHITE / specific font" feel
-// they want is the *scramble style* of "who was that?" — kept by
-// using drawScrambleText's default font — paired with the hint
-// banner colour for cohesion with the rest of the tutorial-style
-// presentation.
 const TBC_COLOR = "#7dd3fc";
 const TBC_SHADOW = "#7dd3fc";
 
@@ -181,33 +186,40 @@ export type EpilogueState = {
 
   hero: Player;
   heroProfile: PlayerProfile;
-  // Input — bound to the player's saved keybinds (same global profile
-  // as gameplay). Movement uses the same accel/friction model as the
-  // tutorial / sandbox loops so the feel carries over.
   keybinds: KeybindProfile;
   keys: Set<string>;
 
   // Void cinematic background.
   bg: VoidBgState;
 
-  // Room scene visuals — same primitives the tutorial render path
-  // uses, so the epilogue room reads as a known tutorial room.
+  // Tutorial-style room visual stack — created once, ticked / drawn
+  // only while phase === "roompresent".
   roomWalls: Wall[];
   roomArenaBg: ArenaBg;
   roomGridNodes: GridNodeState;
+  roomWallFx: WallFx;
+  roomCamera: Camera;
+  // Screen-space margin effects — sized to viewport on creation,
+  // re-sized via the regenerate calls when the window dimensions
+  // change between frames.
+  roomBgFx: BackgroundFx;
+  roomEnergyBg: EnergyBackground | null;
+  roomBgText: BackgroundTextState | null;
+  // Cached viewport dimensions so the resize check inside
+  // updateEpilogue can detect changes without an external trigger.
+  lastViewW: number;
+  lastViewH: number;
 
   narratorBeatIdx: number;
   narratorCharsLast: number;
-  // Phase-local timer driving the scramble title schedule. Starts at
-  // 0 when the room scene begins.
   roomAge: number;
 };
 
 export function createEpilogueState(): EpilogueState {
   const heroProfile = loadPlayerProfile();
   const hero = createPlayer();
-  hero.x = CANVAS_W / 2;
-  hero.y = CANVAS_H / 2 + 40;
+  hero.x = ROOM_W_PX / 2;
+  hero.y = ROOM_H_PX / 2 + 80;
   hero.isClosing = false;
   hero.closeAmount = 0;
   hero.blinkActive = false;
@@ -215,14 +227,13 @@ export function createEpilogueState(): EpilogueState {
   hero.breathPhase = 0;
   hero.pupilOffsetX = 0;
   hero.pupilOffsetY = 0;
-  // Room walls — perimeter only, matching the tutorial Room 0 layout
-  // minus the exit door gap (the epilogue room has no door; the
-  // player returns to the main menu via Enter / Escape).
+  // Perimeter-only walls — no door gap, no internal obstacles. Player
+  // can walk the whole 1200×800 floor.
   const roomWalls: Wall[] = [
-    { x: 0, y: 0, w: CANVAS_W, h: WALL_T },
-    { x: 0, y: CANVAS_H - WALL_T, w: CANVAS_W, h: WALL_T },
-    { x: 0, y: 0, w: WALL_T, h: CANVAS_H },
-    { x: CANVAS_W - WALL_T, y: 0, w: WALL_T, h: CANVAS_H },
+    { x: 0, y: 0, w: ROOM_W_PX, h: WALL_T },
+    { x: 0, y: ROOM_H_PX - WALL_T, w: ROOM_W_PX, h: WALL_T },
+    { x: 0, y: 0, w: WALL_T, h: ROOM_H_PX },
+    { x: ROOM_W_PX - WALL_T, y: 0, w: WALL_T, h: ROOM_H_PX },
   ];
   return {
     time: 0,
@@ -233,17 +244,30 @@ export function createEpilogueState(): EpilogueState {
     heroProfile,
     keybinds: loadKeybinds(),
     keys: new Set<string>(),
-    bg: createVoidBg(CANVAS_W, CANVAS_H),
+    bg: createVoidBg(ROOM_W_PX, ROOM_H_PX),
     roomWalls,
-    roomArenaBg: createArenaBg(CANVAS_W, CANVAS_H),
-    roomGridNodes: createGridNodeState(CANVAS_W, CANVAS_H),
+    roomArenaBg: createArenaBg(ROOM_W_PX, ROOM_H_PX),
+    roomGridNodes: createGridNodeState(ROOM_W_PX, ROOM_H_PX),
+    roomWallFx: createWallFx(roomWalls),
+    roomCamera: createCamera(),
+    roomBgFx: new BackgroundFx(),
+    roomEnergyBg: null,
+    roomBgText: null,
+    lastViewW: 0,
+    lastViewH: 0,
     narratorBeatIdx: -1,
     narratorCharsLast: 0,
     roomAge: 0,
   };
 }
 
-export function updateEpilogue(state: EpilogueState, dt: number): void {
+export function updateEpilogue(
+  state: EpilogueState,
+  dt: number,
+  ctx: CanvasRenderingContext2D,
+  viewW: number,
+  viewH: number,
+): void {
   state.time += dt;
   state.phaseTime += dt;
   const dur = PHASE_DURATIONS[state.phase];
@@ -252,53 +276,100 @@ export function updateEpilogue(state: EpilogueState, dt: number): void {
     if (idx < PHASE_ORDER.length - 1) {
       state.phase = PHASE_ORDER[idx + 1];
       state.phaseTime = 0;
-      onPhaseEnter(state);
+      onPhaseEnter(state, viewW, viewH);
     }
   }
   if (state.phase === "roompresent") {
     state.roomAge += dt;
+    // Recreate the viewport-sized bg modules if the window changed
+    // size since last frame (initial creation also goes through this
+    // branch via the lastViewW = 0 sentinel).
+    if (state.lastViewW !== viewW || state.lastViewH !== viewH) {
+      state.roomEnergyBg = createEnergyBackground(viewW, viewH);
+      state.roomBgText = createBackgroundTextState(viewW, viewH);
+      state.lastViewW = viewW;
+      state.lastViewH = viewH;
+      state.roomBgFx.resize(viewW, viewH);
+    }
     tickRoomScene(state, dt);
-    // Flicker / pulse the tutorial-style grid every frame.
+    updateArenaBg(state.roomArenaBg, dt);
+    updateWallFx(state.roomWallFx, dt, state.roomWalls);
     updateGridNodes(state.roomGridNodes, dt);
+    if (state.roomEnergyBg) {
+      updateEnergyBackground(state.roomEnergyBg, dt, viewW, viewH);
+    }
+    if (state.roomBgText) {
+      updateBackgroundTexts(
+        state.roomBgText,
+        dt,
+        ctx,
+        viewW,
+        viewH,
+        computeArenaBounds(state, viewW, viewH),
+      );
+    }
+    tickScanlines(dt);
+    // Always centre the camera on the player — same lerp the tutorial
+    // and rooms use.
+    updateCamera(
+      state.roomCamera,
+      state.hero.x,
+      state.hero.y,
+      ROOM_W_PX,
+      ROOM_H_PX,
+      { minX: 0, minY: 0, maxX: ROOM_W_PX, maxY: ROOM_H_PX },
+    );
   }
-  // Idle hero animation — same engine sandbox/rooms use, so blinks
-  // and breath read the same. Drives pupil / breath even during the
-  // playable room (the eye still tracks dash cooldown etc.).
   updateEye(state.hero, dt, {
     threat: null,
     size: HERO_SIZE,
     dashDurationSec: DASH_DURATION_MS / 1000,
   });
-  tickVoidBg(state.bg, dt, CANVAS_W, CANVAS_H, 0.6);
+  tickVoidBg(state.bg, dt, ROOM_W_PX, ROOM_H_PX, 0.6);
 }
 
-function onPhaseEnter(state: EpilogueState): void {
+function onPhaseEnter(
+  state: EpilogueState,
+  viewW: number,
+  viewH: number,
+): void {
   if (state.phase === "roompresent") {
     state.roomAge = 0;
-    // Reset player velocity so the room starts still even if a stray
-    // accel slipped through from the void scene. Spawn near the
-    // bottom-centre so the hero stands clear of the "TO BE CONTINUED"
-    // title pinned at the canvas centre.
     state.hero.vx = 0;
     state.hero.vy = 0;
-    state.hero.x = CANVAS_W / 2;
-    state.hero.y = CANVAS_H - 200;
+    // Spawn at the canonical room centre so the camera starts
+    // already aligned and the "TO BE CONTINUED" title sits above
+    // the hero.
+    state.hero.x = ROOM_W_PX / 2;
+    state.hero.y = ROOM_H_PX / 2 + 120;
+    // Prime camera + viewport-sized bg modules so the first frame
+    // doesn't have stale state.
+    updateCamera(
+      state.roomCamera,
+      state.hero.x,
+      state.hero.y,
+      ROOM_W_PX,
+      ROOM_H_PX,
+      { minX: 0, minY: 0, maxX: ROOM_W_PX, maxY: ROOM_H_PX },
+    );
+    snapCamera(state.roomCamera);
+    if (viewW > 0 && viewH > 0) {
+      state.roomEnergyBg = createEnergyBackground(viewW, viewH);
+      state.roomBgText = createBackgroundTextState(viewW, viewH);
+      state.lastViewW = viewW;
+      state.lastViewH = viewH;
+      state.roomBgFx.resize(viewW, viewH);
+    }
   }
 }
 
-/** Player-driven skip: fast-forward the void cinematic to the room
- *  scene. Called by the page entry on any key / pointer event during
- *  the void. */
 export function trySkipEpilogue(state: EpilogueState): void {
   if (state.phase === "roompresent") return;
   state.phase = "roompresent";
   state.phaseTime = 0;
-  onPhaseEnter(state);
+  onPhaseEnter(state, state.lastViewW, state.lastViewH);
 }
 
-/** Input plumbing — the page entry registers keydown/keyup at window
- *  level and forwards into these. Mirrors the gameplay loops so a
- *  rebound key works here too. */
 export function epilogueOnKeyDown(state: EpilogueState, code: string): void {
   state.keys.add(code);
 }
@@ -314,9 +385,6 @@ export function epilogueIsInRoom(state: EpilogueState): boolean {
 
 function tickRoomScene(state: EpilogueState, dt: number): void {
   const player = state.hero;
-  // Same accel/friction model as sandbox + tutorial: ramp into the
-  // input direction, exponential damping, then cap speed to the walk
-  // factor when WALK is held.
   const input = inputDirection(state.keys, state.keybinds);
   if (input.x !== 0 || input.y !== 0) {
     player.facingX = input.x;
@@ -339,15 +407,13 @@ function tickRoomScene(state: EpilogueState, dt: number): void {
   }
   player.x += player.vx * dt;
   player.y += player.vy * dt;
-  // Perimeter clamp — same PLAYER_SIZE / 2 = 16 the in-game tutorial
-  // uses, so the hero stops at the wall at exactly the visual edge
-  // a player has muscle-memorised from gameplay.
+  // Perimeter clamp — PLAYER_SIZE / 2 = 16, matching the in-game
+  // tutorial so the visual edge stops at the wall identically.
   const half = PLAYER_SIZE / 2;
-  // WALL_T (30) is already declared at module scope.
   const minX = WALL_T + half;
-  const maxX = CANVAS_W - WALL_T - half;
+  const maxX = ROOM_W_PX - WALL_T - half;
   const minY = WALL_T + half;
-  const maxY = CANVAS_H - WALL_T - half;
+  const maxY = ROOM_H_PX - WALL_T - half;
   if (player.x < minX) {
     player.x = minX;
     if (player.vx < 0) player.vx = 0;
@@ -364,6 +430,30 @@ function tickRoomScene(state: EpilogueState, dt: number): void {
   }
 }
 
+/** Same arena-bounds projection the tutorial uses — converts the
+ *  visible chunk of the canonical 1200×800 room into screen-space
+ *  coords so the energy + bg-text passes can clip to it. */
+function computeArenaBounds(
+  state: EpilogueState,
+  viewW: number,
+  viewH: number,
+): ArenaScreenBounds {
+  const scale = Math.min(viewW / ROOM_W_PX, viewH / ROOM_H_PX);
+  const offsetX = (viewW - ROOM_W_PX * scale) / 2;
+  const offsetY = (viewH - ROOM_H_PX * scale) / 2;
+  const camera = state.roomCamera;
+  const canonLeft = Math.max(0, -camera.x);
+  const canonTop = Math.max(0, -camera.y);
+  const canonRight = Math.min(ROOM_W_PX, ROOM_W_PX - camera.x);
+  const canonBottom = Math.min(ROOM_H_PX, ROOM_H_PX - camera.y);
+  return {
+    x: offsetX + canonLeft * scale,
+    y: offsetY + canonTop * scale,
+    w: Math.max(0, (canonRight - canonLeft) * scale),
+    h: Math.max(0, (canonBottom - canonTop) * scale),
+  };
+}
+
 export function drawEpilogue(
   ctx: CanvasRenderingContext2D,
   state: EpilogueState,
@@ -371,33 +461,37 @@ export function drawEpilogue(
   viewH: number,
   dpr: number,
 ): void {
-  // Letterbox onto the canonical 1200×800 stage so layout maths stay
-  // consistent across window sizes.
-  const scale = Math.min(viewW / CANVAS_W, viewH / CANVAS_H);
-  const offsetX = (viewW - CANVAS_W * scale) / 2;
-  const offsetY = (viewH - CANVAS_H * scale) / 2;
-  ctx.save();
-  ctx.scale(dpr, dpr);
-  ctx.fillStyle = "#000000";
-  ctx.fillRect(0, 0, viewW, viewH);
-  ctx.translate(offsetX, offsetY);
-  ctx.scale(scale, scale);
-
   if (state.phase === "roompresent") {
-    drawRoomScene(ctx, state);
+    drawRoomScene(ctx, state, viewW, viewH, dpr);
   } else {
-    drawVoidScene(ctx, state);
+    drawVoidScene(ctx, state, viewW, viewH, dpr);
   }
-  ctx.restore();
 }
 
 function drawVoidScene(
   ctx: CanvasRenderingContext2D,
   state: EpilogueState,
+  viewW: number,
+  viewH: number,
+  dpr: number,
 ): void {
-  drawVoidBg(ctx, state.bg, CANVAS_W, CANVAS_H, EYE_CX, EYE_CY);
-  drawVoidVignette(ctx, CANVAS_W, CANVAS_H, EYE_CX, EYE_CY);
-  // Hero drawn slightly above centre so the narrator text has space.
+  const scale = Math.min(viewW / ROOM_W_PX, viewH / ROOM_H_PX);
+  const offsetX = (viewW - ROOM_W_PX * scale) / 2;
+  const offsetY = (viewH - ROOM_H_PX * scale) / 2;
+  ctx.save();
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.fillStyle = "#000000";
+  ctx.fillRect(0, 0, viewW, viewH);
+  ctx.setTransform(
+    scale * dpr,
+    0,
+    0,
+    scale * dpr,
+    offsetX * dpr,
+    offsetY * dpr,
+  );
+  drawVoidBg(ctx, state.bg, ROOM_W_PX, ROOM_H_PX, EYE_CX, EYE_CY);
+  drawVoidVignette(ctx, ROOM_W_PX, ROOM_H_PX, EYE_CX, EYE_CY);
   ctx.save();
   ctx.translate(EYE_CX, EYE_CY);
   ctx.scale(HERO_SCALE_VOID, HERO_SCALE_VOID);
@@ -412,64 +506,86 @@ function drawVoidScene(
     profile: state.heroProfile,
   });
   ctx.restore();
-
   if (state.phase === "narration") drawNarration(ctx, state);
-
-  // Curtain on the way in and the way out.
   if (state.phase === "fadein") {
     const a = 1 - Math.min(1, state.phaseTime / PHASE_DURATIONS.fadein);
     if (a > 0) {
-      ctx.save();
       ctx.fillStyle = `rgba(0, 0, 0, ${a})`;
-      ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
-      ctx.restore();
+      ctx.fillRect(0, 0, ROOM_W_PX, ROOM_H_PX);
     }
   } else if (state.phase === "voidfade") {
     const a = Math.min(1, state.phaseTime / PHASE_DURATIONS.voidfade);
     if (a > 0) {
-      ctx.save();
       ctx.fillStyle = `rgba(0, 0, 0, ${a})`;
-      ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
-      ctx.restore();
+      ctx.fillRect(0, 0, ROOM_W_PX, ROOM_H_PX);
     }
   }
+  ctx.restore();
 }
 
 function drawRoomScene(
   ctx: CanvasRenderingContext2D,
   state: EpilogueState,
+  viewW: number,
+  viewH: number,
+  dpr: number,
 ): void {
-  // === Visuals lifted directly from the tutorial render path ===
-  // 1. arena background (parallax dots + cached light sprite around
-  //    the player), 2. flickering grid nodes, 3. perimeter walls
-  //    rendered by the canonical drawWalls layer. Same three calls
-  //    in the same order as tutorial-game.ts → drawRoom().
-  drawArenaBg(ctx, state.roomArenaBg, { x: state.hero.x, y: state.hero.y });
-  drawRoomGrid(ctx, CANVAS_W, CANVAS_H, state.roomGridNodes);
+  const scale = Math.min(viewW / ROOM_W_PX, viewH / ROOM_H_PX);
+  const offsetX = (viewW - ROOM_W_PX * scale) / 2;
+  const offsetY = (viewH - ROOM_H_PX * scale) / 2;
+  // === Same render order as tutorial-game.ts → render() ===
+  // 1. screen-space PALETTE.bg fill, 2. BackgroundFx back layer,
+  // 3. energy + text margin passes, 4. switch into the letterboxed
+  // canonical canvas with the camera transform, 5. arena bg + grid
+  // + walls + wall fx, 6. hero, 7. back to screen-space for
+  // scanlines / curtains.
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.fillStyle = PALETTE.bg;
+  ctx.fillRect(0, 0, viewW, viewH);
+  state.roomBgFx.drawBack(ctx, viewW, viewH);
+  const arenaBounds = computeArenaBounds(state, viewW, viewH);
+  if (state.roomEnergyBg) {
+    drawEnergyBackground(ctx, state.roomEnergyBg, viewW, viewH, arenaBounds);
+  }
+  if (state.roomBgText) {
+    drawBackgroundTexts(ctx, state.roomBgText, viewW, viewH, arenaBounds);
+  }
+  // Letterboxed canonical canvas — same setTransform pattern the
+  // tutorial uses so the room scale is identical.
+  ctx.setTransform(
+    scale * dpr,
+    0,
+    0,
+    scale * dpr,
+    offsetX * dpr,
+    offsetY * dpr,
+  );
+  // Camera transform — world scrolls around the always-centred hero.
+  ctx.save();
+  ctx.translate(-state.roomCamera.x, -state.roomCamera.y);
+  drawArenaBg(ctx, state.roomArenaBg, {
+    x: state.hero.x,
+    y: state.hero.y,
+  });
+  drawRoomGrid(ctx, ROOM_W_PX, ROOM_H_PX, state.roomGridNodes);
   drawWalls(ctx, state.roomWalls);
-
-  // "TO BE CONTINUED" — pinned dead-centre of the room. Uses
-  // drawScrambleText with the DEFAULT font ("300 22px ui-monospace,
-  // SFMono-Regular, Menlo, monospace") so the scramble effect, weight
-  // and size match the tutorial's "who was that?" exactly. Colour is
-  // the tutorial hint-banner cyan (#7dd3fc) so the line reads as part
-  // of the tutorial visual language.
+  drawWallOverlay(ctx, state.roomWallFx, state.roomWalls);
+  // "TO BE CONTINUED" — pinned to the world centre of the room. Sits
+  // INSIDE the camera transform so it stays anchored to the room as
+  // the player walks around it.
   drawScrambleText(
     ctx,
     TBC_TEXT,
     state.roomAge,
     TBC_SCRAMBLE_SCHEDULE,
-    CANVAS_W / 2,
-    CANVAS_H / 2,
+    ROOM_W_PX / 2,
+    ROOM_H_PX / 2,
     {
       color: TBC_COLOR,
       shadowColor: TBC_SHADOW,
       shadowBlur: 6,
     },
   );
-
-  // Hero — drawn at his live (x, y) from the movement physics. Same
-  // drawPlayerEye renderer the in-game player uses.
   drawPlayerEye(ctx, state.hero, HERO_SIZE, {
     ringColor: state.heroProfile.outerRing,
     pupilColor: state.heroProfile.pupil,
@@ -477,10 +593,13 @@ function drawRoomScene(
     dashDurationSec: DASH_DURATION_MS / 1000,
     profile: state.heroProfile,
   });
-
-  // Footer hint — quiet "PRESS ENTER → MAIN MENU" so the player has
-  // a clear exit. Menu nav is keyboard-only (Enter / Escape) so a
-  // stray click doesn't bounce the player out.
+  ctx.restore();
+  // Back to screen-space for the CRT scanline overlay and the
+  // footer hint.
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  drawScanlines(ctx, viewW, viewH);
+  // Footer hint — quiet "PRESS ENTER → MAIN MENU". Keyboard-only
+  // nav so an accidental mouse click doesn't bounce the player out.
   ctx.save();
   ctx.globalAlpha = Math.min(1, state.roomAge / 1.6) * 0.55;
   ctx.textAlign = "center";
@@ -489,8 +608,8 @@ function drawRoomScene(
   ctx.fillStyle = "#7d8590";
   ctx.fillText(
     "PRESS ENTER — RETURN TO MAIN MENU",
-    CANVAS_W / 2,
-    CANVAS_H - 50,
+    viewW / 2,
+    viewH - 32,
   );
   ctx.restore();
 }
@@ -545,17 +664,14 @@ function drawNarration(
     state.narratorCharsLast = charsVisible;
   }
   const partial = active.text.slice(0, charsVisible);
-
   const fadeInSec = 0.25;
   const alpha = rel < fadeInSec ? rel / fadeInSec : 1;
   if (alpha <= 0) return;
-
   const showCursor =
     rel < holdEnd
       ? rel < active.typeDuration || Math.floor(rel * 2.5) % 2 === 0
       : true;
   const display = partial + (showCursor ? "▍" : "");
-
   ctx.save();
   ctx.globalAlpha = alpha;
   ctx.textAlign = "center";

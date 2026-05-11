@@ -55,7 +55,7 @@ function start(canvas: HTMLCanvasElement): void {
   function frame(now: number): void {
     const dt = Math.min(0.05, (now - lastTime) / 1000);
     lastTime = now;
-    updateEpilogue(state, dt);
+    updateEpilogue(state, dt, ctx!, viewW, viewH);
     drawEpilogue(ctx!, state, viewW, viewH, dpr);
     requestAnimationFrame(frame);
   }
