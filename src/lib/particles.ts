@@ -243,6 +243,62 @@ export function compactRings(
   list.length = writeIdx;
 }
 
+// FloatingText pool — score number "+500" floaters fire on every
+// dash-through, every kill, every multiplier tier crossing. Per-frame
+// counts are small but cumulative over a long run.
+const floatingTextPool: FloatingText[] = [];
+
+export function pushFloatingText(
+  list: FloatingText[],
+  x: number,
+  y: number,
+  text: string,
+  size: number,
+  color: string,
+  lifetime: number,
+  vy: number,
+): void {
+  const recycled = floatingTextPool.pop();
+  if (recycled) {
+    recycled.x = x;
+    recycled.y = y;
+    recycled.vy = vy;
+    recycled.text = text;
+    recycled.size = size;
+    recycled.color = color;
+    recycled.age = 0;
+    recycled.lifetime = lifetime;
+    list.push(recycled);
+    return;
+  }
+  list.push({
+    x,
+    y,
+    vy,
+    text,
+    size,
+    color,
+    age: 0,
+    lifetime,
+  });
+}
+
+export function compactFloatingTexts(
+  list: FloatingText[],
+  keep: (t: FloatingText) => boolean,
+): void {
+  let writeIdx = 0;
+  for (let readIdx = 0; readIdx < list.length; readIdx++) {
+    const t = list[readIdx];
+    if (keep(t)) {
+      list[writeIdx++] = t;
+    } else {
+      floatingTextPool.push(t);
+    }
+  }
+  list.length = writeIdx;
+}
+
 export function addFloatingText(
   list: FloatingText[],
   text: string,
@@ -255,16 +311,16 @@ export function addFloatingText(
     vy?: number;
   } = {},
 ): void {
-  list.push({
+  pushFloatingText(
+    list,
     x,
     y,
-    vy: opts.vy ?? -55,
     text,
-    size: opts.size ?? 20,
-    color: opts.color ?? "#ffffff",
-    age: 0,
-    lifetime: opts.lifetime ?? 0.5,
-  });
+    opts.size ?? 20,
+    opts.color ?? "#ffffff",
+    opts.lifetime ?? 0.5,
+    opts.vy ?? -55,
+  );
 }
 
 export function addRing(

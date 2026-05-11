@@ -128,6 +128,7 @@ import {
   type Particle,
   type Ring,
   addFloatingText,
+  compactFloatingTexts,
   compactParticles,
   compactRings,
   drawFloatingTexts,
@@ -1324,7 +1325,7 @@ export function start(canvas: HTMLCanvasElement): void {
       t.age += dt;
       t.y += t.vy * dt;
     }
-    floatingTexts = floatingTexts.filter((t) => t.age < t.lifetime);
+    compactFloatingTexts(floatingTexts, (t) => t.age < t.lifetime);
     for (const r of rings) r.age += dt;
     compactRings(rings, (r) => r.age < r.lifetime);
     for (const p of particles) {
@@ -2208,6 +2209,16 @@ export function start(canvas: HTMLCanvasElement): void {
 
 
     // bullets — trail pass then live pass.
+    // Off-screen cull bounds in world coords. Room 1 / Room 4 are
+    // 3600 / 8000 px wide and many bullets travel far outside the
+    // camera viewport. Skipping the trail loop + sprite blit for
+    // off-screen bullets is the biggest per-frame draw-call save
+    // these corridor rooms can get.
+    const cullMargin = 80;
+    const cullLeft = camera.x - cullMargin;
+    const cullRight = camera.x + ROOM_W_PX + cullMargin;
+    const cullTop = camera.y - cullMargin;
+    const cullBottom = camera.y + ROOM_H_PX + cullMargin;
     const bSize = settings.bullets.size;
     const bColor = settings.bullets.color;
     perfBegin("trails");
@@ -2216,6 +2227,12 @@ export function start(canvas: HTMLCanvasElement): void {
     ctx.shadowBlur = 0;
     for (const b of bullets) {
       if (b.trailCount === 0) continue;
+      if (
+        b.x < cullLeft ||
+        b.x > cullRight ||
+        b.y < cullTop ||
+        b.y > cullBottom
+      ) continue;
       const start = b.trailCount === 5 ? b.trailIdx : 0;
       for (let i = 0; i < b.trailCount; i++) {
         const j = (start + i) % 5;
@@ -2232,17 +2249,28 @@ export function start(canvas: HTMLCanvasElement): void {
     const bulletSprite = getBulletSprite(bColor, bSize);
     const bulletOffset = getBulletSpriteOffset(bSize);
     for (const b of bullets) {
+      if (
+        b.x < cullLeft ||
+        b.x > cullRight ||
+        b.y < cullTop ||
+        b.y > cullBottom
+      ) continue;
       ctx.drawImage(bulletSprite, b.x - bulletOffset, b.y - bulletOffset);
     }
     perfEnd("bullets");
 
-    // particles — flat path always; per-particle shadowBlur was a
-    // major frame-cost spike during combat. Particles are tiny and
-    // short-lived, the glow lift isn't worth the cost.
+    // particles — flat path always, plus off-screen cull (reuses the
+    // bullet cull rect since they share the camera-relative bounds).
     perfBegin("particles");
     ctx.save();
     ctx.shadowBlur = 0;
     for (const p of particles) {
+      if (
+        p.x < cullLeft ||
+        p.x > cullRight ||
+        p.y < cullTop ||
+        p.y > cullBottom
+      ) continue;
       const t = p.age / p.lifetime;
       const alpha = t < 0.5 ? 1 : Math.max(0, 1 - (t - 0.5) * 2);
       const sz = Math.max(0.5, p.initialSize * (1 - t));

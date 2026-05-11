@@ -108,6 +108,7 @@ import {
   type Particle,
   type Ring,
   addFloatingText,
+  compactFloatingTexts,
   compactParticles,
   compactRings,
   drawFloatingTexts,
@@ -1575,7 +1576,7 @@ export function start(canvas: HTMLCanvasElement): void {
       t.age += dt;
       t.y += t.vy * dt;
     }
-    floatingTexts = floatingTexts.filter((t) => t.age < t.lifetime);
+    compactFloatingTexts(floatingTexts, (t) => t.age < t.lifetime);
     for (const r of rings) r.age += dt;
     compactRings(rings, (r) => r.age < r.lifetime);
     for (const p of particles) {

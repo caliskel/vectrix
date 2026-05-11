@@ -71,7 +71,13 @@ import {
 import { getBulletSprite, getBulletSpriteOffset } from "../lib/bullet-sprite";
 import { drawFpsOverlay, recordFrame } from "../lib/fps-meter";
 import { createSandboxPauseMenu } from "../lib/pause-menu";
-import { drawFloatingTexts } from "../lib/particles";
+import {
+  compactFloatingTexts,
+  compactParticles,
+  compactRings,
+  drawFloatingTexts,
+  pushFloatingText,
+} from "../lib/particles";
 import { PostProcessor, DEFAULT_POST } from "../lib/postprocess";
 import { createMenu } from "../lib/settings-menu";
 import {
@@ -332,22 +338,16 @@ function setBestScoreIfBetter(id: ConfigId, score: number): boolean {
   return false;
 }
 
-const BULLET_TRAIL = 5;
-
-type Bullet = {
-  x: number;
-  y: number;
-  vx: number;
-  vy: number;
-  bounces: boolean;
-  nearMissed: boolean;
-  dashedThroughId: number; // last dash session id this bullet was awarded for
-  // circular trail buffer (pre-allocated, no per-frame allocation)
-  trailX: Float32Array;
-  trailY: Float32Array;
-  trailIdx: number;   // next write slot
-  trailCount: number; // valid samples, capped at BULLET_TRAIL
-};
+// Bullet type + pool helpers come from lib/bullets — same shape +
+// trail-buffer recycling that rooms/tutorial use. The sandbox loop
+// doesn't read `flinchTriggered`, so the extra field is harmless.
+import {
+  BULLET_TRAIL,
+  type Bullet,
+  acquireBullet,
+  compactBullets,
+  releaseBullet,
+} from "../lib/bullets";
 
 type FloatingText = {
   x: number;
@@ -603,20 +603,13 @@ function spawnBullet() {
   const speed = settings.bullets.speed;
   const bounces = Math.random() < settings.bullets.bounceChance / 100;
 
-  while (bullets.length >= settings.bullets.maxBullets) bullets.shift();
-  bullets.push({
-    x,
-    y,
-    vx: Math.cos(angle) * speed,
-    vy: Math.sin(angle) * speed,
-    bounces,
-    nearMissed: false,
-    dashedThroughId: -1,
-    trailX: new Float32Array(BULLET_TRAIL),
-    trailY: new Float32Array(BULLET_TRAIL),
-    trailIdx: 0,
-    trailCount: 0,
-  });
+  while (bullets.length >= settings.bullets.maxBullets) {
+    const evicted = bullets.shift();
+    if (evicted) releaseBullet(evicted);
+  }
+  bullets.push(
+    acquireBullet(x, y, Math.cos(angle) * speed, Math.sin(angle) * speed, bounces),
+  );
 }
 
 function aabbHit(b: Bullet): boolean {
@@ -639,16 +632,16 @@ function addFloatingText(
     vy?: number;
   } = {},
 ) {
-  floatingTexts.push({
+  pushFloatingText(
+    floatingTexts,
     x,
     y,
-    vy: opts.vy ?? -55,
     text,
-    size: opts.size ?? 20,
-    color: opts.color ?? "#ffffff",
-    age: 0,
-    lifetime: opts.lifetime ?? 0.5,
-  });
+    opts.size ?? 20,
+    opts.color ?? "#ffffff",
+    opts.lifetime ?? 0.5,
+    opts.vy ?? -55,
+  );
 }
 
 function addRing(
@@ -1030,9 +1023,9 @@ function frame(now: number) {
     t.age += dt;
     t.y += t.vy * dt;
   }
-  floatingTexts = floatingTexts.filter((t) => t.age < t.lifetime);
+  compactFloatingTexts(floatingTexts, (t) => t.age < t.lifetime);
   for (const r of rings) r.age += dt;
-  rings = rings.filter((r) => r.age < r.lifetime);
+  compactRings(rings, (r) => r.age < r.lifetime);
   for (const p of particles) {
     p.age += dt;
     p.x += p.vx * dt;
@@ -1044,7 +1037,7 @@ function frame(now: number) {
       p.vy *= k;
     }
   }
-  particles = particles.filter((p) => p.age < p.lifetime);
+  compactParticles(particles, (p) => p.age < p.lifetime);
 
   if (state.runState === "ended") {
     if (state.hitVignetteTime > 0)
@@ -1312,10 +1305,14 @@ function frame(now: number) {
     }
   }
 
-  bullets = bullets.filter(
+  compactBullets(
+    bullets,
     (b) => b.x > -60 && b.x < viewW + 60 && b.y > -60 && b.y < viewH + 60,
   );
-  while (bullets.length > settings.bullets.maxBullets) bullets.shift();
+  while (bullets.length > settings.bullets.maxBullets) {
+    const evicted = bullets.shift();
+    if (evicted) releaseBullet(evicted);
+  }
 
   // collisions: dash-through (i-frame) > hit-ignore > shield-block > damage;
   // near-miss otherwise
@@ -1383,7 +1380,7 @@ function frame(now: number) {
   }
   if (consumedBullets.length > 0) {
     const consumed = new Set(consumedBullets);
-    bullets = bullets.filter((b) => !consumed.has(b));
+    compactBullets(bullets, (b) => !consumed.has(b));
   }
 
   // eye state: pupil tracks the closest bullet, dash ghosts spawn here too
