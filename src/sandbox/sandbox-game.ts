@@ -41,6 +41,13 @@ import {
 } from "../lib/keybinds";
 import { BackgroundFx } from "../lib/bg-fx";
 import {
+  createEnergyBackground,
+  drawEnergyBackground,
+  updateEnergyBackground,
+  type ArenaScreenBounds,
+  type EnergyBackground,
+} from "../lib/background-energy";
+import {
   createArenaBg,
   updateArenaBg,
   drawArenaBg,
@@ -120,6 +127,9 @@ const ctx = canvas.getContext("2d")!;
 const post = new PostProcessor();
 const bgFx = new BackgroundFx();
 let arenaBg: ArenaBg | null = null;
+// Energy background — kept in module scope so resizes don't reset
+// the drifting state. Created once on the first resize().
+let energyBg: EnergyBackground | null = null;
 
 let dpr = window.devicePixelRatio || 1;
 let viewW = 0;
@@ -135,6 +145,7 @@ function resize() {
   rebuildGrid();
   bgFx.resize(viewW, viewH);
   arenaBg = createArenaBg(viewW, viewH);
+  if (!energyBg) energyBg = createEnergyBackground(viewW, viewH);
 }
 
 const GRID_STEP = 60;
@@ -1010,6 +1021,7 @@ function frame(now: number) {
 
   bgFx.update(dt);
   if (arenaBg) updateArenaBg(arenaBg, dt);
+  if (energyBg) updateEnergyBackground(energyBg, dt, viewW, viewH);
   tickScanlines(dt);
   if (state.deathFx) updateDeathFx(state.deathFx, dt);
 
@@ -1433,6 +1445,15 @@ function render() {
   ctx.fillRect(0, 0, viewW, viewH);
   if (arenaBg) drawArenaBg(ctx, arenaBg);
   bgFx.drawBack(ctx, viewW, viewH);
+
+  // energy background — sandbox runs full-screen, so the arena bounds
+  // cover the whole viewport and the module short-circuits. Kept for
+  // parity with rooms / tutorial so a future playfield rect would
+  // automatically light the margins up without a code change here.
+  if (energyBg) {
+    const arenaBounds: ArenaScreenBounds = { x: 0, y: 0, w: viewW, h: viewH };
+    drawEnergyBackground(ctx, energyBg, viewW, viewH, arenaBounds);
+  }
   if (gridCanvas) {
     ctx.drawImage(gridCanvas, 0, 0, viewW, viewH);
   }

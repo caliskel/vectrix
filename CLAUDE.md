@@ -1691,6 +1691,65 @@ in `config.ts` under `IMPACT_*`.
 - Migrate the rooms inline particle/render helpers into `lib/` once
   sandbox is willing to use them too.
 
+## Background energy (`lib/background-energy.ts`)
+
+Animated atmosphere that lives BEHIND the playfield, visible only
+in the canvas margins where the world doesn't render. Shared
+across rooms / tutorial / sandbox; a single `EnergyBackground`
+instance is created at `start()` and persists for the whole
+session (no reset on room transitions, so the streams keep
+flowing).
+
+Three layers, all in screen space:
+
+- **Drifting lines** — 10 thin neon segments (length 80–150 px,
+  thickness 1.0–1.5 px, glow blur 4, mix of cyan `#00e5ff` /
+  purple `#7a5fff`) drift at random angles at 20–40 px/s, each
+  pulsing its alpha 0.05 ↔ 0.18 on a 3–5 s sine. When a line
+  walks off the canvas it respawns just outside a random edge.
+- **Rising particles** — 25 small 1–2 px dots (cyan with the
+  occasional white, alpha 0.10–0.25, glow blur 3) rising at
+  30–60 px/s. Horizontal position oscillates ±8–15 px around an
+  anchor on a 2–4 s sine so they read as drifting in a current.
+  When a particle leaves the top edge it respawns just below the
+  bottom at a fresh random x.
+- **Lightning** — every 10–20 s a 200 ms horizontal streak
+  (2 px thick, alpha 0.4, glow blur 10, white or bright cyan)
+  flashes across a random y line. One at a time; the cycle is
+  free-running independent of player input.
+
+Rendering takes `ArenaScreenBounds` (rect in screen-space CSS
+pixels where the visible arena renders). The function builds a
+two-rect even-odd clip (full viewport minus arena) so all three
+passes draw only in the margin. If the arena rect covers the
+entire viewport the function short-circuits early.
+
+`ArenaScreenBounds` is computed per-frame in each game's render:
+
+- Non-camera rooms (canonical 1200×800): the arena fills the
+  letterbox, so `arenaBounds = { offsetX, offsetY, 1200*scale,
+  800*scale }` — only window letterbox bars show energy.
+- Camera rooms (Room 1 corridor 3600×600, Room 4 corridor
+  8000×700, Room 5 boss arena 1600×1200): when world width or
+  height is smaller than canonical, `updateCamera` centers and
+  leaves a band visible at top/bottom. The visible-world
+  rectangle in canonical space is `[max(0, -camera.x),
+  max(0, -camera.y)]` to `[min(1200, worldW - camera.x),
+  min(800, worldH - camera.y)]`; that converts to screen via
+  the same letterbox transform. The remaining canonical space
+  (top + bottom bands in Room 1, all four sides in Room 5 if
+  the window aspect is wide) lights up with energy.
+- Sandbox runs full-screen with no letterbox or camera, so the
+  arena bounds always cover the entire viewport and the module
+  short-circuits. Kept integrated for parity — if a future
+  playfield rect lands, the margins light up automatically
+  without a code change in the sandbox loop.
+
+Constants live in the module file. The render path uses
+`ctx.shadowBlur` once per pass (lines, particles, lightning),
+not per entity, so the per-frame cost is three configured passes
+of simple `stroke` / `fillRect` calls.
+
 ## Working rules
 
 - **Commit before large changes.** Always tag a checkpoint (`git tag` or

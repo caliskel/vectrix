@@ -134,6 +134,13 @@ import {
   createPauseMenu,
 } from "../lib/pause-menu";
 import { BackgroundFx } from "../lib/bg-fx";
+import {
+  createEnergyBackground,
+  drawEnergyBackground,
+  updateEnergyBackground,
+  type ArenaScreenBounds,
+  type EnergyBackground,
+} from "../lib/background-energy";
 import { PostProcessor, DEFAULT_POST } from "../lib/postprocess";
 import { type Bounds, hitBounds } from "../lib/types";
 import {
@@ -587,6 +594,11 @@ export function start(canvas: HTMLCanvasElement): void {
     currentRoom.height ?? ROOM_H_PX,
   );
   let wallFx: WallFx = createWallFx(currentRoom.walls);
+  // Energy background — drifting neon lines + rising particles + an
+  // occasional lightning streak, drawn in the canvas margins outside
+  // the visible arena. Single instance for the whole session so the
+  // streams keep flowing across room transitions.
+  const energyBg: EnergyBackground = createEnergyBackground(viewW, viewH);
   let gridNodes: GridNodeState = createGridNodeState(
     currentRoom.width ?? ROOM_W_PX,
     currentRoom.height ?? ROOM_H_PX,
@@ -1404,6 +1416,7 @@ export function start(canvas: HTMLCanvasElement): void {
     // breathing even when the boss / cinematic timeScale slows world sim.
     updateArenaBg(arenaBg, dt);
     updateWallFx(wallFx, dt, currentRoom.walls);
+    updateEnergyBackground(energyBg, dt, viewW, viewH);
     updateGridNodes(gridNodes, dt);
     updateArchiveFx(archiveFx, dt, player.x, player.y);
     tickScanlines(dt);
@@ -1981,6 +1994,38 @@ export function start(canvas: HTMLCanvasElement): void {
     ctx.fillRect(0, 0, viewW, viewH);
     // synthwave pulse drawn in screen space so it lives behind the world
     bgFx.drawBack(ctx, viewW, viewH);
+
+    // energy background — drifting lines / rising particles / lightning,
+    // clipped out of the visible arena rect so it only shows in the
+    // letterbox / camera margins. Arena rect calc handles both fixed-
+    // size rooms (canonical 1200×800) and camera rooms whose world is
+    // smaller than canonical in some dimension (the camera centers and
+    // leaves a band visible at top/bottom).
+    {
+      const worldW = currentRoom.width ?? ROOM_W_PX;
+      const worldH = currentRoom.height ?? ROOM_H_PX;
+      let arenaBounds: ArenaScreenBounds;
+      if (currentRoom.useCamera) {
+        const canonLeft = Math.max(0, -camera.x);
+        const canonTop = Math.max(0, -camera.y);
+        const canonRight = Math.min(ROOM_W_PX, worldW - camera.x);
+        const canonBottom = Math.min(ROOM_H_PX, worldH - camera.y);
+        arenaBounds = {
+          x: offsetX + canonLeft * scale,
+          y: offsetY + canonTop * scale,
+          w: Math.max(0, (canonRight - canonLeft) * scale),
+          h: Math.max(0, (canonBottom - canonTop) * scale),
+        };
+      } else {
+        arenaBounds = {
+          x: offsetX,
+          y: offsetY,
+          w: ROOM_W_PX * scale,
+          h: ROOM_H_PX * scale,
+        };
+      }
+      drawEnergyBackground(ctx, energyBg, viewW, viewH, arenaBounds);
+    }
 
     // screen shake — applied to the room transform only so HUD stays put
     let shakeX = 0;

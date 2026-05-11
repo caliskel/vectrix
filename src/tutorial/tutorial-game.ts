@@ -119,6 +119,13 @@ import { createPauseMenu } from "../lib/pause-menu";
 import { PostProcessor, DEFAULT_POST } from "../lib/postprocess";
 import { type Bounds, hitBounds } from "../lib/types";
 import {
+  createEnergyBackground,
+  drawEnergyBackground,
+  updateEnergyBackground,
+  type ArenaScreenBounds,
+  type EnergyBackground,
+} from "../lib/background-energy";
+import {
   addWallImpact,
   createWallFx,
   drawWallOverlay,
@@ -896,6 +903,8 @@ export function start(canvas: HTMLCanvasElement): void {
     currentRoom.height ?? ROOM_H_PX,
   );
   let wallFx: WallFx = createWallFx(currentRoom.walls);
+  // Single instance for the tutorial — flows across room transitions.
+  const energyBg: EnergyBackground = createEnergyBackground(viewW, viewH);
   let gridNodes: GridNodeState = createGridNodeState(
     currentRoom.width ?? ROOM_W_PX,
     currentRoom.height ?? ROOM_H_PX,
@@ -2081,6 +2090,7 @@ export function start(canvas: HTMLCanvasElement): void {
 
     updateArenaBg(arenaBg, dt);
     updateWallFx(wallFx, dt, currentRoom.walls);
+    updateEnergyBackground(energyBg, dt, viewW, viewH);
     updateGridNodes(gridNodes, dt);
     updateArchiveFx(archiveFx, dt, player.x, player.y);
     tickScanlines(dt);
@@ -2250,6 +2260,35 @@ export function start(canvas: HTMLCanvasElement): void {
     ctx.fillStyle = PALETTE.bg;
     ctx.fillRect(0, 0, viewW, viewH);
     bgFx.drawBack(ctx, viewW, viewH);
+
+    // energy background — drifting lines / rising particles / lightning,
+    // clipped out of the visible arena rect (see rooms-game.ts for the
+    // identical block; both modes share the bg-energy module).
+    {
+      const worldW = currentRoom.width ?? ROOM_W_PX;
+      const worldH = currentRoom.height ?? ROOM_H_PX;
+      let arenaBounds: ArenaScreenBounds;
+      if (currentRoom.useCamera) {
+        const canonLeft = Math.max(0, -camera.x);
+        const canonTop = Math.max(0, -camera.y);
+        const canonRight = Math.min(ROOM_W_PX, worldW - camera.x);
+        const canonBottom = Math.min(ROOM_H_PX, worldH - camera.y);
+        arenaBounds = {
+          x: offsetX + canonLeft * scale,
+          y: offsetY + canonTop * scale,
+          w: Math.max(0, (canonRight - canonLeft) * scale),
+          h: Math.max(0, (canonBottom - canonTop) * scale),
+        };
+      } else {
+        arenaBounds = {
+          x: offsetX,
+          y: offsetY,
+          w: ROOM_W_PX * scale,
+          h: ROOM_H_PX * scale,
+        };
+      }
+      drawEnergyBackground(ctx, energyBg, viewW, viewH, arenaBounds);
+    }
 
     // screen shake — applied to the room transform only so HUD stays put
     let shakeX = 0;
