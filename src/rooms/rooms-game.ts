@@ -21,7 +21,7 @@ import {
   isInstakill,
   setInstakill,
 } from "../lib/god-mode";
-import { type Bullet, pushTrailSample } from "../lib/bullets";
+import { type Bullet, compactBullets, pushTrailSample } from "../lib/bullets";
 import {
   getBulletSprite,
   getBulletSpriteOffset,
@@ -1940,7 +1940,10 @@ export function start(canvas: HTMLCanvasElement): void {
     // filtered the moment they leave the screen letterbox bounds.
     const worldW = currentRoom.width ?? ROOM_W_PX;
     const worldH = currentRoom.height ?? ROOM_H_PX;
-    bullets = bullets.filter((b) => {
+    // In-place compaction — releases dead bullets back to the pool
+    // (lib/bullets.ts) and reuses the array, so no per-frame array
+    // allocation + no GC pressure on the Float32Array trail buffers.
+    compactBullets(bullets, (b) => {
       if (b.x < -40 || b.x > worldW + 40) return false;
       if (b.y < -40 || b.y > worldH + 40) return false;
       const hitWall = findContainingWall(b.x, b.y, currentRoom.walls);

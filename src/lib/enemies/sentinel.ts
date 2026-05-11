@@ -6,7 +6,7 @@
 // the unused symbol.
 // import { audio } from "../audio";
 import { isInstakill } from "../god-mode";
-import { makeBullet } from "../bullets";
+import { acquireBullet } from "../bullets";
 import { initAwareness } from "./awareness";
 import type {
   AwarenessState,
@@ -2212,7 +2212,7 @@ export class Sentinel implements Enemy {
     for (let i = 0; i < RADIAL_BURST_COUNT; i++) {
       const a = (i / RADIAL_BURST_COUNT) * Math.PI * 2;
       ctxRoom.bullets.push(
-        makeBullet(
+        acquireBullet(
           this.x,
           this.y,
           Math.cos(a) * speed,
@@ -3071,7 +3071,7 @@ export class Sentinel implements Enemy {
         HEX_TOP_OFFSET_RAD +
         (i / MINE_DETONATION_BULLET_COUNT) * Math.PI * 2;
       ctxRoom.bullets.push(
-        makeBullet(
+        acquireBullet(
           m.x,
           m.y,
           Math.cos(a) * MINE_DETONATION_BULLET_SPEED,
@@ -3162,7 +3162,7 @@ export class Sentinel implements Enemy {
     const cos = Math.cos(this.aimedAngle);
     const sin = Math.sin(this.aimedAngle);
     ctxRoom.bullets.push(
-      makeBullet(this.x, this.y, cos * speed, sin * speed, false),
+      acquireBullet(this.x, this.y, cos * speed, sin * speed, false),
     );
     // Muzzle flash — small particle puff at the boss centre, random
     // directions so it reads as a "shot fired" cue without competing

@@ -1,4 +1,4 @@
-import { makeBullet } from "../bullets";
+import { acquireBullet } from "../bullets";
 import { ENEMY_TURRET_DETECTION } from "../config";
 import { PALETTE } from "../palette";
 import { applyAwarenessJitter, initAwareness } from "./awareness";
@@ -177,7 +177,7 @@ export class Turret implements Enemy {
     const bx = this.x + Math.cos(this.aimAngle) * off;
     const by = this.y + Math.sin(this.aimAngle) * off;
     ctxRoom.bullets.push(
-      makeBullet(
+      acquireBullet(
         bx,
         by,
         Math.cos(this.aimAngle) * speed,
