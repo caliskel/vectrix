@@ -111,6 +111,11 @@ import {
 import { drawNeon } from "../lib/neon";
 import { PALETTE } from "../lib/palette";
 import {
+  getLaserBeamSprite,
+  getLaserImpactOffset,
+  getLaserImpactSprite,
+} from "../lib/laser-sprite";
+import {
   type FloatingText,
   type Particle,
   type Ring,
@@ -365,34 +370,29 @@ function drawLaser(ctx: CanvasRenderingContext2D, l: Laser): void {
       ctx.fill();
     }
   } else {
-    // firing — full bright beam with a hot white core. shadowBlur
-    // values pulled down from (35 / 18 / 25) → (16 / 8 / 12) — on a
-    // 1400-px arena beam those halve the blur-radius cost without
-    // losing the bright halo read.
-    ctx.shadowColor = PALETTE.bullet;
-    ctx.shadowBlur = 16;
-    ctx.strokeStyle = PALETTE.bullet;
-    ctx.lineWidth = 14;
-    ctx.beginPath();
-    ctx.moveTo(startX, startY);
-    ctx.lineTo(l.endX, l.endY);
-    ctx.stroke();
-    ctx.strokeStyle = "#ffffff";
-    ctx.lineWidth = 4;
-    ctx.shadowBlur = 8;
-    ctx.beginPath();
-    ctx.moveTo(startX, startY);
-    ctx.lineTo(l.endX, l.endY);
-    ctx.stroke();
+    // firing — cached beam sprite (red halo + white hot-core baked in)
+    // is blitted stretched along the beam axis. Replaces three live
+    // shadowBlur strokes (16 + 8 + 12 px radius on a beam up to the
+    // full arena diagonal), which was dominating frame cost in Room 3
+    // and the boss arena once a Watcher / Sweep Laser fired.
+    // Inner save/restore scope so the rotation doesn't leak into the
+    // impact draw or any caller transforms (drawLaser runs inside the
+    // camera transform — bare setTransform would clobber it).
+    const beam = getLaserBeamSprite(PALETTE.bullet);
+    const angle = Math.atan2(dy, dx);
+    ctx.save();
+    ctx.translate(startX, startY);
+    ctx.rotate(angle);
+    ctx.drawImage(beam.canvas, 0, -beam.height / 2, lineLen, beam.height);
+    ctx.restore();
 
-    // impact glow at the wall hit point — sells the beam as a real ray
+    // Impact glow at the wall hit point — cached radial dot, single
+    // drawImage. Pulse animation via globalAlpha on the blit.
     const pulse = 0.55 + Math.sin(l.age * 30) * 0.15;
     ctx.globalAlpha = pulse;
-    ctx.fillStyle = PALETTE.bullet;
-    ctx.shadowBlur = 12;
-    ctx.beginPath();
-    ctx.arc(l.endX, l.endY, LASER_IMPACT_RADIUS, 0, Math.PI * 2);
-    ctx.fill();
+    const impactSprite = getLaserImpactSprite(PALETTE.bullet, LASER_IMPACT_RADIUS);
+    const impactOff = getLaserImpactOffset(LASER_IMPACT_RADIUS);
+    ctx.drawImage(impactSprite, l.endX - impactOff, l.endY - impactOff);
   }
   ctx.restore();
 }
