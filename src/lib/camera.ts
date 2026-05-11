@@ -1,7 +1,9 @@
-// Camera follow with viewport clamping. Used by rooms wider/taller
-// than the on-screen letterbox so the player stays roughly centered
-// while the world scrolls. Small rooms (width/height ≤ viewport) opt
-// out via Room.useCamera = false; updateCamera is then never called.
+// Camera that keeps the player locked to the centre of the viewport
+// in every room, regardless of world size. The world scrolls around
+// the player even on small arenas (where parts of the playfield will
+// drift past the viewport edges). `bounds` is kept on the signature
+// for callers but no longer clamps — request was for an "always
+// centred" feel rather than the previous edge-stick behaviour.
 
 export type Camera = {
   x: number;
@@ -22,9 +24,12 @@ export function createCamera(): Camera {
 }
 
 /**
- * Lerp the camera toward (target - viewport/2), clamped so it can't
- * scroll past the world edges. Default lerp 0.08 gives a soft follow
- * that doesn't whiplash on quick player turns.
+ * Lerp the camera so the player target sits exactly in the centre of
+ * the viewport. The `bounds` arg is accepted for backwards
+ * compatibility but is ignored — there is no edge clamp, so the
+ * player stays centred even when the world is smaller than the
+ * viewport (parts of the arena scroll off-screen as the player moves).
+ * Default lerp 0.08 = soft follow without whiplash on quick turns.
  */
 export function updateCamera(
   camera: Camera,
@@ -32,21 +37,11 @@ export function updateCamera(
   targetWorldY: number,
   viewportW: number,
   viewportH: number,
-  bounds: WorldBounds,
+  _bounds: WorldBounds,
   lerp = 0.08,
 ): void {
-  let desiredX = targetWorldX - viewportW / 2;
-  let desiredY = targetWorldY - viewportH / 2;
-  const maxX = bounds.maxX - viewportW;
-  const maxY = bounds.maxY - viewportH;
-  if (desiredX < bounds.minX) desiredX = bounds.minX;
-  if (desiredX > maxX) desiredX = maxX;
-  if (desiredY < bounds.minY) desiredY = bounds.minY;
-  if (desiredY > maxY) desiredY = maxY;
-  // World smaller than viewport → center it (clamp can flip if maxX <
-  // minX); guard so we don't oscillate around a negative range.
-  if (maxX < bounds.minX) desiredX = (bounds.minX + bounds.maxX - viewportW) / 2;
-  if (maxY < bounds.minY) desiredY = (bounds.minY + bounds.maxY - viewportH) / 2;
+  const desiredX = targetWorldX - viewportW / 2;
+  const desiredY = targetWorldY - viewportH / 2;
   camera.targetX = desiredX;
   camera.targetY = desiredY;
   camera.x += (desiredX - camera.x) * lerp;

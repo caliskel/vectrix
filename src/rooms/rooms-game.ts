@@ -622,23 +622,19 @@ export function start(canvas: HTMLCanvasElement): void {
   function computeArenaBounds(): ArenaScreenBounds {
     const worldW = currentRoom.width ?? ROOM_W_PX;
     const worldH = currentRoom.height ?? ROOM_H_PX;
-    if (currentRoom.useCamera) {
-      const canonLeft = Math.max(0, -camera.x);
-      const canonTop = Math.max(0, -camera.y);
-      const canonRight = Math.min(ROOM_W_PX, worldW - camera.x);
-      const canonBottom = Math.min(ROOM_H_PX, worldH - camera.y);
-      return {
-        x: offsetX + canonLeft * scale,
-        y: offsetY + canonTop * scale,
-        w: Math.max(0, (canonRight - canonLeft) * scale),
-        h: Math.max(0, (canonBottom - canonTop) * scale),
-      };
-    }
+    // Camera always follows the player now (useCamera flag retained
+    // for legacy room data but no longer gates behaviour). The
+    // visible-world rect in canonical space depends on where the
+    // player is; the same math handles any room size.
+    const canonLeft = Math.max(0, -camera.x);
+    const canonTop = Math.max(0, -camera.y);
+    const canonRight = Math.min(ROOM_W_PX, worldW - camera.x);
+    const canonBottom = Math.min(ROOM_H_PX, worldH - camera.y);
     return {
-      x: offsetX,
-      y: offsetY,
-      w: ROOM_W_PX * scale,
-      h: ROOM_H_PX * scale,
+      x: offsetX + canonLeft * scale,
+      y: offsetY + canonTop * scale,
+      w: Math.max(0, (canonRight - canonLeft) * scale),
+      h: Math.max(0, (canonBottom - canonTop) * scale),
     };
   }
 
@@ -770,13 +766,6 @@ export function start(canvas: HTMLCanvasElement): void {
   }
 
   function snapCameraToRoom(): void {
-    if (!currentRoom.useCamera) {
-      camera.x = 0;
-      camera.y = 0;
-      camera.targetX = 0;
-      camera.targetY = 0;
-      return;
-    }
     updateCamera(
       camera,
       player.x,
@@ -2003,18 +1992,17 @@ export function start(canvas: HTMLCanvasElement): void {
       transitionToRoom(currentRoom.nextRoomId);
     }
 
-    // follow camera — runs even on the failed-overlay branch since
-    // the eye still updates there (see early-return path)
-    if (currentRoom.useCamera) {
-      updateCamera(
-        camera,
-        player.x,
-        player.y,
-        ROOM_W_PX,
-        ROOM_H_PX,
-        roomBounds(),
-      );
-    }
+    // follow camera — always centred on the player. Runs even on
+    // the failed-overlay branch since the eye still updates there
+    // (see early-return path).
+    updateCamera(
+      camera,
+      player.x,
+      player.y,
+      ROOM_W_PX,
+      ROOM_H_PX,
+      roomBounds(),
+    );
 
     render();
     requestAnimationFrame(frame);
@@ -2057,13 +2045,10 @@ export function start(canvas: HTMLCanvasElement): void {
     // bars) is uniform PALETTE.bg, set above. Camera rooms then scroll
     // walls / world content over it.
 
-    // Camera scrolls the world inside the canonical letterbox. Non-
-    // camera rooms (1-3, 5 placeholder) draw at world == canvas.
-    const useCamera = !!currentRoom.useCamera;
-    if (useCamera) {
-      ctx.save();
-      ctx.translate(-camera.x, -camera.y);
-    }
+    // Camera always scrolls the world so the player stays centred,
+    // regardless of arena size.
+    ctx.save();
+    ctx.translate(-camera.x, -camera.y);
 
     // DEEP FIELD background — radial spark + vignette anchored on
     // the player (the only consciousness still burning in the dead
@@ -2218,7 +2203,7 @@ export function start(canvas: HTMLCanvasElement): void {
     // last position even in scrolling rooms.
     if (state.deathFx) drawDeathFx(ctx, state.deathFx);
 
-    if (useCamera) ctx.restore();
+    ctx.restore();
 
     // room placeholder text
     if (currentRoom.message) {

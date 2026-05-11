@@ -1345,22 +1345,30 @@ loud.
 
 ## Camera system (`lib/camera.ts`)
 
-Follow camera with viewport clamping. `Camera` holds `{ x, y,
-targetX, targetY }`; `updateCamera(camera, targetX, targetY,
-viewportW, viewportH, bounds, lerp = 0.08)` lerps toward
-`target − viewport/2` clamped to `[bounds.minX, bounds.maxX −
-viewportW]` (same for Y). When `maxX < minX` (world smaller than
-viewport) the helper centers instead of oscillating. `snapCamera`
-forces the camera to its current target — used at room
-transitions so the entry frame doesn't whip-pan from the previous
-room's camera position.
+Always-centred follow camera. `Camera` holds `{ x, y, targetX,
+targetY }`; `updateCamera(camera, targetX, targetY, viewportW,
+viewportH, bounds, lerp = 0.08)` lerps the camera toward
+`target − viewport/2` so the player sits exactly in the centre of
+the canonical viewport. The `bounds` argument is accepted for
+backwards compatibility but is **not** used to clamp — there's no
+edge stick. On rooms smaller than the viewport (Room 2, tutorial)
+this means parts of the arena scroll off-screen when the player
+moves; the player stays centred regardless. `snapCamera` forces
+the camera to its current target — used at room transitions so
+the entry frame doesn't whip-pan from the previous room.
 
-rooms-game opts into the camera per-room via `Room.useCamera`. In
-the render loop the world drawing block is wrapped in
+Both rooms-game and tutorial-game wrap the world-drawing block in
 `ctx.save() → ctx.translate(-camera.x, -camera.y) → ... →
-ctx.restore()` so HUD and full-screen overlays stay in screen
-space. Non-camera rooms (1, 2, 3, 5 placeholder) skip the wrap
-entirely and treat world coords as canvas coords 1:1.
+ctx.restore()` unconditionally. HUD and full-screen overlays stay
+in screen space (drawn after `ctx.restore()`). The `Room.useCamera`
+flag still exists on the `Room` type for legacy data but no longer
+gates any behaviour — every room now scrolls.
+
+The background-energy and background-text passes use
+`computeArenaBounds()` (in each game file) to derive the visible
+arena rect in screen space; that rect now scrolls with the camera,
+which means in small rooms the energy/text margins appear on
+whichever side of the arena is currently off-centre.
 
 ## Keys system (`lib/keys.ts`)
 
