@@ -473,17 +473,15 @@ export function start(canvas: HTMLCanvasElement): void {
   audio.setMasterVolume(settings.audio.master);
   audio.setSfxVolume(settings.audio.sfx);
   audio.setMusicVolume(settings.audio.music);
-  // Story-mode music. Four tracks: "rooms" plays through rooms 1–4,
-  // then crossfades to the three boss-phase tracks as the Sentinel's
-  // bossPhase advances. Files live in public/audio/ (Vite serves
-  // /audio/ from there). Load is deferred until audio.init() fires on
-  // the first user gesture (the keydown / click handlers below);
-  // crossfades are kicked from reconcileBossMusic().
+  // Story-mode music. Two tracks: "rooms" plays through rooms 1–4,
+  // then crossfades to a single "boss" track for the whole Sentinel
+  // fight (no longer per-phase). Files live in public/audio/ (Vite
+  // serves /audio/ from there). Load is deferred until audio.init()
+  // fires on the first user gesture (the keydown / click handlers
+  // below).
   const audioBase = import.meta.env.BASE_URL + "audio/";
   audio.setMusicTrack("rooms", encodeURI(audioBase + "Glass Under Ice.mp3"));
-  audio.setMusicTrack("boss-1", audioBase + "boss-phase-1.mp3");
-  audio.setMusicTrack("boss-2", audioBase + "boss-phase-2.mp3");
-  audio.setMusicTrack("boss-3", audioBase + "boss-phase-3.mp3");
+  audio.setMusicTrack("boss", encodeURI(audioBase + "boss/boss.mp3"));
 
   // Player profile from the landing-page editor (saved in localStorage).
   // Loaded once at start; the editor lives on a different page so a
@@ -762,13 +760,12 @@ export function start(canvas: HTMLCanvasElement): void {
     // boss in `state: "intro"` from the constructor; no external
     // priming is needed.
     state.prevSentinelState = currentRoom.id === "room5" ? "intro" : "none";
-    // Music swap follows room id. Boss music is intentionally silent
-    // for now — a single file dropped into public/audio/boss/ will be
-    // wired up here once it lands. Outside the boss room we keep the
-    // existing procedural rooms track.
+    // Music swap follows room id. Room 5 plays the single boss track
+    // from public/audio/boss/; all other rooms keep the standard
+    // "rooms" track.
     if (currentRoom.id === "room5") {
       state.prevBossPhase = 1;
-      audio.stopMusic(1.0);
+      audio.playMusic("boss", 1.5);
     } else {
       state.prevBossPhase = 0;
       audio.playMusic("rooms", 1.5);
@@ -1200,24 +1197,21 @@ export function start(canvas: HTMLCanvasElement): void {
     state.prevSentinelState = cur;
   }
 
-  // Crossfade the active boss-phase track when the Sentinel's
-  // bossPhase flips (1 → 2 → 3). Fired from the same frame-loop slot
-  // as reconcileSentinelTransitions, right after sentinel.update.
+  // Boss now uses a single track across all phases — phase
+  // transitions no longer crossfade the music. Function kept as a
+  // no-op so the existing frame-loop call site doesn't need a
+  // conditional removed; the bossPhase bookkeeping still happens via
+  // state.prevBossPhase for other effects.
   function reconcileBossMusic(sentinel: Sentinel): void {
     const phase = sentinel.bossPhase;
     if (state.prevBossPhase === phase) return;
     state.prevBossPhase = phase;
-    // The phase-transition cinematic runs 2 s with timeScale slowed —
-    // a slower crossfade (2.5 s) matches that pacing better than the
-    // 1.5 s used for room entries.
-    audio.playMusic(`boss-${phase}`, 2.5);
   }
 
-  // First-user-gesture music kick. Routes to "boss-1" if the player
-  // is already in Room 5, otherwise the standard "rooms" track. Idempotent
-  // — playMusic is a no-op for the already-active key.
+  // First-user-gesture music kick. Routes to "boss" if the player is
+  // already in Room 5, otherwise the standard "rooms" track.
   function pickInitialMusic(): void {
-    const key = currentRoom.id === "room5" ? "boss-1" : "rooms";
+    const key = currentRoom.id === "room5" ? "boss" : "rooms";
     audio.playMusic(key, 1.0);
   }
 

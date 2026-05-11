@@ -114,6 +114,7 @@ class AudioEngine {
   // page. Bit-crushed for that retrofuture arcade tone.
   private uiHoverSynth?: Synth;
   private uiClickSynth?: Synth;
+  private narratorTickSynth?: Synth;
   private uiStaticNoise?: NoiseSynth; // big-glitch flash crackle
 
   // Sound 7: mult tier up
@@ -168,6 +169,7 @@ class AudioEngine {
     this.setupBossEyeHit();
     this.setupBossRingDetach();
     this.setupUiCues();
+    this.setupNarratorTick();
     this.setupMultUp();
     this.setupRunEnd();
     // Any tracks registered before init() get loaded now.
@@ -819,6 +821,7 @@ class AudioEngine {
     uiHover: (): void => this.playUiHover(),
     uiClick: (): void => this.playUiClick(),
     uiStatic: (): void => this.playUiStatic(),
+    narratorTick: (): void => this.playNarratorTick(),
     smash: (strength: number): void => this.playSmash(strength),
     multUp: (tier: number): void => this.playMultUp(tier),
     runEnd: (): void => this.playRunEnd(),
@@ -1196,6 +1199,32 @@ class AudioEngine {
     if (!this.uiStaticNoise) return;
     try {
       this.uiStaticNoise.triggerAttackRelease(0.04, toneNow(), 0.5);
+    } catch {}
+  }
+
+  private setupNarratorTick(): void {
+    // Short, dry typewriter-style tick used per character during the
+    // intro + tutorial-outro narrator beats. Bit-crushed triangle
+    // through a bandpass keeps it bright but not harsh; volume sits
+    // low so a long sentence doesn't dominate the cinematic.
+    const crusher = new BitCrusher(5).connect(this.sfx!);
+    const bp = new Filter({ type: "bandpass", frequency: 2400, Q: 1.6 }).connect(
+      crusher,
+    );
+    this.narratorTickSynth = new Synth({
+      oscillator: { type: "triangle" },
+      envelope: { attack: 0.001, decay: 0.025, sustain: 0, release: 0.02 },
+      volume: -16,
+    }).connect(bp);
+  }
+
+  private playNarratorTick(): void {
+    if (!this.narratorTickSynth) return;
+    try {
+      // Pitch jitter keeps repeated ticks from locking into a single
+      // tone — feels like keystrokes instead of a metronome.
+      const base = 2100 + (Math.random() - 0.5) * 240;
+      this.narratorTickSynth.triggerAttackRelease(base, 0.02, toneNow(), 0.4);
     } catch {}
   }
 

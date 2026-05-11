@@ -35,6 +35,7 @@ import {
   makeScrambleSchedule,
   type ScrambleSchedule,
 } from "../lib/scramble-text";
+import { audio } from "../lib/audio";
 
 const CANVAS_W = 1200;
 const CANVAS_H = 800;
@@ -202,6 +203,12 @@ export type IntroState = {
   // Flashes
   mergeFlash: number;
   finalFlash: number;
+
+  // Narrator typing — last-rendered char count, used to fire the
+  // typewriter tick exactly once per new char advance. Keyed by beat
+  // index so jumping between beats doesn't accidentally fire bursts.
+  narratorBeatIdx: number;
+  narratorCharsLast: number;
 };
 
 const DORMANT_HEX = "#000000";
@@ -249,6 +256,8 @@ export function createIntroState(): IntroState {
     bg: createVoidBg(CANVAS_W, CANVAS_H),
     mergeFlash: 0,
     finalFlash: 0,
+    narratorBeatIdx: -1,
+    narratorCharsLast: 0,
   };
 }
 
@@ -874,7 +883,9 @@ function drawNarration(
   // contains phaseTime.
   const t = state.phaseTime;
   let active: NarrationBeat | null = null;
-  for (const beat of NARRATION_BEATS) {
+  let activeIdx = -1;
+  for (let i = 0; i < NARRATION_BEATS.length; i++) {
+    const beat = NARRATION_BEATS[i];
     const end =
       beat.typeStart +
       beat.typeDuration +
@@ -882,6 +893,7 @@ function drawNarration(
       beat.eraseDuration;
     if (t >= beat.typeStart && t < end) {
       active = beat;
+      activeIdx = i;
       break;
     }
   }
@@ -891,9 +903,11 @@ function drawNarration(
   const holdEnd = active.typeDuration + active.holdDuration;
   // typing phase → hold phase → reverse-type erase phase.
   let charsVisible: number;
+  let inTyping = false;
   if (rel < active.typeDuration) {
     const typedT = Math.min(1, rel / active.typeDuration);
     charsVisible = Math.floor(active.text.length * typedT);
+    inTyping = true;
   } else if (rel < holdEnd) {
     charsVisible = active.text.length;
   } else {
@@ -903,6 +917,22 @@ function drawNarration(
     );
     charsVisible = Math.max(0, active.text.length - erased);
     if (charsVisible <= 0) return;
+  }
+  // Typewriter tick — fire once per new revealed character during the
+  // typing phase. Resets across beat boundaries so each line starts
+  // fresh. No tick during erase (the visual is a deliberate
+  // backspace; sound would imply more characters being added).
+  if (state.narratorBeatIdx !== activeIdx) {
+    state.narratorBeatIdx = activeIdx;
+    state.narratorCharsLast = 0;
+  }
+  if (inTyping && charsVisible > state.narratorCharsLast) {
+    audio.play.narratorTick();
+    state.narratorCharsLast = charsVisible;
+  } else if (!inTyping) {
+    // hold / erase: keep last value sane so a re-enter into typing
+    // (shouldn't happen) wouldn't burst-fire all remaining ticks.
+    state.narratorCharsLast = charsVisible;
   }
   const partial = active.text.slice(0, charsVisible);
 

@@ -874,6 +874,10 @@ export function start(canvas: HTMLCanvasElement): void {
   let room4FadeIn = 0;
   let room4FadeOut = 0;
   let room4Redirected = false;
+  // Track last-rendered char count for the typewriter-tick audio cue.
+  // Indexed by beat so jumping between beats doesn't burst-fire ticks.
+  let outroNarratorBeatIdx = -1;
+  let outroNarratorCharsLast = 0;
   const outroBg: VoidBgState = createVoidBg(ROOM_W_PX, ROOM_H_PX);
   // Each beat now reverse-types itself out during the trailing
   // `eraseDuration` window (chars removed from the end at a fixed
@@ -2248,11 +2252,14 @@ export function start(canvas: HTMLCanvasElement): void {
   ): void {
     const t = room4Age;
     let active: OutroBeat | null = null;
-    for (const beat of OUTRO_BEATS) {
+    let activeIdx = -1;
+    for (let i = 0; i < OUTRO_BEATS.length; i++) {
+      const beat = OUTRO_BEATS[i];
       const end =
         beat.typeStart + beat.typeDuration + beat.holdDuration + beat.eraseDuration;
       if (t >= beat.typeStart && t < end) {
         active = beat;
+        activeIdx = i;
         break;
       }
     }
@@ -2261,21 +2268,31 @@ export function start(canvas: HTMLCanvasElement): void {
     const rel = t - active.typeStart;
     const holdEnd = active.typeDuration + active.holdDuration;
     let charsVisible: number;
+    let inTyping = false;
     if (rel < active.typeDuration) {
-      // typing in
       const typedT = Math.min(1, rel / active.typeDuration);
       charsVisible = Math.floor(active.text.length * typedT);
+      inTyping = true;
     } else if (rel < holdEnd) {
-      // holding full text
       charsVisible = active.text.length;
     } else {
-      // reverse-typing out — chars dropped from the end at a fixed pace
       const eraseRel = rel - holdEnd;
       const erased = Math.floor(
         eraseRel / (OUTRO_BEAT_ERASE_SPEED_MS / 1000),
       );
       charsVisible = Math.max(0, active.text.length - erased);
       if (charsVisible <= 0) return;
+    }
+    // Typewriter tick — one per new revealed char during typing only.
+    if (outroNarratorBeatIdx !== activeIdx) {
+      outroNarratorBeatIdx = activeIdx;
+      outroNarratorCharsLast = 0;
+    }
+    if (inTyping && charsVisible > outroNarratorCharsLast) {
+      audio.play.narratorTick();
+      outroNarratorCharsLast = charsVisible;
+    } else if (!inTyping) {
+      outroNarratorCharsLast = charsVisible;
     }
     const partial = active.text.slice(0, charsVisible);
 
