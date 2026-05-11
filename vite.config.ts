@@ -12,7 +12,6 @@ export default defineConfig({
         tutorial: resolve(__dirname, "tutorial.html"),
         intro: resolve(__dirname, "intro.html"),
         epilogue: resolve(__dirname, "epilogue.html"),
-        sandboxPhaser: resolve(__dirname, "sandbox-phaser.html"),
       },
     },
   },
