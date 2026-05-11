@@ -762,11 +762,13 @@ export function start(canvas: HTMLCanvasElement): void {
     // boss in `state: "intro"` from the constructor; no external
     // priming is needed.
     state.prevSentinelState = currentRoom.id === "room5" ? "intro" : "none";
-    // Music swap follows room id. Crossfade is long enough (1.5 s) to
-    // overlap the door arrow / fade beat without a hard cut.
+    // Music swap follows room id. Boss music is intentionally silent
+    // for now — a single file dropped into public/audio/boss/ will be
+    // wired up here once it lands. Outside the boss room we keep the
+    // existing procedural rooms track.
     if (currentRoom.id === "room5") {
       state.prevBossPhase = 1;
-      audio.playMusic("boss-1", 1.5);
+      audio.stopMusic(1.0);
     } else {
       state.prevBossPhase = 0;
       audio.playMusic("rooms", 1.5);

@@ -89,8 +89,9 @@ const PHASE_DURATIONS: Record<PhaseId, number> = {
   pullback: 5.5,
   // Narrator speaks four beats over typewriter text at the top of
   // the stage. Same canvas, same void — reads as one continuous
-  // cinematic rather than two.
-  narration: 21.5,
+  // cinematic rather than two. Bumped from 21.5 → 24.5 to fit the
+  // reverse-type erase on each beat (~35 ms / char).
+  narration: 24.5,
   // Fades to BLACK (not white). The page navigation to tutorial.html
   // happens during full black so there's no scene-switch flash; the
   // tutorial loads room0 underneath the darkness.
@@ -104,13 +105,19 @@ const PULLBACK_SCALE_END = 0.45;
 
 // Narrator beats — four typewriter lines played sequentially during
 // the narration phase. Timing is in seconds-from-narration-start.
+// Each beat reverse-types itself out during a trailing eraseDuration
+// window (chars dropped from the end at ~35 ms each) instead of
+// alpha-fading. typeStarts retimed so later beats start AFTER the
+// previous one finishes erasing.
 type NarrationBeat = {
   text: string;
   typeStart: number;
   typeDuration: number; // ≈ 70 ms/char
   holdDuration: number;
-  fadeDuration: number;
+  eraseDuration: number; // set at module init: text.length * NARRATION_ERASE_SPEED_MS / 1000
 };
+
+const NARRATION_ERASE_SPEED_MS = 35;
 
 const NARRATION_BEATS: NarrationBeat[] = [
   {
@@ -118,30 +125,33 @@ const NARRATION_BEATS: NarrationBeat[] = [
     typeStart: 1.5,
     typeDuration: 0.85,
     holdDuration: 1.6,
-    fadeDuration: 0.45,
+    eraseDuration: 0,
   },
   {
     text: "I thought they were all destroyed by the Archivist.",
-    typeStart: 4.7,
+    typeStart: 4.6,
     typeDuration: 3.4,
     holdDuration: 1.9,
-    fadeDuration: 0.45,
+    eraseDuration: 0,
   },
   {
     text: "Well then. I hope you handle the task.",
-    typeStart: 11.0,
+    typeStart: 12.3,
     typeDuration: 2.6,
     holdDuration: 1.7,
-    fadeDuration: 0.45,
+    eraseDuration: 0,
   },
   {
     text: "Initiating training protocol.",
-    typeStart: 16.6,
+    typeStart: 18.4,
     typeDuration: 1.9,
     holdDuration: 1.6,
-    fadeDuration: 0.5,
+    eraseDuration: 0,
   },
 ];
+for (const beat of NARRATION_BEATS) {
+  beat.eraseDuration = (beat.text.length * NARRATION_ERASE_SPEED_MS) / 1000;
+}
 
 // ---- Types ----
 
@@ -859,9 +869,9 @@ function drawNarration(
   ctx: CanvasRenderingContext2D,
   state: IntroState,
 ): void {
-  // Find the active beat at the current narration-phase time. Beats
-  // are sequential — first one whose [typeStart, end] window contains
-  // phaseTime is THE active beat.
+  // Find the active beat — beats are sequential and retimed so they
+  // don't overlap; pick the first whose [typeStart, end] window
+  // contains phaseTime.
   const t = state.phaseTime;
   let active: NarrationBeat | null = null;
   for (const beat of NARRATION_BEATS) {
@@ -869,7 +879,7 @@ function drawNarration(
       beat.typeStart +
       beat.typeDuration +
       beat.holdDuration +
-      beat.fadeDuration;
+      beat.eraseDuration;
     if (t >= beat.typeStart && t < end) {
       active = beat;
       break;
@@ -878,31 +888,34 @@ function drawNarration(
   if (!active) return;
 
   const rel = t - active.typeStart;
-  // Typewriter reveal — chars revealed left-to-right at
-  // typeDuration / text.length seconds per character. Tuned for
-  // ~70 ms/char so each line reads as a deliberate transmission.
-  const typedT = Math.min(1, rel / active.typeDuration);
-  const charsVisible = Math.max(
-    0,
-    Math.min(active.text.length, Math.floor(active.text.length * typedT)),
-  );
+  const holdEnd = active.typeDuration + active.holdDuration;
+  // typing phase → hold phase → reverse-type erase phase.
+  let charsVisible: number;
+  if (rel < active.typeDuration) {
+    const typedT = Math.min(1, rel / active.typeDuration);
+    charsVisible = Math.floor(active.text.length * typedT);
+  } else if (rel < holdEnd) {
+    charsVisible = active.text.length;
+  } else {
+    const eraseRel = rel - holdEnd;
+    const erased = Math.floor(
+      eraseRel / (NARRATION_ERASE_SPEED_MS / 1000),
+    );
+    charsVisible = Math.max(0, active.text.length - erased);
+    if (charsVisible <= 0) return;
+  }
   const partial = active.text.slice(0, charsVisible);
 
-  let alpha = 1;
+  // Soft fade-in on the first 0.25 s so the line doesn't snap on.
+  // No alpha drop at the end — the erase is the disappear animation.
   const fadeInSec = 0.25;
-  if (rel < fadeInSec) alpha = rel / fadeInSec;
-  const holdEnd = active.typeDuration + active.holdDuration;
-  if (rel > holdEnd) {
-    alpha = Math.min(
-      alpha,
-      Math.max(0, 1 - (rel - holdEnd) / active.fadeDuration),
-    );
-  }
+  const alpha = rel < fadeInSec ? rel / fadeInSec : 1;
   if (alpha <= 0) return;
 
   const showCursor =
-    rel < holdEnd &&
-    (rel < active.typeDuration || Math.floor(rel * 2.5) % 2 === 0);
+    rel < holdEnd
+      ? rel < active.typeDuration || Math.floor(rel * 2.5) % 2 === 0
+      : true; // keep cursor pinned to the trailing edge while erasing
   const display = partial + (showCursor ? "▍" : "");
 
   ctx.save();

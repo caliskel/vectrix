@@ -1,4 +1,10 @@
-import { audio } from "../audio";
+// Boss SFX cues are temporarily disabled — see the commented
+// audio.play.* calls inside this file. Music for the boss fight
+// loads from public/audio/boss/ as a single track via the audio
+// module once a file is added. Re-enable selectively by
+// uncommenting; the import is dropped for now so tsc doesn't flag
+// the unused symbol.
+// import { audio } from "../audio";
 import { isGodMode } from "../god-mode";
 import { makeBullet } from "../bullets";
 import { initAwareness } from "./awareness";
@@ -1929,7 +1935,7 @@ export class Sentinel implements Enemy {
     this.rbTimer = 0;
     // Telegraph audio cue — reuse alert ping shifted to feel
     // bigger; full layered sound is a follow-up.
-    audio.play.alert();
+    // audio.play.alert();                  // boss sfx disabled — see public/audio/boss/
   }
 
   private enterRingBurstDetach(ctxRoom: EnemyContext): void {
@@ -1969,7 +1975,7 @@ export class Sentinel implements Enemy {
         drag: 0.94,
       });
     }
-    audio.play.bossRingDetach();
+    // audio.play.bossRingDetach();         // boss sfx disabled
   }
 
   /** Eye reward feedback. Spawns the heavy double ring + 24
@@ -2033,7 +2039,7 @@ export class Sentinel implements Enemy {
     // Crystalline reward chime — replaces the hitHeavy+alert
     // placeholder. The chime fronts a tiny noise pop for the impact
     // transient and a sustained C6+E6+G6 sine stack with reverb.
-    audio.play.bossEyeHit();
+    // audio.play.bossEyeHit();              // boss sfx disabled
   }
 
   // === Phase transitions ===
@@ -2203,7 +2209,7 @@ export class Sentinel implements Enemy {
       }
       // Phase-transition climax — dedicated BWAA + noise sizzle
       // replacing the hitHeavy+alert placeholder.
-      audio.play.bossPhase();
+      // audio.play.bossPhase();              // boss sfx disabled
       if (t.toPhase === 2) {
         this.phaseMarkerFlashTimer1to2 = PHASE_TRANSITION_HP_MARKER_FLASH_SEC;
       } else {
@@ -2335,7 +2341,7 @@ export class Sentinel implements Enemy {
         this.pendingShakePx = SWEEP_LASER_MID_PAUSE_SHAKE_PX;
         this.pendingShakeSec = SWEEP_LASER_MID_PAUSE_SHAKE_SEC;
         // Reverse cue — heavy pull-back swell at firing-1 → mid-pause.
-        audio.play.bossSweepReverse(false);
+        // audio.play.bossSweepReverse(false); // boss sfx disabled
       }
       return;
     }
@@ -2354,7 +2360,7 @@ export class Sentinel implements Enemy {
       ) {
         // Brighter pitch of the same reverse swell — countdown
         // chirp before firing-2 starts.
-        audio.play.bossSweepReverse(true);
+        // audio.play.bossSweepReverse(true);  // boss sfx disabled
       }
       if (this.sweepLaserTimer >= SWEEP_LASER_MID_PAUSE_SEC) {
         this.sweepLaserPhase = "firing-2";
@@ -2412,7 +2418,7 @@ export class Sentinel implements Enemy {
     this.sweepLaserTimer = 0;
     this.sweepLaserDashOffset = 0;
     // Rising warning drone for the telegraph window.
-    audio.play.bossSweepStart();
+    // audio.play.bossSweepStart();         // boss sfx disabled
   }
 
   /** Live beam angle. Read by the damage check, the particle
@@ -2539,7 +2545,7 @@ export class Sentinel implements Enemy {
     }
     // Tense single beep so the player can locate the new mine by
     // ear before the strobe phase kicks in.
-    audio.play.bossMineSpawn();
+    // audio.play.bossMineSpawn();          // boss sfx disabled
   }
 
   /** Detonate a mine — radial 6-bullet burst (hex theme), one
@@ -2596,7 +2602,7 @@ export class Sentinel implements Enemy {
     }
     // Heavier than hitHeavy: sub thump + bandpass noise sizzle. Pulls
     // attention even when an attack is mid-firing.
-    audio.play.bossMineDetonate();
+    // audio.play.bossMineDetonate();       // boss sfx disabled
   }
 
   /** Render all live mines as pulsing hex outlines with a small
@@ -2981,7 +2987,7 @@ export class Sentinel implements Enemy {
     });
     this.pendingShakePx = DYING_DETONATION_SHAKE_PX;
     this.pendingShakeSec = DYING_DETONATION_SHAKE_SEC;
-    audio.play.hitHeavy();
+    // audio.play.hitHeavy();                // boss sfx disabled (death)
   }
 
   // -------- draw (world space) --------
