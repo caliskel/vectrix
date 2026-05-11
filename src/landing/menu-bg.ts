@@ -67,6 +67,28 @@ const HUNTER_TRAIL_COUNT = 5;
 const HUNTER_TRAIL_SPACING = 12;       // px between snapshots
 const HUNTER_GLOW = 7;
 
+// Matrix-style code rain. Sparse columns of half-width katakana +
+// digits drifting down behind the menu — fits the "VECTRIX = vector
+// matrix" wordplay without overwhelming the foreground UI. Lives
+// between the grid and the decorative enemies in the layer stack so
+// the rain reads as a back-of-stage atmosphere rather than competing
+// with the eye-tracking previews.
+const MATRIX_COL_SPACING = 36;
+const MATRIX_FONT_SIZE = 16;
+const MATRIX_LINE_HEIGHT = 18;
+const MATRIX_TAIL_LENGTH = 14;
+const MATRIX_SPEED_MIN = 2.2; // chars per second
+const MATRIX_SPEED_MAX = 6.0;
+const MATRIX_CHAR_CHANGE_PROB = 0.025; // per char per frame at 60 fps
+const MATRIX_OVERALL_ALPHA = 0.32;
+const MATRIX_HEAD_COLOR = "#a7f3d0";
+const MATRIX_TRAIL_COLOR = "#22c55e";
+const MATRIX_ACTIVE_FRACTION = 0.65; // % of columns that are alive at a time
+const MATRIX_RESPAWN_DELAY_MIN = 1.0;
+const MATRIX_RESPAWN_DELAY_MAX = 4.5;
+const MATRIX_CHAR_POOL =
+  "ｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜｦﾝ0123456789";
+
 const SHAPE_COUNT_MIN = 3;
 const SHAPE_COUNT_MAX = 6;
 const SHAPE_SPAWN_INTERVAL_MIN = 1.5;
@@ -98,6 +120,14 @@ const SHAPE_TYPES: ShapeType[] = [
 ];
 
 type Particle = { x: number; y: number; vx: number; vy: number; size: number };
+type RainColumn = {
+  x: number;
+  headY: number;
+  speed: number; // chars per second
+  chars: string[]; // length = MATRIX_TAIL_LENGTH; chars[0] is the head
+  active: boolean;
+  spawnIn: number; // seconds until next activation when inactive
+};
 type MicroGlitch = { y: number; h: number; dx: number; remaining: number };
 type BigGlitch = { remaining: number };
 
@@ -208,6 +238,9 @@ export function startMenuBg(
   const shapes: ShapeD[] = [];
   let shapeSpawnTimer = SHAPE_SPAWN_INTERVAL_MIN;
 
+  // === Matrix rain columns — seeded on resize, advanced in update ===
+  let rainColumns: RainColumn[] = [];
+
   function resize() {
     width = window.innerWidth;
     height = window.innerHeight;
@@ -221,6 +254,66 @@ export function startMenuBg(
     if (!decorSeeded) {
       seedDecor();
       decorSeeded = true;
+    }
+    seedRain();
+  }
+
+  function pickRainChar(): string {
+    return MATRIX_CHAR_POOL[
+      Math.floor(Math.random() * MATRIX_CHAR_POOL.length)
+    ];
+  }
+
+  function seedRain() {
+    const cols = Math.max(1, Math.ceil(width / MATRIX_COL_SPACING));
+    rainColumns = [];
+    for (let i = 0; i < cols; i++) {
+      const chars: string[] = new Array(MATRIX_TAIL_LENGTH);
+      for (let j = 0; j < MATRIX_TAIL_LENGTH; j++) chars[j] = pickRainChar();
+      const x = i * MATRIX_COL_SPACING + MATRIX_COL_SPACING / 2;
+      const speed =
+        MATRIX_SPEED_MIN +
+        Math.random() * (MATRIX_SPEED_MAX - MATRIX_SPEED_MIN);
+      const startsActive = Math.random() < MATRIX_ACTIVE_FRACTION;
+      rainColumns.push({
+        x,
+        headY: startsActive ? Math.random() * height : -MATRIX_LINE_HEIGHT,
+        speed,
+        chars,
+        active: startsActive,
+        spawnIn: startsActive
+          ? 0
+          : MATRIX_RESPAWN_DELAY_MIN +
+            Math.random() *
+              (MATRIX_RESPAWN_DELAY_MAX - MATRIX_RESPAWN_DELAY_MIN),
+      });
+    }
+  }
+
+  function updateRain(dt: number) {
+    const tailHeight = MATRIX_TAIL_LENGTH * MATRIX_LINE_HEIGHT;
+    for (const col of rainColumns) {
+      if (!col.active) {
+        col.spawnIn -= dt;
+        if (col.spawnIn <= 0) {
+          col.active = true;
+          col.headY = -MATRIX_LINE_HEIGHT;
+        }
+        continue;
+      }
+      col.headY += col.speed * MATRIX_LINE_HEIGHT * dt;
+      for (let i = 0; i < col.chars.length; i++) {
+        if (Math.random() < MATRIX_CHAR_CHANGE_PROB) {
+          col.chars[i] = pickRainChar();
+        }
+      }
+      if (col.headY - tailHeight > height) {
+        col.active = false;
+        col.spawnIn =
+          MATRIX_RESPAWN_DELAY_MIN +
+          Math.random() *
+            (MATRIX_RESPAWN_DELAY_MAX - MATRIX_RESPAWN_DELAY_MIN);
+      }
     }
   }
 
@@ -308,6 +401,7 @@ export function startMenuBg(
     scanlineOffset = (scanlineOffset + SCANLINE_SPEED * dt) % SCANLINE_SPACING;
     gridOffsetX = (gridOffsetX + GRID_SPEED_X * dt) % GRID_SPACING;
     gridOffsetY = (gridOffsetY + GRID_SPEED_Y * dt) % GRID_SPACING;
+    updateRain(dt);
 
     for (const p of particles) {
       p.x += p.vx * dt;
@@ -590,6 +684,12 @@ export function startMenuBg(
     }
     c.stroke();
 
+    // 2b. Matrix rain — drawn between grid and decorative enemies so
+    // it reads as a back-of-stage layer. Cheap fillText pass; sparse
+    // columns + low overall alpha keep it from competing with the
+    // foreground UI.
+    renderRain(c);
+
     // 3. Decorative enemies — turrets, watcher, hunters
     for (const t of turrets) renderTurret(c, t);
     renderWatcher(c, watcher);
@@ -637,6 +737,31 @@ export function startMenuBg(
       c.fillStyle = "rgba(255, 255, 255, 0.08)";
       c.fillRect(0, 0, width, height);
     }
+  }
+
+  function renderRain(c: CanvasRenderingContext2D) {
+    if (rainColumns.length === 0) return;
+    c.save();
+    c.font = `${MATRIX_FONT_SIZE}px "Courier New", ui-monospace, monospace`;
+    c.textAlign = "center";
+    c.textBaseline = "middle";
+    c.shadowBlur = 0;
+    for (const col of rainColumns) {
+      if (!col.active) continue;
+      for (let i = 0; i < col.chars.length; i++) {
+        const y = col.headY - i * MATRIX_LINE_HEIGHT;
+        if (y < -MATRIX_LINE_HEIGHT || y > height + MATRIX_LINE_HEIGHT) continue;
+        // Quadratic fade so the head is bright and the tail falls off
+        // fast — keeps the trail "alive" without spreading into the
+        // foreground UI region.
+        const tailFrac = 1 - i / col.chars.length;
+        const fade = tailFrac * tailFrac;
+        c.globalAlpha = MATRIX_OVERALL_ALPHA * fade;
+        c.fillStyle = i === 0 ? MATRIX_HEAD_COLOR : MATRIX_TRAIL_COLOR;
+        c.fillText(col.chars[i], col.x, y);
+      }
+    }
+    c.restore();
   }
 
   function renderTurret(c: CanvasRenderingContext2D, t: TurretD) {
