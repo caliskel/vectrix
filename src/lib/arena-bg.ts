@@ -19,8 +19,15 @@
 
 import { GRID_STEP } from "./grid";
 
-const RADIAL_INNER_RGBA = "rgba(40, 60, 100, 0.18)";
+// Spark-glow gradient: thin cool halo around the player's
+// consciousness. Kept dim so it reads as the spark's own faint
+// light, not a spotlight following them. The VIGNETTE below pulls
+// the far corners into near-black so the arena reads as a deep
+// dark hall rather than a uniform floor.
+const RADIAL_INNER_RGBA = "rgba(70, 120, 180, 0.14)";
 const RADIAL_OUTER_RGBA = "rgba(0, 0, 0, 0)";
+const VIGNETTE_INNER_RGBA = "rgba(0, 0, 0, 0)";
+const VIGNETTE_OUTER_RGBA = "rgba(0, 0, 0, 0.68)";
 
 // Parallax field — point density per 10 000 px² of arena. Tuned so a
 // 1200×800 room gets ~115 points per layer, 3 layers ⇒ ~345 dots total.
@@ -33,12 +40,12 @@ type DotLayer = {
   color: string;
 };
 const DOT_LAYERS: DotLayer[] = [
-  // far: slow + tiny + dim
-  { speedX: 3, speedY: 1.5, radius: 0.7, alpha: 0.18, color: "#7dd3fc" },
-  // mid
-  { speedX: 9, speedY: 4, radius: 1.0, alpha: 0.28, color: "#a5f3fc" },
-  // near: faster + brighter
-  { speedX: 18, speedY: 8, radius: 1.3, alpha: 0.42, color: "#cffafe" },
+  // Dust drifting through dead space — kept dim across all layers so
+  // it reads as "specks the abandoned ventilation never cleared", not
+  // a starfield.
+  { speedX: 3, speedY: 1.5, radius: 0.7, alpha: 0.09, color: "#7dd3fc" },
+  { speedX: 9, speedY: 4, radius: 0.9, alpha: 0.14, color: "#a5f3fc" },
+  { speedX: 17, speedY: 7, radius: 1.1, alpha: 0.20, color: "#cffafe" },
 ];
 
 const GRID_PULSE_INTERVAL_MIN = 4.0;
@@ -217,23 +224,41 @@ function spawnRadarSweep(bg: ArenaBg) {
 export function drawArenaBg(
   ctx: CanvasRenderingContext2D,
   bg: ArenaBg,
+  lightAnchor?: { x: number; y: number },
 ): void {
   const { width: w, height: h } = bg;
 
-  // 1. Radial gradient — anchored at room center.
-  const grad = ctx.createRadialGradient(
-    w / 2,
-    h / 2,
-    0,
-    w / 2,
-    h / 2,
-    Math.max(w, h) * 0.75,
-  );
-  grad.addColorStop(0, RADIAL_INNER_RGBA);
-  grad.addColorStop(1, RADIAL_OUTER_RGBA);
+  // 1. Radial gradient — anchored at the light source (the player's
+  // spark when provided; otherwise arena center as fallback). Tying
+  // the light to the player reframes the world from "arena with a
+  // centered glow" to "dark hall around the one consciousness still
+  // burning". Critical visual for the dead-network theme.
+  const lx = lightAnchor ? lightAnchor.x : w / 2;
+  const ly = lightAnchor ? lightAnchor.y : h / 2;
+  const sparkRadius = Math.max(w, h) * 0.45;
+  const sparkGrad = ctx.createRadialGradient(lx, ly, 0, lx, ly, sparkRadius);
+  sparkGrad.addColorStop(0, RADIAL_INNER_RGBA);
+  sparkGrad.addColorStop(1, RADIAL_OUTER_RGBA);
   ctx.save();
   ctx.shadowBlur = 0;
-  ctx.fillStyle = grad;
+  ctx.fillStyle = sparkGrad;
+  ctx.fillRect(0, 0, w, h);
+
+  // 1b. Vignette — same anchor; pushes the far edges into deeper
+  // darkness so the spark reads as the only light source.
+  const vignetteInner = Math.max(w, h) * 0.35;
+  const vignetteOuter = Math.max(w, h) * 0.85;
+  const vignetteGrad = ctx.createRadialGradient(
+    lx,
+    ly,
+    vignetteInner,
+    lx,
+    ly,
+    vignetteOuter,
+  );
+  vignetteGrad.addColorStop(0, VIGNETTE_INNER_RGBA);
+  vignetteGrad.addColorStop(1, VIGNETTE_OUTER_RGBA);
+  ctx.fillStyle = vignetteGrad;
   ctx.fillRect(0, 0, w, h);
 
   // 2. Parallax dots — back to front so brighter near-layer paints on top.

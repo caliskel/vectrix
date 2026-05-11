@@ -74,7 +74,18 @@ import {
   emitEnemyKill,
   type ImpactContext,
 } from "../lib/impacts";
-import { drawRoomGrid } from "../lib/grid";
+import {
+  createGridNodeState,
+  drawRoomGrid,
+  updateGridNodes,
+  type GridNodeState,
+} from "../lib/grid";
+import {
+  createArchiveFx,
+  drawArchiveFx,
+  updateArchiveFx,
+  type ArchiveFx,
+} from "../lib/archive-fx";
 import {
   createArenaBg,
   drawArenaBg,
@@ -539,13 +550,22 @@ export function start(canvas: HTMLCanvasElement): void {
     currentRoom.height ?? ROOM_H_PX,
   );
   let wallFx: WallFx = createWallFx(currentRoom.walls);
+  let gridNodes: GridNodeState = createGridNodeState(
+    currentRoom.width ?? ROOM_W_PX,
+    currentRoom.height ?? ROOM_H_PX,
+  );
+  let archiveFx: ArchiveFx = createArchiveFx(
+    currentRoom.width ?? ROOM_W_PX,
+    currentRoom.height ?? ROOM_H_PX,
+  );
 
   function syncRoomFx() {
-    arenaBg = createArenaBg(
-      currentRoom.width ?? ROOM_W_PX,
-      currentRoom.height ?? ROOM_H_PX,
-    );
+    const w = currentRoom.width ?? ROOM_W_PX;
+    const h = currentRoom.height ?? ROOM_H_PX;
+    arenaBg = createArenaBg(w, h);
     wallFx = createWallFx(currentRoom.walls);
+    gridNodes = createGridNodeState(w, h);
+    archiveFx = createArchiveFx(w, h);
   }
 
   // overlay button bounds (CSS pixel space)
@@ -1335,6 +1355,8 @@ export function start(canvas: HTMLCanvasElement): void {
     // breathing even when the boss / cinematic timeScale slows world sim.
     updateArenaBg(arenaBg, dt);
     updateWallFx(wallFx, dt, currentRoom.walls);
+    updateGridNodes(gridNodes, dt);
+    updateArchiveFx(archiveFx, dt, player.x, player.y);
     tickScanlines(dt);
 
     // -------- running --------
@@ -1940,19 +1962,26 @@ export function start(canvas: HTMLCanvasElement): void {
       ctx.translate(-camera.x, -camera.y);
     }
 
-    // DEEP FIELD background — radial gradient, parallax dots, grid
-    // pulses, radar sweeps. Painted under the grid so the foreground
-    // (bullets, enemies, player) keeps full contrast.
-    drawArenaBg(ctx, arenaBg);
+    // DEEP FIELD background — radial spark + vignette anchored on
+    // the player (the only consciousness still burning in the dead
+    // network), parallax dots, grid pulses, radar sweeps.
+    drawArenaBg(ctx, arenaBg, { x: player.x, y: player.y });
 
     // Minimalist world-space grid. Clamped to the room's logical
     // bounds so it stops at the perimeter walls and never bleeds into
-    // the letterbox.
+    // the letterbox. Stateful node pass renders alive/faint/dead
+    // intersections — most are dark by default, a handful flicker.
     drawRoomGrid(
       ctx,
       currentRoom.width ?? ROOM_W_PX,
       currentRoom.height ?? ROOM_H_PX,
+      gridNodes,
     );
+
+    // Archive ambience — ghost text + phantom visitors painted just
+    // above the floor so they read as part of the environment, not
+    // floating overlays.
+    drawArchiveFx(ctx, archiveFx);
 
     drawWalls(ctx, currentRoom.walls);
     drawWallOverlay(ctx, wallFx, currentRoom.walls);
@@ -2252,26 +2281,23 @@ export function start(canvas: HTMLCanvasElement): void {
 
   function drawHUD() {
     ctx.save();
-    ctx.globalAlpha = 0.65;
     ctx.textAlign = "center";
     ctx.textBaseline = "top";
 
     const cx = viewW / 2;
-    const colA = cx - 100;
-    const colB = cx + 100;
-    const y0 = 18;
+    const heartsY = 16;
+    const heartSpacing = 22;
 
-    ctx.font = "500 11px system-ui, -apple-system, sans-serif";
-    ctx.fillStyle = "#7d8590";
-    ctx.fillText("ROOM", colA, y0);
-    ctx.fillText("ENEMIES", colB, y0);
+    // HP — three hearts, centered.
+    ctx.globalAlpha = 0.85;
+    ctx.font = "600 22px system-ui, -apple-system, sans-serif";
+    const heartsStart = cx - heartSpacing;
+    for (let i = 0; i < 3; i++) {
+      ctx.fillStyle = i < state.hp ? "#ef4444" : "rgba(239,68,68,0.18)";
+      ctx.fillText("♥", heartsStart + i * heartSpacing, heartsY);
+    }
 
-    ctx.font = "600 22px ui-monospace, SFMono-Regular, Menlo, monospace";
-    ctx.fillStyle = "#ffffff";
-    // Campaign chain: corridor → trap → arena → long corridor → boss.
-    // File ids: room1 / room3 (trap) / room2 (arena) / room4 (long
-    // corridor) / room5 (boss) — slots map to player-visible numbers
-    // below.
+    // Room — single line directly below the hearts.
     const isBoss = currentRoom.id === "room5";
     const roomNum =
       currentRoom.id === "room1"
@@ -2285,43 +2311,17 @@ export function start(canvas: HTMLCanvasElement): void {
               : isBoss
                 ? 5
                 : ROOM_TOTAL;
+    const roomY = heartsY + 34;
+    ctx.globalAlpha = 0.65;
+    ctx.font = "500 13px ui-monospace, SFMono-Regular, Menlo, monospace";
     if (isBoss) {
       ctx.fillStyle = PALETTE.bullet;
-      ctx.fillText(`${roomNum} / ${ROOM_TOTAL} — BOSS`, colA, y0 + 14);
-      ctx.fillStyle = "#ffffff";
+      ctx.fillText(`${roomNum} / ${ROOM_TOTAL} — BOSS`, cx, roomY);
     } else {
-      ctx.fillText(`${roomNum} / ${ROOM_TOTAL}`, colA, y0 + 14);
+      ctx.fillStyle = "#cbd5e1";
+      ctx.fillText(`${roomNum} / ${ROOM_TOTAL}`, cx, roomY);
     }
-
-    const alive = aliveEnemies().length;
-    if (alive > 0) {
-      ctx.fillText(`${alive}`, colB, y0 + 14);
-    } else {
-      ctx.fillStyle = PALETTE.pickupHP;
-      ctx.font = "600 18px system-ui, -apple-system, sans-serif";
-      ctx.fillText("CLEARED", colB, y0 + 16);
-    }
-
-    const y1 = y0 + 50;
-    ctx.font = "500 11px system-ui, -apple-system, sans-serif";
-    ctx.fillStyle = "#7d8590";
-    ctx.fillText("HP", colA, y1);
-    ctx.fillText("SCORE", colB, y1);
-
-    // hearts row
-    ctx.font = "600 22px system-ui, -apple-system, sans-serif";
-    ctx.textAlign = "center";
-    const heartsY = y1 + 14;
-    const heartSpacing = 22;
-    const heartsStart = colA - heartSpacing;
-    for (let i = 0; i < 3; i++) {
-      ctx.fillStyle = i < state.hp ? "#ef4444" : "rgba(239,68,68,0.18)";
-      ctx.fillText("♥", heartsStart + i * heartSpacing, heartsY);
-    }
-
-    ctx.fillStyle = "#ffffff";
-    ctx.font = "600 22px ui-monospace, SFMono-Regular, Menlo, monospace";
-    ctx.fillText(state.score.toLocaleString("en-US"), colB, heartsY);
+    ctx.globalAlpha = 0.85;
 
     // Awareness indicator (top-center) — DETECTED red while any
     // enemy is in aggro, ALERT yellow while any is alerting, hidden
@@ -2341,13 +2341,16 @@ export function start(canvas: HTMLCanvasElement): void {
         0.65 + 0.35 * (Math.sin(performance.now() * 0.012) + 1) * 0.5;
       ctx.save();
       ctx.globalAlpha = pulse;
-      ctx.font = "600 12px system-ui, -apple-system, sans-serif";
+      ctx.font = "600 11px system-ui, -apple-system, sans-serif";
       ctx.textAlign = "center";
       ctx.textBaseline = "top";
       ctx.shadowColor = color;
       ctx.shadowBlur = 12;
       ctx.fillStyle = color;
-      ctx.fillText(text, viewW / 2, 4);
+      // Below the room number so the stacked HP/room block stays
+      // visually atomic and the awareness state reads as a separate
+      // alert below it.
+      ctx.fillText(text, viewW / 2, 16 + 34 + 18);
       ctx.restore();
     }
 

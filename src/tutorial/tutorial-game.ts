@@ -63,7 +63,18 @@ import {
   emitEnemyKill,
   type ImpactContext,
 } from "../lib/impacts";
-import { drawRoomGrid } from "../lib/grid";
+import {
+  createGridNodeState,
+  drawRoomGrid,
+  updateGridNodes,
+  type GridNodeState,
+} from "../lib/grid";
+import {
+  createArchiveFx,
+  drawArchiveFx,
+  updateArchiveFx,
+  type ArchiveFx,
+} from "../lib/archive-fx";
 import {
   createArenaBg,
   drawArenaBg,
@@ -805,13 +816,22 @@ export function start(canvas: HTMLCanvasElement): void {
     currentRoom.height ?? ROOM_H_PX,
   );
   let wallFx: WallFx = createWallFx(currentRoom.walls);
+  let gridNodes: GridNodeState = createGridNodeState(
+    currentRoom.width ?? ROOM_W_PX,
+    currentRoom.height ?? ROOM_H_PX,
+  );
+  let archiveFx: ArchiveFx = createArchiveFx(
+    currentRoom.width ?? ROOM_W_PX,
+    currentRoom.height ?? ROOM_H_PX,
+  );
 
   function syncRoomFx() {
-    arenaBg = createArenaBg(
-      currentRoom.width ?? ROOM_W_PX,
-      currentRoom.height ?? ROOM_H_PX,
-    );
+    const w = currentRoom.width ?? ROOM_W_PX;
+    const h = currentRoom.height ?? ROOM_H_PX;
+    arenaBg = createArenaBg(w, h);
     wallFx = createWallFx(currentRoom.walls);
+    gridNodes = createGridNodeState(w, h);
+    archiveFx = createArchiveFx(w, h);
   }
 
   // overlay button bounds (CSS pixel space)
@@ -1912,6 +1932,8 @@ export function start(canvas: HTMLCanvasElement): void {
 
     updateArenaBg(arenaBg, dt);
     updateWallFx(wallFx, dt, currentRoom.walls);
+    updateGridNodes(gridNodes, dt);
+    updateArchiveFx(archiveFx, dt, player.x, player.y);
     tickScanlines(dt);
 
     // eye state: pupil tracks the closest threat in the room, dash ghosts
@@ -1999,16 +2021,17 @@ export function start(canvas: HTMLCanvasElement): void {
       ctx.translate(-camera.x, -camera.y);
     }
 
-    drawArenaBg(ctx, arenaBg);
+    drawArenaBg(ctx, arenaBg, { x: player.x, y: player.y });
 
-    // Minimalist world-space grid. Clamped to the room's logical
-    // bounds so it stops at the perimeter walls and never bleeds into
-    // the letterbox.
+    // Stateful grid — mostly dead nodes with a handful flickering.
     drawRoomGrid(
       ctx,
       currentRoom.width ?? ROOM_W_PX,
       currentRoom.height ?? ROOM_H_PX,
+      gridNodes,
     );
+
+    drawArchiveFx(ctx, archiveFx);
 
     drawWalls(ctx, currentRoom.walls);
     drawWallOverlay(ctx, wallFx, currentRoom.walls);
@@ -2323,28 +2346,21 @@ export function start(canvas: HTMLCanvasElement): void {
 
   function drawHUD() {
     ctx.save();
-    ctx.globalAlpha = 0.65;
     ctx.textAlign = "center";
     ctx.textBaseline = "top";
 
     const cx = viewW / 2;
-    const colA = cx - 100;
-    const colB = cx + 100;
-    const y0 = 18;
+    const heartsY = 16;
+    const heartSpacing = 22;
 
-    // Right HUD slot — markers progress while a markered phase is
-    // active (Room 0 phases 1 and 2), otherwise enemy count.
-    const showMarkers = !!(
-      currentRoom.markers && currentRoom.markers.length > 0
-    );
-    ctx.font = "500 11px system-ui, -apple-system, sans-serif";
-    ctx.fillStyle = "#7d8590";
-    ctx.fillText("TUTORIAL — ROOM", colA, y0);
-    ctx.fillText(showMarkers ? "MARKERS" : "ENEMIES", colB, y0);
+    ctx.globalAlpha = 0.85;
+    ctx.font = "600 22px system-ui, -apple-system, sans-serif";
+    const heartsStart = cx - heartSpacing;
+    for (let i = 0; i < 3; i++) {
+      ctx.fillStyle = i < state.hp ? "#ef4444" : "rgba(239,68,68,0.18)";
+      ctx.fillText("♥", heartsStart + i * heartSpacing, heartsY);
+    }
 
-    ctx.font = "600 22px ui-monospace, SFMono-Regular, Menlo, monospace";
-    ctx.fillStyle = "#ffffff";
-    // Tutorial rooms display 1-based: room0 → 1, room1 → 2, etc.
     const roomNum =
       currentRoom.id === "room0"
         ? 1
@@ -2355,46 +2371,12 @@ export function start(canvas: HTMLCanvasElement): void {
             : currentRoom.id === "room3"
               ? 4
               : 1;
-    ctx.fillText(`${roomNum} / ${ROOM_TOTAL}`, colA, y0 + 14);
-
-    if (showMarkers) {
-      const total = currentRoom.markers!.length;
-      const reached = currentRoom.markers!.reduce(
-        (n, m) => n + (m.reached ? 1 : 0),
-        0,
-      );
-      ctx.fillText(`${reached} / ${total}`, colB, y0 + 14);
-    } else {
-      const alive = aliveEnemies().length;
-      if (alive > 0) {
-        ctx.fillText(`${alive}`, colB, y0 + 14);
-      } else {
-        ctx.fillStyle = PALETTE.pickupHP;
-        ctx.font = "600 18px system-ui, -apple-system, sans-serif";
-        ctx.fillText("CLEARED", colB, y0 + 16);
-      }
-    }
-
-    const y1 = y0 + 50;
-    ctx.font = "500 11px system-ui, -apple-system, sans-serif";
-    ctx.fillStyle = "#7d8590";
-    ctx.fillText("HP", colA, y1);
-    ctx.fillText("SCORE", colB, y1);
-
-    // hearts row
-    ctx.font = "600 22px system-ui, -apple-system, sans-serif";
-    ctx.textAlign = "center";
-    const heartsY = y1 + 14;
-    const heartSpacing = 22;
-    const heartsStart = colA - heartSpacing;
-    for (let i = 0; i < 3; i++) {
-      ctx.fillStyle = i < state.hp ? "#ef4444" : "rgba(239,68,68,0.18)";
-      ctx.fillText("♥", heartsStart + i * heartSpacing, heartsY);
-    }
-
-    ctx.fillStyle = "#ffffff";
-    ctx.font = "600 22px ui-monospace, SFMono-Regular, Menlo, monospace";
-    ctx.fillText(state.score.toLocaleString("en-US"), colB, heartsY);
+    const roomY = heartsY + 34;
+    ctx.globalAlpha = 0.65;
+    ctx.font = "500 13px ui-monospace, SFMono-Regular, Menlo, monospace";
+    ctx.fillStyle = "#cbd5e1";
+    ctx.fillText(`${roomNum} / ${ROOM_TOTAL}`, cx, roomY);
+    ctx.globalAlpha = 0.85;
 
     // Awareness indicator (top-center) — DETECTED red while any
     // enemy is in aggro, ALERT yellow while any is alerting, hidden
@@ -2414,13 +2396,13 @@ export function start(canvas: HTMLCanvasElement): void {
         0.65 + 0.35 * (Math.sin(performance.now() * 0.012) + 1) * 0.5;
       ctx.save();
       ctx.globalAlpha = pulse;
-      ctx.font = "600 12px system-ui, -apple-system, sans-serif";
+      ctx.font = "600 11px system-ui, -apple-system, sans-serif";
       ctx.textAlign = "center";
       ctx.textBaseline = "top";
       ctx.shadowColor = color;
       ctx.shadowBlur = 12;
       ctx.fillStyle = color;
-      ctx.fillText(text, viewW / 2, 4);
+      ctx.fillText(text, viewW / 2, 16 + 34 + 18);
       ctx.restore();
     }
 
