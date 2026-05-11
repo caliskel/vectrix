@@ -16,6 +16,7 @@ import {
   HUNTER_TRAIL_MAX_SCALE,
   HUNTER_TRAIL_MIN_SCALE,
 } from "../config";
+import { audio } from "../audio";
 import { drawNeon } from "../neon";
 import { resolveEntityWallCollisions } from "../walls";
 import { applyAwarenessJitter, initAwareness } from "./awareness";
@@ -502,6 +503,9 @@ export class Hunter implements Enemy {
     this.vx *= CONTACT_BOUNCE_FACTOR;
     this.vy *= CONTACT_BOUNCE_FACTOR;
     this.contactSquashTime = CONTACT_SQUASH_SEC;
+    // Short angry growl on the bounce — sells the Hunter as a
+    // creature, not just kinetic geometry.
+    audio.play.hunterSnarl();
   }
 
   private drawTrail(ctx: CanvasRenderingContext2D): void {

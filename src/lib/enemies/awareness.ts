@@ -1,4 +1,3 @@
-import { audio } from "../audio";
 import {
   ALERT_BURST_PARTICLE_COUNT,
   ALERT_BURST_PARTICLE_LIFETIME_MS,
@@ -65,7 +64,9 @@ export function updateEnemyAwareness(
     if (dx * dx + dy * dy < enemy.detectionRadius * enemy.detectionRadius) {
       enemy.awarenessState = "alerting";
       enemy.alertTimer = 0;
-      audio.play.alert();
+      // Detection is intentionally silent — the visual ring burst +
+      // body jitter carry the read. Audio space is reserved for
+      // attack telegraphs and impacts.
       if (trigger) emitAlertBurst(trigger, enemy);
     }
   } else if (enemy.awarenessState === "alerting") {

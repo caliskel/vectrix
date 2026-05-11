@@ -5,6 +5,7 @@ import {
   Gain,
   MembraneSynth,
   NoiseSynth,
+  Player,
   PolySynth,
   Reverb,
   Synth,
@@ -27,7 +28,21 @@ class AudioEngine {
   // master chain
   private master?: Gain;
   private sfx?: Gain;
-  private music?: Gain; // reserved for future, no synths route through it yet
+  private music?: Gain;
+
+  // Looping music — keyed multi-track with crossfade. Caller registers
+  // any number of tracks (e.g. "rooms" / "boss-1" / "boss-2" / "boss-3")
+  // via setMusicTrack(key, url); playMusic(key, crossfadeSec) swaps
+  // between them. Load is deferred until init() so the AudioContext
+  // exists; calls before a track finishes decoding are queued and fire
+  // on load. activeMusicKey tracks what's currently playing for
+  // re-entrancy guards and idempotent calls.
+  private musicTracks: Map<string, Player> = new Map();
+  private musicUrls: Map<string, string> = new Map();
+  private musicLoadingKeys: Set<string> = new Set();
+  private musicQueuedKey?: string;
+  private musicQueuedFadeSec = 0;
+  private activeMusicKey?: string;
 
   // Sound 1: dash (white-noise breath, no pitch sweep, no reverb)
   private dashNoise?: NoiseSynth;
@@ -64,8 +79,36 @@ class AudioEngine {
   private hitHeavyMembrane?: MembraneSynth;
   private hitHeavyNoise?: NoiseSynth;
 
-  // Enemy awareness alert ping
+  // Boss-only telegraph cue. Used by Sentinel for the Ring Burst
+  // telegraph beat — generic enemy "detected you" sounds are
+  // intentionally silent (the visual ring burst carries that read).
   private alertSynth?: Synth;
+
+  // Per-archetype combat cues.
+  private watcherChargeSynth?: Synth;   // 1.2 s rising drone (charge)
+  private watcherChargeFilter?: Filter;
+  private watcherFireMembrane?: MembraneSynth; // tight sub-thump
+  private watcherFireNoise?: NoiseSynth;       // metallic crack
+  private hunterSnarlSynth?: Synth;     // contact-damage angry burst
+  private hunterSnarlFilter?: Filter;
+
+  // Sentinel boss — dedicated cues (replacing alert / hitHeavy
+  // placeholders flagged in CLAUDE.md).
+  private bossPhaseSynth?: Synth;       // sub saw for BWAA
+  private bossPhaseNoise?: NoiseSynth;  // sweep noise burst
+  private bossPhaseFilter?: Filter;
+  private bossMineSpawnSynth?: Synth;   // tense beep while mine telegraphs
+  private bossMineDetonateMembrane?: MembraneSynth;
+  private bossMineDetonateNoise?: NoiseSynth;
+  private bossSweepStartSynth?: Synth;  // rising warning drone
+  private bossSweepStartFilter?: Filter;
+  private bossSweepReverseSynth?: Synth; // heavy pull-back swell
+  private bossSweepReverseFilter?: Filter;
+  private bossEyeHitSynth?: PolySynth;  // shard-strike reward
+  private bossEyeHitNoise?: NoiseSynth;
+  private bossRingDetachMembrane?: MembraneSynth; // RB shells tear off
+  private bossRingDetachSynth?: Synth;
+  private bossRingDetachFilter?: Filter;
 
   // Sound 7: mult tier up
   private multSynth?: Synth;
@@ -75,10 +118,12 @@ class AudioEngine {
   private endFilter?: Filter;
 
   init(): void {
+    // Tone.start() is idempotent — retrying it on every call lets a
+    // page-load attempt (autoplay-blocked, no gesture yet) wake up
+    // once the user clicks. setupChain still runs once.
+    void toneStart();
     if (this.initialized) return;
     this.initialized = true;
-    // Tone.start() must run inside a user gesture; the caller is responsible.
-    void toneStart();
     this.setupChain();
     this.applyMute();
   }
@@ -102,8 +147,122 @@ class AudioEngine {
     this.setupHitMedium();
     this.setupHitHeavy();
     this.setupAlert();
+    this.setupWatcherCharge();
+    this.setupWatcherFire();
+    this.setupHunterSnarl();
+    this.setupBossPhase();
+    this.setupBossMineSpawn();
+    this.setupBossMineDetonate();
+    this.setupBossSweepStart();
+    this.setupBossSweepReverse();
+    this.setupBossEyeHit();
+    this.setupBossRingDetach();
     this.setupMultUp();
     this.setupRunEnd();
+    // Any tracks registered before init() get loaded now.
+    for (const key of this.musicUrls.keys()) this.tryLoadMusicTrack(key);
+  }
+
+  /** Register a music track under `key` at `url`. Safe to call before
+   *  init() — load is deferred until the AudioContext is ready. Caller
+   *  can register any number of keyed tracks (e.g. "rooms", "boss-1",
+   *  "boss-2", "boss-3") and then crossfade between them via
+   *  playMusic(key). Re-registering an existing key with a new URL
+   *  swaps the underlying Player; calling with the same URL is a no-op. */
+  setMusicTrack(key: string, url: string): void {
+    if (this.musicUrls.get(key) === url && this.musicTracks.has(key)) return;
+    this.musicUrls.set(key, url);
+    // If we already had a player for this key under a different URL,
+    // dispose it so the new URL takes its slot.
+    const existing = this.musicTracks.get(key);
+    if (existing) {
+      try {
+        existing.stop();
+        existing.dispose();
+      } catch {}
+      this.musicTracks.delete(key);
+    }
+    this.tryLoadMusicTrack(key);
+  }
+
+  /** Crossfade to the registered track under `key`. If the track
+   *  hasn't decoded yet, the play request is queued and fires on
+   *  load. `crossfadeSec` controls overlap with the previous track
+   *  (and the new track's fade-in). Calls targeting the currently
+   *  active track are no-ops. */
+  playMusic(key: string, crossfadeSec = 1.0): void {
+    this.musicQueuedKey = key;
+    this.musicQueuedFadeSec = Math.max(0, crossfadeSec);
+    this.tryStartMusic();
+  }
+
+  /** Fade out whatever is playing. */
+  stopMusic(fadeSec = 0.5): void {
+    this.musicQueuedKey = undefined;
+    const fade = Math.max(0, fadeSec);
+    if (this.activeMusicKey) {
+      const player = this.musicTracks.get(this.activeMusicKey);
+      if (player && player.state === "started") {
+        try {
+          player.fadeOut = fade;
+          player.stop();
+        } catch {}
+      }
+      this.activeMusicKey = undefined;
+    }
+  }
+
+  private tryLoadMusicTrack(key: string): void {
+    if (!this.initialized || !this.music) return;
+    const url = this.musicUrls.get(key);
+    if (!url) return;
+    if (this.musicTracks.has(key) || this.musicLoadingKeys.has(key)) return;
+    this.musicLoadingKeys.add(key);
+    try {
+      const player = new Player({
+        url,
+        loop: true,
+        autostart: false,
+        fadeIn: 0.5,
+        fadeOut: 0.5,
+        onload: () => {
+          this.musicLoadingKeys.delete(key);
+          this.tryStartMusic();
+        },
+        onerror: () => {
+          this.musicLoadingKeys.delete(key);
+        },
+      }).connect(this.music);
+      this.musicTracks.set(key, player);
+    } catch {
+      this.musicLoadingKeys.delete(key);
+    }
+  }
+
+  private tryStartMusic(): void {
+    const key = this.musicQueuedKey;
+    if (!key) return;
+    const next = this.musicTracks.get(key);
+    if (!next || !next.loaded) return;
+    if (this.activeMusicKey === key && next.state === "started") return;
+
+    const fade = this.musicQueuedFadeSec;
+    // Fade out whatever is currently playing.
+    if (this.activeMusicKey && this.activeMusicKey !== key) {
+      const prev = this.musicTracks.get(this.activeMusicKey);
+      if (prev && prev.state === "started") {
+        try {
+          prev.fadeOut = fade;
+          prev.stop();
+        } catch {}
+      }
+    }
+    // Bring up the next.
+    try {
+      next.fadeIn = fade;
+      next.start();
+    } catch {}
+    this.activeMusicKey = key;
   }
 
   private setupDash(): void {
@@ -225,13 +384,264 @@ class AudioEngine {
     }).connect(dist);
   }
 
-  // Alert: single short triangle ping — "tink" — at the moment an
-  // enemy notices the player and snaps from idle into alerting.
+  // Boss alert (Ring Burst telegraph). Sub-growl pre-warning — slow
+  // attack so it swells rather than punches; heavy distortion +
+  // bit-crush + long dark reverb. The visual telegraph (body jitter
+  // + glow ramp) covers the read, this layer adds the dread.
   private setupAlert(): void {
+    const reverb = new Reverb({ decay: 2.5, wet: 0.45 }).connect(this.sfx!);
+    void reverb.generate();
+    const filter = new Filter({
+      type: "lowpass",
+      frequency: 320,
+      Q: 4,
+    }).connect(reverb);
+    const dist = new Distortion(0.9).connect(filter);
+    const crusher = new BitCrusher(3).connect(dist);
     this.alertSynth = new Synth({
-      oscillator: { type: "triangle" },
-      envelope: { attack: 0.001, decay: 0.08, sustain: 0, release: 0.02 },
+      oscillator: { type: "sawtooth" },
+      envelope: { attack: 0.04, decay: 0.5, sustain: 0.1, release: 0.4 },
+    }).connect(crusher);
+  }
+
+  // Watcher charge: dark rising drone over the 1.2 s aiming window.
+  // Sawtooth pitched sub-low through a resonant lowpass + heavy
+  // distortion + crusher — tension builds toward the commit. Pitch +
+  // filter ramps live in playWatcherCharge.
+  private setupWatcherCharge(): void {
+    const filter = new Filter({
+      type: "lowpass",
+      frequency: 300,
+      Q: 5,
     }).connect(this.sfx!);
+    this.watcherChargeFilter = filter;
+    const dist = new Distortion(0.55).connect(filter);
+    const crusher = new BitCrusher(5).connect(dist);
+    this.watcherChargeSynth = new Synth({
+      oscillator: { type: "sawtooth" },
+      envelope: { attack: 0.05, decay: 1.0, sustain: 0.35, release: 0.2 },
+    }).connect(crusher);
+  }
+
+  // Watcher fire: two-layer industrial impact. Replaces the old
+  // tonal downsweep (read as silly). Sub-membrane thump for body +
+  // tight pink-noise crack for the beam ignition. ~120 ms total.
+  // Reads as a coilgun discharge, not a cartoon "weew".
+  private setupWatcherFire(): void {
+    const dist = new Distortion(0.8).connect(this.sfx!);
+    const crusher = new BitCrusher(4).connect(dist);
+    this.watcherFireMembrane = new MembraneSynth({
+      pitchDecay: 0.08,
+      octaves: 6,
+      oscillator: { type: "sine" },
+      envelope: { attack: 0.001, decay: 0.18, sustain: 0, release: 0.08 },
+    }).connect(crusher);
+    const bandpass = new Filter({
+      type: "bandpass",
+      frequency: 1100,
+      Q: 2.2,
+    }).connect(this.sfx!);
+    this.watcherFireNoise = new NoiseSynth({
+      noise: { type: "pink" },
+      envelope: { attack: 0.001, decay: 0.1, sustain: 0, release: 0.04 },
+    }).connect(bandpass);
+  }
+
+  // Hunter snarl: short angry burst on contact damage. Sub-saw low,
+  // pitched + filter swept down inside playHunterSnarl. Heavy
+  // distortion + crusher for the wet/dirty bite. ~150 ms total.
+  private setupHunterSnarl(): void {
+    const filter = new Filter({
+      type: "lowpass",
+      frequency: 320,
+      Q: 3,
+    }).connect(this.sfx!);
+    this.hunterSnarlFilter = filter;
+    const dist = new Distortion(0.95).connect(filter);
+    const crusher = new BitCrusher(4).connect(dist);
+    this.hunterSnarlSynth = new Synth({
+      oscillator: { type: "sawtooth" },
+      envelope: { attack: 0.005, decay: 0.18, sustain: 0, release: 0.08 },
+    }).connect(crusher);
+  }
+
+  // Boss phase transition: apocalyptic sub-roar — sawtooth pitched
+  // around 30 Hz swept up through resonant lowpass + heavy crusher +
+  // dist; pink-noise rumble through a long dark reverb. Total ~1.5 s.
+  // Fires at the climax of the 2 s phase-transition cinematic — the
+  // longest, lowest cue in the game.
+  private setupBossPhase(): void {
+    const reverb = new Reverb({ decay: 3.5, wet: 0.4 }).connect(this.sfx!);
+    void reverb.generate();
+    const filter = new Filter({
+      type: "lowpass",
+      frequency: 160,
+      Q: 6,
+    }).connect(reverb);
+    this.bossPhaseFilter = filter;
+    const dist = new Distortion(0.95).connect(filter);
+    const crusher = new BitCrusher(3).connect(dist);
+    this.bossPhaseSynth = new Synth({
+      oscillator: { type: "sawtooth" },
+      envelope: { attack: 0.02, decay: 1.2, sustain: 0.2, release: 0.6 },
+    }).connect(crusher);
+    const noiseReverb = new Reverb({ decay: 2.5, wet: 0.5 }).connect(this.sfx!);
+    void noiseReverb.generate();
+    const bandpass = new Filter({
+      type: "bandpass",
+      frequency: 500,
+      Q: 0.8,
+    }).connect(noiseReverb);
+    this.bossPhaseNoise = new NoiseSynth({
+      noise: { type: "pink" },
+      envelope: { attack: 0.01, decay: 0.9, sustain: 0, release: 0.4 },
+    }).connect(bandpass);
+  }
+
+  // Boss mine spawn: sub-thud — sawtooth pitched in the chest, dist
+  // + bit-crush + long dark reverb. Player locates the new mine by
+  // the bass weight; no high-end content at all.
+  private setupBossMineSpawn(): void {
+    const reverb = new Reverb({ decay: 2.0, wet: 0.5 }).connect(this.sfx!);
+    void reverb.generate();
+    const filter = new Filter({
+      type: "lowpass",
+      frequency: 240,
+      Q: 5,
+    }).connect(reverb);
+    const dist = new Distortion(0.65).connect(filter);
+    const crusher = new BitCrusher(4).connect(dist);
+    this.bossMineSpawnSynth = new Synth({
+      oscillator: { type: "sawtooth" },
+      envelope: { attack: 0.005, decay: 0.45, sustain: 0, release: 0.25 },
+    }).connect(crusher);
+  }
+
+  // Boss mine detonate: cataclysmic sub-thump + filtered crackle —
+  // membrane pitched at 30 Hz floor with octaves: 8 for pitch travel
+  // on the decay; pink-noise burst through long-tail dark reverb.
+  // Loudest single hit in the game.
+  private setupBossMineDetonate(): void {
+    const reverb = new Reverb({ decay: 1.8, wet: 0.4 }).connect(this.sfx!);
+    void reverb.generate();
+    const dist = new Distortion(0.95).connect(reverb);
+    this.bossMineDetonateMembrane = new MembraneSynth({
+      pitchDecay: 0.14,
+      octaves: 8,
+      oscillator: { type: "sine" },
+      envelope: { attack: 0.001, decay: 0.85, sustain: 0, release: 0.4 },
+    }).connect(dist);
+    const noiseReverb = new Reverb({ decay: 1.6, wet: 0.45 }).connect(this.sfx!);
+    void noiseReverb.generate();
+    const bandpass = new Filter({
+      type: "bandpass",
+      frequency: 650,
+      Q: 1.5,
+    }).connect(noiseReverb);
+    this.bossMineDetonateNoise = new NoiseSynth({
+      noise: { type: "pink" },
+      envelope: { attack: 0.001, decay: 0.6, sustain: 0, release: 0.25 },
+    }).connect(bandpass);
+  }
+
+  // Boss sweep laser — telegraph start. Sub-pitched rising warning
+  // drone through resonant lowpass + heavy distortion + low-bit
+  // crusher + long dark reverb. The longest sustained boss cue —
+  // signals "wide attack incoming."
+  private setupBossSweepStart(): void {
+    const reverb = new Reverb({ decay: 2.5, wet: 0.4 }).connect(this.sfx!);
+    void reverb.generate();
+    const filter = new Filter({
+      type: "lowpass",
+      frequency: 240,
+      Q: 5,
+    }).connect(reverb);
+    this.bossSweepStartFilter = filter;
+    const dist = new Distortion(0.8).connect(filter);
+    const crusher = new BitCrusher(3).connect(dist);
+    this.bossSweepStartSynth = new Synth({
+      oscillator: { type: "sawtooth" },
+      envelope: { attack: 0.08, decay: 0.8, sustain: 0.35, release: 0.4 },
+    }).connect(crusher);
+  }
+
+  // Boss sweep laser — reverse / countdown swell. Heavy pull-back at
+  // firing-1 → mid-pause and the final-100ms countdown chirp. Same
+  // synth retriggered with different pitches inside playBossSweepReverse.
+  // Pushed darker than the first pass: heavier dist, lower crusher
+  // bits, reverb tail.
+  private setupBossSweepReverse(): void {
+    const reverb = new Reverb({ decay: 1.5, wet: 0.35 }).connect(this.sfx!);
+    void reverb.generate();
+    const filter = new Filter({
+      type: "lowpass",
+      frequency: 400,
+      Q: 6,
+    }).connect(reverb);
+    this.bossSweepReverseFilter = filter;
+    const dist = new Distortion(0.8).connect(filter);
+    const crusher = new BitCrusher(3).connect(dist);
+    this.bossSweepReverseSynth = new Synth({
+      oscillator: { type: "sawtooth" },
+      envelope: { attack: 0.01, decay: 0.5, sustain: 0, release: 0.25 },
+    }).connect(crusher);
+  }
+
+  // Boss eye-hit reward: shard-strike. Sawtooth polyvoice tuned to
+  // minor triad through a very long dark reverb + narrower lowpass —
+  // ringing metallic shard rather than chime. The noise pop carries
+  // the impact transient. Brightness is intentional contrast: this
+  // is the ONE "satisfying" moment in the boss fight.
+  private setupBossEyeHit(): void {
+    const reverb = new Reverb({ decay: 3.0, wet: 0.55 }).connect(this.sfx!);
+    void reverb.generate();
+    const filter = new Filter({
+      type: "lowpass",
+      frequency: 1600,
+      Q: 2,
+    }).connect(reverb);
+    const dist = new Distortion(0.35).connect(filter);
+    this.bossEyeHitSynth = new PolySynth(Synth, {
+      oscillator: { type: "sawtooth" },
+      envelope: { attack: 0.002, decay: 0.7, sustain: 0, release: 0.6 },
+    }).connect(dist);
+    const bandpass = new Filter({
+      type: "bandpass",
+      frequency: 1800,
+      Q: 2.4,
+    }).connect(this.sfx!);
+    this.bossEyeHitNoise = new NoiseSynth({
+      noise: { type: "pink" },
+      envelope: { attack: 0.001, decay: 0.08, sustain: 0, release: 0.04 },
+    }).connect(bandpass);
+  }
+
+  // Boss Ring-Burst detach: shells tear off the body. Sub-membrane
+  // thump + filtered saw scrape through long dark reverb + crusher.
+  // Replaces the bit-crushed bullet-break placeholder that read as
+  // game-y. ~0.6 s total.
+  private setupBossRingDetach(): void {
+    const reverb = new Reverb({ decay: 2.0, wet: 0.45 }).connect(this.sfx!);
+    void reverb.generate();
+    const dist = new Distortion(0.8).connect(reverb);
+    this.bossRingDetachMembrane = new MembraneSynth({
+      pitchDecay: 0.1,
+      octaves: 6,
+      oscillator: { type: "sine" },
+      envelope: { attack: 0.001, decay: 0.4, sustain: 0, release: 0.2 },
+    }).connect(dist);
+    const filter = new Filter({
+      type: "lowpass",
+      frequency: 700,
+      Q: 4,
+    }).connect(reverb);
+    this.bossRingDetachFilter = filter;
+    const sawDist = new Distortion(0.7).connect(filter);
+    const crusher = new BitCrusher(4).connect(sawDist);
+    this.bossRingDetachSynth = new Synth({
+      oscillator: { type: "sawtooth" },
+      envelope: { attack: 0.005, decay: 0.5, sustain: 0, release: 0.25 },
+    }).connect(crusher);
   }
 
   // Heavy: long sub membrane + bandpassed white-noise burst —
@@ -322,6 +732,21 @@ class AudioEngine {
       this.hitHeavyMembrane?.triggerRelease();
       this.hitHeavyNoise?.triggerRelease();
       this.alertSynth?.triggerRelease();
+      this.watcherChargeSynth?.triggerRelease();
+      this.watcherFireMembrane?.triggerRelease();
+      this.watcherFireNoise?.triggerRelease();
+      this.hunterSnarlSynth?.triggerRelease();
+      this.bossPhaseSynth?.triggerRelease();
+      this.bossPhaseNoise?.triggerRelease();
+      this.bossMineSpawnSynth?.triggerRelease();
+      this.bossMineDetonateMembrane?.triggerRelease();
+      this.bossMineDetonateNoise?.triggerRelease();
+      this.bossSweepStartSynth?.triggerRelease();
+      this.bossSweepReverseSynth?.triggerRelease();
+      this.bossEyeHitSynth?.releaseAll();
+      this.bossEyeHitNoise?.triggerRelease();
+      this.bossRingDetachMembrane?.triggerRelease();
+      this.bossRingDetachSynth?.triggerRelease();
       this.multSynth?.triggerRelease();
       this.endSynth?.releaseAll();
     } catch {}
@@ -355,6 +780,16 @@ class AudioEngine {
     hitMedium: (): void => this.playHitMedium(),
     hitHeavy: (): void => this.playHitHeavy(),
     alert: (): void => this.playAlert(),
+    watcherCharge: (): void => this.playWatcherCharge(),
+    watcherFire: (): void => this.playWatcherFire(),
+    hunterSnarl: (): void => this.playHunterSnarl(),
+    bossPhase: (): void => this.playBossPhase(),
+    bossMineSpawn: (): void => this.playBossMineSpawn(),
+    bossMineDetonate: (): void => this.playBossMineDetonate(),
+    bossSweepStart: (): void => this.playBossSweepStart(),
+    bossSweepReverse: (high: boolean): void => this.playBossSweepReverse(high),
+    bossEyeHit: (): void => this.playBossEyeHit(),
+    bossRingDetach: (): void => this.playBossRingDetach(),
     smash: (strength: number): void => this.playSmash(strength),
     multUp: (tier: number): void => this.playMultUp(tier),
     runEnd: (): void => this.playRunEnd(),
@@ -476,8 +911,208 @@ class AudioEngine {
 
   private playAlert(): void {
     if (!this.alertSynth) return;
+    // Slow sub-swell — 80 Hz, 0.6 s attack-decay through long dark
+    // reverb. Used only by the boss Ring-Burst telegraph now.
     try {
-      this.alertSynth.triggerAttackRelease(660, 0.08, toneNow(), 0.4);
+      this.alertSynth.triggerAttackRelease(80, 0.55, toneNow(), 0.7);
+    } catch {}
+  }
+
+  private playWatcherCharge(): void {
+    if (!this.watcherChargeSynth || !this.watcherChargeFilter) return;
+    try {
+      const t = toneNow();
+      // Pitch climbs 70 → 220 Hz over the 1.2 s aiming window (was
+      // 110 → 330); filter opens 220 → 1200 Hz. Subbier, dirtier
+      // start — reads as something ominous spooling up.
+      this.watcherChargeSynth.frequency.cancelScheduledValues(t);
+      this.watcherChargeSynth.frequency.setValueAtTime(70, t);
+      this.watcherChargeSynth.frequency.exponentialRampToValueAtTime(
+        220,
+        t + 1.15,
+      );
+      this.watcherChargeFilter.frequency.cancelScheduledValues(t);
+      this.watcherChargeFilter.frequency.setValueAtTime(220, t);
+      this.watcherChargeFilter.frequency.exponentialRampToValueAtTime(
+        1200,
+        t + 1.15,
+      );
+      this.watcherChargeSynth.triggerAttackRelease(70, 1.15, t, 0.4);
+    } catch {}
+  }
+
+  private playWatcherFire(): void {
+    if (!this.watcherFireMembrane || !this.watcherFireNoise) return;
+    try {
+      const t = toneNow();
+      // Sub-thump at 70 Hz with octaves: 6 for pitch travel; pink-
+      // noise crack adds the beam ignition. Two layers strike
+      // simultaneously — reads as a hard industrial impact, not a
+      // melodic sweep.
+      this.watcherFireMembrane.triggerAttackRelease(70, 0.18, t, 0.85);
+      this.watcherFireNoise.triggerAttackRelease(0.1, t, 0.6);
+    } catch {}
+  }
+
+  private playHunterSnarl(): void {
+    if (!this.hunterSnarlSynth || !this.hunterSnarlFilter) return;
+    try {
+      const t = toneNow();
+      // 90 → 45 Hz fast descent (was 130 → 70), filter slams 600 →
+      // 180 Hz. Sub-territory growl — dropped a half-octave to sit
+      // in the chest.
+      this.hunterSnarlSynth.frequency.cancelScheduledValues(t);
+      this.hunterSnarlSynth.frequency.setValueAtTime(90, t);
+      this.hunterSnarlSynth.frequency.exponentialRampToValueAtTime(
+        45,
+        t + 0.14,
+      );
+      this.hunterSnarlFilter.frequency.cancelScheduledValues(t);
+      this.hunterSnarlFilter.frequency.setValueAtTime(600, t);
+      this.hunterSnarlFilter.frequency.exponentialRampToValueAtTime(
+        180,
+        t + 0.14,
+      );
+      this.hunterSnarlSynth.triggerAttackRelease(90, 0.14, t, 0.75);
+    } catch {}
+  }
+
+  private playBossPhase(): void {
+    if (!this.bossPhaseSynth || !this.bossPhaseNoise || !this.bossPhaseFilter) {
+      return;
+    }
+    try {
+      const t = toneNow();
+      // Sub-saw rises 38 → 95 Hz over 900 ms (was 55→110 / 600 ms);
+      // filter opens 140 → 1100 Hz. Pink-noise rumble underneath.
+      // Subbier, longer, more cataclysmic.
+      this.bossPhaseSynth.frequency.cancelScheduledValues(t);
+      this.bossPhaseSynth.frequency.setValueAtTime(38, t);
+      this.bossPhaseSynth.frequency.exponentialRampToValueAtTime(
+        95,
+        t + 0.9,
+      );
+      this.bossPhaseFilter.frequency.cancelScheduledValues(t);
+      this.bossPhaseFilter.frequency.setValueAtTime(140, t);
+      this.bossPhaseFilter.frequency.exponentialRampToValueAtTime(
+        1100,
+        t + 0.9,
+      );
+      this.bossPhaseSynth.triggerAttackRelease(38, 1.1, t, 0.85);
+      this.bossPhaseNoise.triggerAttackRelease(0.7, t, 0.5);
+    } catch {}
+  }
+
+  private playBossMineSpawn(): void {
+    if (!this.bossMineSpawnSynth) return;
+    try {
+      // Sub-saw thud at 165 Hz with a long reverb tail — replaces the
+      // 440 Hz triangle bleep. Reads as a heavy seed dropping, not a
+      // UI cue.
+      this.bossMineSpawnSynth.triggerAttackRelease(165, 0.25, toneNow(), 0.55);
+    } catch {}
+  }
+
+  private playBossMineDetonate(): void {
+    if (!this.bossMineDetonateMembrane || !this.bossMineDetonateNoise) return;
+    try {
+      const t = toneNow();
+      // Membrane at 45 Hz (was 60) — deeper thump, octaves: 7 in
+      // setup gives it more pitch travel on the decay; pink-noise
+      // crackle slightly louder.
+      this.bossMineDetonateMembrane.triggerAttackRelease(45, 0.65, t, 1.0);
+      this.bossMineDetonateNoise.triggerAttackRelease(0.5, t, 0.7);
+    } catch {}
+  }
+
+  private playBossSweepStart(): void {
+    if (!this.bossSweepStartSynth || !this.bossSweepStartFilter) return;
+    try {
+      const t = toneNow();
+      // Rising warning drone — 65 → 175 Hz (was 120→280), filter
+      // opens 200 → 900 Hz. Subbier start, more dread; longer
+      // sustain so it bleeds into the firing-1 sweep.
+      this.bossSweepStartSynth.frequency.cancelScheduledValues(t);
+      this.bossSweepStartSynth.frequency.setValueAtTime(65, t);
+      this.bossSweepStartSynth.frequency.exponentialRampToValueAtTime(
+        175,
+        t + 0.5,
+      );
+      this.bossSweepStartFilter.frequency.cancelScheduledValues(t);
+      this.bossSweepStartFilter.frequency.setValueAtTime(200, t);
+      this.bossSweepStartFilter.frequency.exponentialRampToValueAtTime(
+        900,
+        t + 0.5,
+      );
+      this.bossSweepStartSynth.triggerAttackRelease(65, 0.6, t, 0.6);
+    } catch {}
+  }
+
+  // The mid-pause reverse cue uses `high=false` (heavy pull-back at
+  // firing-1 → mid-pause); the final-100ms countdown uses
+  // `high=true` (brighter pitch, sells the impending firing-2).
+  private playBossSweepReverse(high: boolean): void {
+    if (!this.bossSweepReverseSynth || !this.bossSweepReverseFilter) return;
+    try {
+      const t = toneNow();
+      // Dropped both pitches an octave from the first pass — base
+      // 70 Hz / countdown 140 Hz. Slower descent (220 → 100/200 ms).
+      const pitch = high ? 140 : 70;
+      this.bossSweepReverseSynth.frequency.cancelScheduledValues(t);
+      this.bossSweepReverseSynth.frequency.setValueAtTime(pitch * 2, t);
+      this.bossSweepReverseSynth.frequency.exponentialRampToValueAtTime(
+        pitch,
+        t + 0.28,
+      );
+      this.bossSweepReverseFilter.frequency.cancelScheduledValues(t);
+      this.bossSweepReverseFilter.frequency.setValueAtTime(1100, t);
+      this.bossSweepReverseFilter.frequency.exponentialRampToValueAtTime(
+        300,
+        t + 0.28,
+      );
+      this.bossSweepReverseSynth.triggerAttackRelease(pitch * 2, 0.32, t, 0.65);
+    } catch {}
+  }
+
+  private playBossEyeHit(): void {
+    if (!this.bossEyeHitSynth || !this.bossEyeHitNoise) return;
+    try {
+      const t = toneNow();
+      // A3 + C4 + E4 minor triad — dropped another octave to read
+      // as a ringing shard, not a chime. Long reverb tail keeps the
+      // reward audible without high-end sweetness.
+      this.bossEyeHitNoise.triggerAttackRelease(0.06, t, 0.55);
+      this.bossEyeHitSynth.triggerAttackRelease(
+        ["A3", "C4", "E4"],
+        0.7,
+        t + 0.005,
+        0.55,
+      );
+    } catch {}
+  }
+
+  private playBossRingDetach(): void {
+    if (!this.bossRingDetachMembrane || !this.bossRingDetachSynth) return;
+    if (!this.bossRingDetachFilter) return;
+    try {
+      const t = toneNow();
+      // Membrane thump at 50 Hz for the body tear, layered with a
+      // saw at 120 Hz that drops to 60 Hz through a closing lowpass
+      // (700 → 250 Hz) — sells the structure pulling apart.
+      this.bossRingDetachMembrane.triggerAttackRelease(50, 0.4, t, 0.95);
+      this.bossRingDetachSynth.frequency.cancelScheduledValues(t);
+      this.bossRingDetachSynth.frequency.setValueAtTime(120, t);
+      this.bossRingDetachSynth.frequency.exponentialRampToValueAtTime(
+        60,
+        t + 0.5,
+      );
+      this.bossRingDetachFilter.frequency.cancelScheduledValues(t);
+      this.bossRingDetachFilter.frequency.setValueAtTime(700, t);
+      this.bossRingDetachFilter.frequency.exponentialRampToValueAtTime(
+        250,
+        t + 0.5,
+      );
+      this.bossRingDetachSynth.triggerAttackRelease(120, 0.5, t, 0.7);
     } catch {}
   }
 

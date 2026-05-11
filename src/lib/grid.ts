@@ -2,6 +2,33 @@ import { PALETTE } from "./palette";
 
 export const GRID_STEP = 60;
 
+// Draw the same neon grid sandbox uses, but in world space and clamped
+// to a room's logical bounds. Called inside the camera transform so the
+// pattern scrolls with the world and stops at the room edges instead of
+// bleeding into the letterbox. No bg fill — rooms-game has already
+// painted PALETTE.bg over the whole canvas.
+export function drawRoomGrid(
+  ctx: CanvasRenderingContext2D,
+  roomW: number,
+  roomH: number,
+): void {
+  ctx.save();
+  ctx.strokeStyle = PALETTE.bgGrid;
+  ctx.lineWidth = 1;
+  ctx.shadowBlur = 0;
+  ctx.beginPath();
+  for (let x = GRID_STEP; x < roomW; x += GRID_STEP) {
+    ctx.moveTo(x + 0.5, 0);
+    ctx.lineTo(x + 0.5, roomH);
+  }
+  for (let y = GRID_STEP; y < roomH; y += GRID_STEP) {
+    ctx.moveTo(0, y + 0.5);
+    ctx.lineTo(roomW, y + 0.5);
+  }
+  ctx.stroke();
+  ctx.restore();
+}
+
 // Build an offscreen canvas with the arena background + grid pattern.
 // Caller redraws this on resize and blits via drawImage each frame.
 export function createGridCanvas(

@@ -1,3 +1,4 @@
+import { audio } from "../lib/audio";
 import {
   DEFAULT_PLAYER_PROFILE,
   type PlayerProfile,
@@ -74,6 +75,24 @@ applyTutorialState();
 window.addEventListener("focus", applyTutorialState);
 window.addEventListener("pageshow", applyTutorialState);
 window.addEventListener("storage", applyTutorialState);
+
+// Menu music. We try to start immediately on script load — browsers
+// that already have a user-activation flag for this origin (i.e. the
+// player has clicked anywhere on the site in this session) will
+// autoplay. Cold-load visitors hit the autoplay policy: AudioContext
+// stays suspended until the first gesture, and the keydown / click
+// fallback below resumes it. audio.init() retries Tone.start() on
+// every call, so re-firing on a gesture wakes the suspended context.
+audio.setMusicTrack("menu", encodeURI("/audio/menu/Neon Drift Menu.mp3"));
+audio.playMusic("menu", 1.0);
+audio.init();
+const kickMenuMusic = () => {
+  audio.init();
+  audio.playMusic("menu", 1.0);
+};
+window.addEventListener("keydown", kickMenuMusic, { once: false });
+window.addEventListener("click", kickMenuMusic, { once: false });
+window.addEventListener("touchstart", kickMenuMusic, { once: false });
 
 type OverlayName = "player" | "controls" | "about";
 
@@ -441,7 +460,7 @@ function onAboutOpen(): void {
   if (!aboutBodyEl) return;
   const profile = loadKeybinds();
   const lines: string[] = [];
-  lines.push("DASH — neon bullet-hell prototype.");
+  lines.push("VECTRIX — neon bullet-hell prototype.");
   lines.push("");
   lines.push("MODES");
   lines.push("  TUTORIAL — onboarding rooms");

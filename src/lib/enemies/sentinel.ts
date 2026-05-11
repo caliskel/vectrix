@@ -1969,7 +1969,7 @@ export class Sentinel implements Enemy {
         drag: 0.94,
       });
     }
-    audio.play.bulletBreak();
+    audio.play.bossRingDetach();
   }
 
   /** Eye reward feedback. Spawns the heavy double ring + 24
@@ -2030,8 +2030,10 @@ export class Sentinel implements Enemy {
     this.pendingShakeSec = RB_EYE_HIT_SHAKE_SEC;
     this.eyeHitstopTimer = RB_EYE_HITSTOP_SEC;
     this.timeScale = RB_EYE_HITSTOP_TIMESCALE;
-    audio.play.hitHeavy();
-    audio.play.alert();
+    // Crystalline reward chime — replaces the hitHeavy+alert
+    // placeholder. The chime fronts a tiny noise pop for the impact
+    // transient and a sustained C6+E6+G6 sine stack with reverb.
+    audio.play.bossEyeHit();
   }
 
   // === Phase transitions ===
@@ -2199,8 +2201,9 @@ export class Sentinel implements Enemy {
           drag: 0.94,
         });
       }
-      audio.play.hitHeavy();
-      audio.play.alert();
+      // Phase-transition climax — dedicated BWAA + noise sizzle
+      // replacing the hitHeavy+alert placeholder.
+      audio.play.bossPhase();
       if (t.toPhase === 2) {
         this.phaseMarkerFlashTimer1to2 = PHASE_TRANSITION_HP_MARKER_FLASH_SEC;
       } else {
@@ -2331,7 +2334,8 @@ export class Sentinel implements Enemy {
         // will replace this with a swoosh + drone modulation.
         this.pendingShakePx = SWEEP_LASER_MID_PAUSE_SHAKE_PX;
         this.pendingShakeSec = SWEEP_LASER_MID_PAUSE_SHAKE_SEC;
-        audio.play.alert();
+        // Reverse cue — heavy pull-back swell at firing-1 → mid-pause.
+        audio.play.bossSweepReverse(false);
       }
       return;
     }
@@ -2348,7 +2352,9 @@ export class Sentinel implements Enemy {
         this.sweepLaserTimer >= finalChirpThreshold &&
         this.sweepLaserTimer - dt < finalChirpThreshold
       ) {
-        audio.play.alert();
+        // Brighter pitch of the same reverse swell — countdown
+        // chirp before firing-2 starts.
+        audio.play.bossSweepReverse(true);
       }
       if (this.sweepLaserTimer >= SWEEP_LASER_MID_PAUSE_SEC) {
         this.sweepLaserPhase = "firing-2";
@@ -2405,7 +2411,8 @@ export class Sentinel implements Enemy {
     this.sweepLaserPhase = "telegraph";
     this.sweepLaserTimer = 0;
     this.sweepLaserDashOffset = 0;
-    audio.play.alert();
+    // Rising warning drone for the telegraph window.
+    audio.play.bossSweepStart();
   }
 
   /** Live beam angle. Read by the damage check, the particle
@@ -2530,7 +2537,9 @@ export class Sentinel implements Enemy {
         drag: 0.92,
       });
     }
-    audio.play.alert();
+    // Tense single beep so the player can locate the new mine by
+    // ear before the strobe phase kicks in.
+    audio.play.bossMineSpawn();
   }
 
   /** Detonate a mine — radial 6-bullet burst (hex theme), one
@@ -2585,7 +2594,9 @@ export class Sentinel implements Enemy {
         drag: 0.92,
       });
     }
-    audio.play.hitHeavy();
+    // Heavier than hitHeavy: sub thump + bandpass noise sizzle. Pulls
+    // attention even when an attack is mid-firing.
+    audio.play.bossMineDetonate();
   }
 
   /** Render all live mines as pulsing hex outlines with a small

@@ -74,6 +74,7 @@ import {
   emitEnemyKill,
   type ImpactContext,
 } from "../lib/impacts";
+import { drawRoomGrid } from "../lib/grid";
 import { drawNeon } from "../lib/neon";
 import { PALETTE } from "../lib/palette";
 import {
@@ -380,6 +381,11 @@ type GameState = {
    *  combat → dying transition and pop Game Complete on dying →
    *  defeated. Equals "none" while the player isn't in Room 5. */
   prevSentinelState: SentinelState | "none";
+  /** Tracked across frames so the music system can crossfade to the
+   *  next boss-phase track exactly when the Sentinel's bossPhase flips
+   *  (HP 60 → 40 → 20 boundaries, fired inside the 2 s transition
+   *  cinematic). 0 while the player isn't in Room 5. */
+  prevBossPhase: 0 | 1 | 2 | 3;
 };
 
 export function start(canvas: HTMLCanvasElement): void {
@@ -409,6 +415,16 @@ export function start(canvas: HTMLCanvasElement): void {
   audio.setMasterVolume(settings.audio.master);
   audio.setSfxVolume(settings.audio.sfx);
   audio.setMusicVolume(settings.audio.music);
+  // Story-mode music. Four tracks: "rooms" plays through rooms 1–4,
+  // then crossfades to the three boss-phase tracks as the Sentinel's
+  // bossPhase advances. Files live in public/audio/ (Vite serves
+  // /audio/ from there). Load is deferred until audio.init() fires on
+  // the first user gesture (the keydown / click handlers below);
+  // crossfades are kicked from reconcileBossMusic().
+  audio.setMusicTrack("rooms", encodeURI("/audio/Glass Under Ice.mp3"));
+  audio.setMusicTrack("boss-1", "/audio/boss-phase-1.mp3");
+  audio.setMusicTrack("boss-2", "/audio/boss-phase-2.mp3");
+  audio.setMusicTrack("boss-3", "/audio/boss-phase-3.mp3");
 
   // Player profile from the landing-page editor (saved in localStorage).
   // Loaded once at start; the editor lives on a different page so a
@@ -482,6 +498,7 @@ export function start(canvas: HTMLCanvasElement): void {
     failedSnapshot: null,
     elapsed: 0,
     prevSentinelState: "none",
+    prevBossPhase: 0,
   };
 
   let currentRoom: Room = rooms.get("room1")!;
@@ -549,6 +566,7 @@ export function start(canvas: HTMLCanvasElement): void {
     state.failedSnapshot = null;
     state.elapsed = 0;
     state.prevSentinelState = "none";
+    state.prevBossPhase = 0;
     bullets = [];
     particles = [];
     rings = [];
@@ -580,6 +598,15 @@ export function start(canvas: HTMLCanvasElement): void {
     // boss in `state: "intro"` from the constructor; no external
     // priming is needed.
     state.prevSentinelState = currentRoom.id === "room5" ? "intro" : "none";
+    // Music swap follows room id. Crossfade is long enough (1.5 s) to
+    // overlap the door arrow / fade beat without a hard cut.
+    if (currentRoom.id === "room5") {
+      state.prevBossPhase = 1;
+      audio.playMusic("boss-1", 1.5);
+    } else {
+      state.prevBossPhase = 0;
+      audio.playMusic("rooms", 1.5);
+    }
   }
 
   function roomBounds(): WorldBounds {
@@ -671,6 +698,7 @@ export function start(canvas: HTMLCanvasElement): void {
 
   window.addEventListener("keydown", (e) => {
     audio.init();
+    pickInitialMusic();
     const code = e.code;
 
     // Dev menu owns its own F1 / Esc handling. Short-circuit our
@@ -709,6 +737,7 @@ export function start(canvas: HTMLCanvasElement): void {
 
   canvas.addEventListener("click", (e) => {
     audio.init();
+    pickInitialMusic();
     if (menu.isOpen()) return;
     if (state.runState !== "failed") return;
     const rect = canvas.getBoundingClientRect();
@@ -991,7 +1020,37 @@ export function start(canvas: HTMLCanvasElement): void {
       });
       state.runState = "completed";
     }
+    // Music: boss enters dying → drop the boss track entirely. The
+    // VICTORY hold + force waves play under quiet, then "BACK TO MAIN
+    // MENU" navigates away.
+    if (
+      (prev === "idle" || prev === "attacking") &&
+      cur === "dying"
+    ) {
+      audio.stopMusic(2.0);
+    }
     state.prevSentinelState = cur;
+  }
+
+  // Crossfade the active boss-phase track when the Sentinel's
+  // bossPhase flips (1 → 2 → 3). Fired from the same frame-loop slot
+  // as reconcileSentinelTransitions, right after sentinel.update.
+  function reconcileBossMusic(sentinel: Sentinel): void {
+    const phase = sentinel.bossPhase;
+    if (state.prevBossPhase === phase) return;
+    state.prevBossPhase = phase;
+    // The phase-transition cinematic runs 2 s with timeScale slowed —
+    // a slower crossfade (2.5 s) matches that pacing better than the
+    // 1.5 s used for room entries.
+    audio.playMusic(`boss-${phase}`, 2.5);
+  }
+
+  // First-user-gesture music kick. Routes to "boss-1" if the player
+  // is already in Room 5, otherwise the standard "rooms" track. Idempotent
+  // — playMusic is a no-op for the already-active key.
+  function pickInitialMusic(): void {
+    const key = currentRoom.id === "room5" ? "boss-1" : "rooms";
+    audio.playMusic(key, 1.0);
   }
 
   function checkRoomCleared() {
@@ -1101,6 +1160,7 @@ export function start(canvas: HTMLCanvasElement): void {
       });
       consumeSentinelEffects(sentinel);
       reconcileSentinelTransitions(sentinel);
+      reconcileBossMusic(sentinel);
       // Particles + rings spawned by the boss (materialization burst,
       // dying cinder) keep ticking even while the rest of the world
       // is frozen.
@@ -1489,6 +1549,7 @@ export function start(canvas: HTMLCanvasElement): void {
       if (sentinelTick) {
         consumeSentinelEffects(sentinelTick);
         reconcileSentinelTransitions(sentinelTick);
+        reconcileBossMusic(sentinelTick);
       }
     }
 
@@ -1798,6 +1859,15 @@ export function start(canvas: HTMLCanvasElement): void {
       ctx.save();
       ctx.translate(-camera.x, -camera.y);
     }
+
+    // Minimalist world-space grid. Clamped to the room's logical
+    // bounds so it stops at the perimeter walls and never bleeds into
+    // the letterbox.
+    drawRoomGrid(
+      ctx,
+      currentRoom.width ?? ROOM_W_PX,
+      currentRoom.height ?? ROOM_H_PX,
+    );
 
     drawWalls(ctx, currentRoom.walls);
     if (currentRoom.door) drawDoor(ctx, currentRoom.door);

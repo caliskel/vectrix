@@ -63,6 +63,7 @@ import {
   emitEnemyKill,
   type ImpactContext,
 } from "../lib/impacts";
+import { drawRoomGrid } from "../lib/grid";
 import { drawNeon } from "../lib/neon";
 import { PALETTE } from "../lib/palette";
 import {
@@ -1912,6 +1913,15 @@ export function start(canvas: HTMLCanvasElement): void {
       ctx.save();
       ctx.translate(-camera.x, -camera.y);
     }
+
+    // Minimalist world-space grid. Clamped to the room's logical
+    // bounds so it stops at the perimeter walls and never bleeds into
+    // the letterbox.
+    drawRoomGrid(
+      ctx,
+      currentRoom.width ?? ROOM_W_PX,
+      currentRoom.height ?? ROOM_H_PX,
+    );
 
     drawWalls(ctx, currentRoom.walls);
     if (currentRoom.door) drawDoor(ctx, currentRoom.door);

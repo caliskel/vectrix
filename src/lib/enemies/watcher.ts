@@ -340,13 +340,17 @@ export class Watcher implements Enemy {
         ctxRoom.lasers.push(laser);
         this.phase = "aiming";
         this.phaseTimer += PHASE_AIMING_SEC;
+        // Rising drone over the whole aiming window — pitch + filter
+        // climb in lockstep, ends just as the beam commits.
+        audio.play.watcherCharge();
         break;
       }
       case "aiming":
         // Visual transition (charging → firing) happens inside the laser
         // based on age; the audio cue fires here, at the moment of beam
-        // commitment.
-        audio.play.bulletBreak();
+        // commitment. Sharp downsweep "vweep" — cuts through the
+        // charge tail.
+        audio.play.watcherFire();
         this.phase = "firing";
         this.phaseTimer += PHASE_FIRING_SEC;
         break;
