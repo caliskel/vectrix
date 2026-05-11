@@ -67,6 +67,12 @@ const HUNTER_TRAIL_COUNT = 5;
 const HUNTER_TRAIL_SPACING = 12;       // px between snapshots
 const HUNTER_GLOW = 7;
 
+// Master toggle for the decorative-enemies + mutating-shapes layers.
+// When false, the menu bg falls back to grid + matrix rain only;
+// neither layer ticks its update logic, so no idle CPU cost from
+// hunter trail snapshots or shape spawn timers.
+const DECORATIVE_BG_ENABLED = false;
+
 // Matrix-style code rain. Sparse columns of half-width katakana +
 // digits drifting down behind the menu — fits the "VECTRIX = vector
 // matrix" wordplay without overwhelming the foreground UI. Lives
@@ -412,10 +418,12 @@ export function startMenuBg(
       else if (p.y > height + 2) p.y -= height + 4;
     }
 
-    updateTurrets(dt);
-    updateWatcher(dt);
-    updateHunters(dt);
-    updateShapes(dt);
+    if (DECORATIVE_BG_ENABLED) {
+      updateTurrets(dt);
+      updateWatcher(dt);
+      updateHunters(dt);
+      updateShapes(dt);
+    }
 
     microTimer -= dt;
     if (microTimer <= 0 && !micro) {
@@ -690,13 +698,15 @@ export function startMenuBg(
     // foreground UI.
     renderRain(c);
 
-    // 3. Decorative enemies — turrets, watcher, hunters
-    for (const t of turrets) renderTurret(c, t);
-    renderWatcher(c, watcher);
-    for (const h of hunters) renderHunter(c, h);
+    if (DECORATIVE_BG_ENABLED) {
+      // 3. Decorative enemies — turrets, watcher, hunters
+      for (const t of turrets) renderTurret(c, t);
+      renderWatcher(c, watcher);
+      for (const h of hunters) renderHunter(c, h);
 
-    // 4. Geometric shapes (above enemies, below dust/scanlines)
-    for (const s of shapes) renderShape(c, s);
+      // 4. Geometric shapes (above enemies, below dust/scanlines)
+      for (const s of shapes) renderShape(c, s);
+    }
 
     // 5. Particles (dust)
     c.fillStyle = PARTICLE_COLOR;
