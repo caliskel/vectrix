@@ -45,6 +45,13 @@
         z-index: 0;
         pointer-events: none;
       }
+      @media (prefers-reduced-motion: reduce) {
+        #menu-bg-canvas { display: none; }
+        .logo { animation: none; }
+        .logo-letter { animation: none; opacity: 1; transform: scale(1); }
+        .tagline, .eye-preview-wrap, .footer { animation: none; opacity: 1; }
+        .menu-btn { animation: none; opacity: 1; transform: none; }
+      }
 
       .menu-shell {
         position: relative;

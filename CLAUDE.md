@@ -272,24 +272,67 @@ Vertical column layout, centered:
   LOGO → TAGLINE → EYE-PREVIEW → BUTTON STACK → FOOTER
 
 **Animated background** (`menu-bg.ts`) — full-viewport canvas pinned
-behind the menu via `position: fixed; z-index: 0`. Five layered
-effects driven by one rAF loop:
+behind the menu via `position: fixed; z-index: 0`. Seven layered
+effects driven by one rAF loop. All positions are stored as
+normalized `[0..1]` viewport fractions so the layout re-flows on
+window resize without re-seeding.
 
 1. Solid `PALETTE.bg` fill + a soft radial gradient from center
    (~40, 60, 100, alpha 0.22 at center → transparent) for depth.
 2. Faint cyan grid (80 px spacing, color `rgba(0, 229, 255, 0.06)`)
    that scrolls diagonally at ~18 / 14 px/s.
-3. Horizontal scanlines (4 px spacing, color `rgba(255, 255, 255,
-   0.025)`) scrolling down at 30 px/s — CRT feel.
-4. 16 dust particles (1–2 px white, alpha 0.15) drifting at
+3. **Floating decorative enemies** — simplified silhouettes of the
+   in-game archetypes drifting in the margins, no AI / no combat:
+   - **2 turrets** (cyan `#00e5ff`, alpha 0.2, glow 7) anchored in
+     the bottom corners (~13 % / 87 % x, ~75 % y). Each picks a new
+     barrel-angle target every 3–5 s and lerps toward it at 0.8 /s.
+     Body is two nested rings + a thick stub barrel.
+   - **1 watcher** (red `#ff2d55`, alpha 0.15, glow 8) drifting on
+     a slow elliptical orbit (period 30 s) around an upper-left
+     anchor (~8 % / 28 %). Pupil idle-look retargets every 1.2–2.4 s.
+   - **2 hunters** (orange `#fb923c`, alpha 0.2, glow 7) — one near
+     the upper-right (~90 % / 18 %), one near the lower-right
+     (~84 % / 88 %). Each traces a randomly-picked idle path
+     (`figure8` / `oval` / `circle`) at 30 % of in-game idle speed.
+     Body angle smoothly orients to the path tangent; 5 trail ghost
+     copies are dropped every 12 px of travel and fade with index.
+   The decorative entities are seeded once on first resize and live
+   for the page's lifetime — they're not respawning content, just
+   persistent atmosphere fixtures.
+4. **Mutating geometric shapes** — 3–6 wireframe polygons live at
+   any moment. Each shape picks a type from {triangle, square,
+   hexagon, circle, line}, a random size 30–60 px, a color from the
+   menu palette (cyan / red / orange / purple / white), a 3–8 s
+   lifetime, and 0.0003–0.0008 rad/ms rotation velocity (random
+   direction). Lifecycle:
+   - Fade in over 600 ms (scale 0 → 1, alpha 0 → 0.25).
+   - Hold + rotate. ~50 % of shapes pulse on a 2 s sine (±5 % size).
+   - ~50 % of shapes morph mid-life: at a random point in their
+     30–60 % age range, render BOTH the old and new shape blended
+     by `morphProgress` over 800 ms, with a sin-dip scale dip to
+     ~60 % at the halfway point, then settle on the new type.
+   - Fade out over 500 ms (scale → 0, alpha → 0).
+   Spawn positions reject any point within 250 px of viewport
+   center (up to 8 rolls) so shapes don't sit behind the logo.
+   New shapes spawn every 1.5–3 s while count is under
+   `SHAPE_COUNT_MAX` (6); when count dips under `SHAPE_COUNT_MIN`
+   (3) a fresh one spawns immediately.
+5. 16 dust particles (1–2 px white, alpha 0.15) drifting at
    5–15 px/s in random directions, looping at edges.
-5. Glitch overlays. Micro-glitches every 8–15 s: a horizontal strip
+6. Horizontal scanlines (4 px spacing, color `rgba(255, 255, 255,
+   0.025)`) scrolling down at 30 px/s — CRT feel.
+7. Glitch overlays. Micro-glitches every 8–15 s: a horizontal strip
    (20–40 px tall) is `drawImage`d onto itself with an 8–20 px
    horizontal offset + red tint (`rgba(255, 45, 85, 0.18)` via
    source-atop composite) for 80 ms — CRT tearing. Big glitches
    every 30–60 s: full-screen white flash (alpha 0.08) for 60 ms +
    the caller-provided `onBigGlitch` callback fires for an audio
    crackle cue.
+
+A `@media (prefers-reduced-motion: reduce)` block hides the bg
+canvas and zeroes out all the entrance / breathing / glitch
+animations on the menu content so users with motion-sensitivity OS
+settings get a static landing.
 
 **VECTRIX logo** — `<h1 class="logo">` with one `<span class="logo-
 letter" data-letter="V">…</span>` per letter. CSS handles three
