@@ -2,11 +2,16 @@ import { audio } from "../audio";
 import {
   ENEMY_WATCHER_DETECTION,
   WATCHER_ACCEL_LERP,
+  WATCHER_AIM_TRACKING_RAD_PER_SEC,
+  WATCHER_AIMING_SEC,
   WATCHER_BRAKE_RECOVERY_MS,
   WATCHER_BRAKE_SQUASH_DURATION_MS,
   WATCHER_BRAKE_SQUASH_X,
   WATCHER_BRAKE_STRETCH_Y,
+  WATCHER_COOLDOWN_SEC,
   WATCHER_DECEL_FACTOR,
+  WATCHER_FIRING_SEC,
+  WATCHER_HP_MAX,
   WATCHER_IDLE_DRIFT_AMPLITUDE_X,
   WATCHER_IDLE_DRIFT_AMPLITUDE_Y,
   WATCHER_IDLE_DRIFT_LERP,
@@ -14,6 +19,7 @@ import {
   WATCHER_IDLE_PUPIL_INTERVAL_MAX_MS,
   WATCHER_IDLE_PUPIL_INTERVAL_MIN_MS,
   WATCHER_IDLE_PUPIL_LERP,
+  WATCHER_IDLE_SEC,
   WATCHER_SPEED_FACTOR,
 } from "../config";
 import { resolveEntityWallCollisions } from "../walls";
@@ -44,14 +50,26 @@ const PUPIL_RADIUS = 9;
 const PUPIL_HIGHLIGHT_R = 2.5;
 const PUPIL_HIGHLIGHT_OFFSET = 2;
 const PUPIL_LERP_RATE = 10;
-const WATCHER_HP_MAX = 3;
 
-const PHASE_IDLE_SEC = 1.5;
-const PHASE_AIMING_SEC = 1.2;
-const PHASE_FIRING_SEC = 0.25;
-const PHASE_COOLDOWN_SEC = 0.8;
+// Cycle timings + HP live in `config.ts` so all Watcher 2.0 tuning is
+// in one place.
+const PHASE_IDLE_SEC = WATCHER_IDLE_SEC;
+const PHASE_AIMING_SEC = WATCHER_AIMING_SEC;
+const PHASE_FIRING_SEC = WATCHER_FIRING_SEC;
+const PHASE_COOLDOWN_SEC = WATCHER_COOLDOWN_SEC;
 
 type WatcherPhase = "idle" | "aiming" | "firing" | "cooldown";
+
+// Smallest signed angular delta from current to target across the
+// ±π wrap. Matches Sentinel.shortestAngleDiff so tracking-aim behaves
+// identically to the boss's aimed-shot tracking.
+function shortestAngleDiff(target: number, current: number): number {
+  const TWO_PI = Math.PI * 2;
+  let d = (target - current) % TWO_PI;
+  if (d < -Math.PI) d += TWO_PI;
+  else if (d > Math.PI) d -= TWO_PI;
+  return d;
+}
 
 // Module-level laser id counter. Each spawned beam gets a unique id
 // so per-laser dedup (player dodge bonus + friendly-fire damage)
@@ -81,12 +99,19 @@ export class Watcher implements Enemy {
   awarenessState: AwarenessState = "idle";
   detectionRadius = ENEMY_WATCHER_DETECTION;
   alertTimer = 0;
-  canDeaggro = true;
+  // Lore-consistent: Watcher recognises Witness and never forgets.
+  // Once it transitions to aggro, it stays there for the encounter.
+  canDeaggro = false;
   deAggroCooldownTimer = 0;
   // Idle posture — Watcher drifts in a slow figure-eight around its
   // home position while sleeping, and the pupil wanders idle-look
-  // style instead of tracking the player.
+  // style instead of tracking the player. Both gated on
+  // `firstAgroFired` so a Watcher that has *ever* agro'd no longer
+  // does idle drift (canDeaggro = false means we never re-enter idle
+  // through awareness logic, but defends against any future state
+  // re-entry).
   private prevAwarenessState: AwarenessState = "idle";
+  private firstAgroFired = false;
   private idleHomeX: number;
   private idleHomeY: number;
   private idleDriftPhase = 0;
@@ -94,6 +119,11 @@ export class Watcher implements Enemy {
   private idlePupilTargetX = 0;
   private idlePupilTargetY = 0;
   private destroyed = false;
+  // Direct ref to the laser currently in `aiming` phase. Set on
+  // idle → aiming transition (advancePhase), cleared on firing → cooldown.
+  // Used by tracking-aim update so we mutate `aimAngle` on the live
+  // laser without having to look it up in `ctx.lasers` each frame.
+  private currentAimingLaser: Laser | null = null;
   vx = 0;
   vy = 0;
   private pupilOffsetX = 0;
@@ -118,6 +148,7 @@ export class Watcher implements Enemy {
     this.idleHomeY = y;
     this.idlePupilTimer = randomIdlePupilInterval();
     initAwareness(this, ENEMY_WATCHER_DETECTION);
+    this.canDeaggro = false;
   }
 
   isDead(): boolean {
@@ -147,10 +178,16 @@ export class Watcher implements Enemy {
       this.idleHomeX = this.x;
       this.idleHomeY = this.y;
       this.idleDriftPhase = 0;
+      // Mark the encounter as "seen" — figure-8 drift never plays
+      // again, even if state machines ever route us back to idle.
+      this.firstAgroFired = true;
     }
     // Symmetric re-anchor on aggro → idle (de-aggro): start the next
     // drift cycle from wherever the Watcher actually ended up rather
-    // than snapping back to a stale alert-time home.
+    // than snapping back to a stale alert-time home. With canDeaggro
+    // = false this branch is unreachable in normal flow; kept for
+    // defence-in-depth if future state-machine work re-enables
+    // re-entry to idle.
     if (
       this.prevAwarenessState === "aggro" &&
       this.awarenessState === "idle"
@@ -164,9 +201,22 @@ export class Watcher implements Enemy {
     if (this.awarenessState !== "aggro") {
       this.vx = 0;
       this.vy = 0;
-      if (this.awarenessState === "idle") {
-        // Slow figure-eight drift. Y phase is multiplied by 0.7 so the
-        // axes go out of sync over the cycle.
+      if (this.awarenessState === "alerting") {
+        // alerting — frozen body, but the pupil snaps onto the player
+        // so the "I see you" read lines up with the "!" telegraph.
+        const dx = player.x - this.x;
+        const dy = player.y - this.y;
+        const inv = 1 / Math.max(Math.hypot(dx, dy), 1e-6);
+        const tx = dx * inv * MAX_PUPIL_OFFSET;
+        const ty = dy * inv * MAX_PUPIL_OFFSET;
+        const kp = 1 - Math.exp(-PUPIL_LERP_RATE * dt);
+        this.pupilOffsetX += (tx - this.pupilOffsetX) * kp;
+        this.pupilOffsetY += (ty - this.pupilOffsetY) * kp;
+      } else if (!this.firstAgroFired) {
+        // First-time idle — slow figure-eight drift + wandering pupil.
+        // Once we've ever agro'd, the Watcher has "seen" Witness and
+        // never returns to this peaceful posture, even if some future
+        // path re-enters idle.
         this.idleDriftPhase += dt * 1000 * WATCHER_IDLE_DRIFT_SPEED;
         const driftX =
           Math.sin(this.idleDriftPhase) * WATCHER_IDLE_DRIFT_AMPLITUDE_X;
@@ -194,18 +244,9 @@ export class Watcher implements Enemy {
           (this.idlePupilTargetX - this.pupilOffsetX) * kp;
         this.pupilOffsetY +=
           (this.idlePupilTargetY - this.pupilOffsetY) * kp;
-      } else {
-        // alerting — frozen body, but the pupil snaps onto the player
-        // so the "I see you" read lines up with the "!" telegraph.
-        const dx = player.x - this.x;
-        const dy = player.y - this.y;
-        const inv = 1 / Math.max(Math.hypot(dx, dy), 1e-6);
-        const tx = dx * inv * MAX_PUPIL_OFFSET;
-        const ty = dy * inv * MAX_PUPIL_OFFSET;
-        const kp = 1 - Math.exp(-PUPIL_LERP_RATE * dt);
-        this.pupilOffsetX += (tx - this.pupilOffsetX) * kp;
-        this.pupilOffsetY += (ty - this.pupilOffsetY) * kp;
       }
+      // Post-agro idle (defensive, unreachable with canDeaggro = false):
+      // body and pupil hold their last position.
       return;
     }
 
@@ -246,6 +287,25 @@ export class Watcher implements Enemy {
         ) {
           this.vx = 0;
           this.vy = 0;
+        }
+        // Tracking aim — the captured `aimAngle` is no longer frozen.
+        // Each frame, rotate it toward the player at up to
+        // WATCHER_AIM_TRACKING_RAD_PER_SEC. Side-steps get tracked;
+        // perpendicular dashes outrun the cap and break lock.
+        const live = this.currentAimingLaser;
+        if (live) {
+          const targetAngle = Math.atan2(
+            player.y - this.y,
+            player.x - this.x,
+          );
+          const diff = shortestAngleDiff(targetAngle, live.aimAngle);
+          const maxStep = WATCHER_AIM_TRACKING_RAD_PER_SEC * dt;
+          const clamped = Math.max(-maxStep, Math.min(maxStep, diff));
+          live.aimAngle += clamped;
+          // Sync the captured pupil offset so the eye keeps pointing
+          // along the live beam.
+          this.pupilLockX = Math.cos(live.aimAngle) * MAX_PUPIL_OFFSET;
+          this.pupilLockY = Math.sin(live.aimAngle) * MAX_PUPIL_OFFSET;
         }
         break;
       }
@@ -328,6 +388,7 @@ export class Watcher implements Enemy {
           firingDuration: PHASE_FIRING_SEC,
         };
         ctxRoom.lasers.push(laser);
+        this.currentAimingLaser = laser;
         this.phase = "aiming";
         this.phaseTimer += PHASE_AIMING_SEC;
         // Rising drone over the whole aiming window — pitch + filter
@@ -347,6 +408,9 @@ export class Watcher implements Enemy {
       case "firing":
         this.phase = "cooldown";
         this.phaseTimer += PHASE_COOLDOWN_SEC;
+        // Laser is now in its short firing window owned by rooms-game.
+        // Tracking ref is no longer needed.
+        this.currentAimingLaser = null;
         break;
       case "cooldown":
         this.phase = "idle";

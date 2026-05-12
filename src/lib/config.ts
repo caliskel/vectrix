@@ -238,6 +238,26 @@ export const WATCHER_BRAKE_STRETCH_Y = 1.12;
 export const WATCHER_BRAKE_SQUASH_DURATION_MS = 150;
 export const WATCHER_BRAKE_RECOVERY_MS = 200;
 
+// --- Watcher 2.0 — gaze-driven LOS sniper -----------------------------
+// HP raised from 3 → 5 so the upgraded threat doesn't collapse in one
+// dash combo. Cycle compressed (was 3.75 s) so dead-windows between
+// firings shrink without making any single phase unreadable.
+export const WATCHER_HP_MAX = 5;
+export const WATCHER_IDLE_SEC = 1.0;
+export const WATCHER_AIMING_SEC = 0.8;
+export const WATCHER_FIRING_SEC = 0.3;
+export const WATCHER_COOLDOWN_SEC = 0.5;
+// Tracking aim — during `aiming` the live laser's angle lerps toward
+// the player at this angular velocity. 1.5 rad/s ≈ player walking
+// speed at typical engagement range (~300 px). Side-stepping no longer
+// breaks lock; only a committed perpendicular dash exceeds the cap.
+export const WATCHER_AIM_TRACKING_RAD_PER_SEC = 1.5;
+// Gaze stack — fills while there's clear LOS from Watcher to player,
+// decays asymmetrically faster so breaking LOS feels like real
+// counter-play. At 1.0 the next fired laser pierces dash i-frames.
+export const WATCHER_GAZE_FILL_TIME_SEC = 2.0;
+export const WATCHER_GAZE_DECAY_TIME_SEC = 1.0;
+
 // Watcher idle behavior — slow horizontal drift around its home spot
 // + pupil that wanders rather than tracking nothing. Active only
 // while awarenessState === "idle".
