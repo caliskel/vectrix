@@ -46,6 +46,22 @@ export type AmbientBulletField = {
   speed: number;
 };
 
+/** Static config for the Pulsing Heart mechanic (top side-room). */
+export type HeartMechanicCfg = {
+  x: number;
+  y: number;
+  registrationRadius: number;
+  pulseOrbitRadius: number;
+  pulseIntervalSec: number;
+  pulseExpandSpeed: number;
+  registrationGoalSec: number;
+};
+
+/** Static config for the Sleeping Chamber mechanic (bottom side-room). */
+export type SleepingChamberCfg = {
+  visibilityRadius: number;
+};
+
 export type Room = {
   id: string;
   walls: Wall[];
@@ -100,4 +116,6 @@ export type Room = {
    *  overlap against each in the same pass as `door` and `backDoor`,
    *  transitioning forward (not viaBack) when triggered. */
   extraExits?: Array<{ door: Door; nextRoomId: string }>;
+  heartMechanic?: HeartMechanicCfg;
+  sleepingChamber?: SleepingChamberCfg;
 };

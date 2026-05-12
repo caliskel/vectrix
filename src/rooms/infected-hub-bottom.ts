@@ -1,26 +1,23 @@
 import { makeDoor } from "../lib/door";
+import { Watcher } from "../lib/enemies/watcher";
 import type { Wall } from "../lib/walls";
-import type { Room } from "../lib/room";
+import type { Room, SleepingChamberCfg } from "../lib/room";
 
 const ROOM_W = 1200;
 const ROOM_H = 800;
 const WALL_T = 30;
-// Back door on the NORTH wall — player came DOWN from the hub's
-// bottom door, lands inside this room facing south. Walking back
-// north through the door returns to hub.
 const BACK_DOOR_X = 600;
 const BACK_DOOR_W = 120;
 const BACK_DOOR_H = WALL_T;
-// Key in the far south-east corner — placeholder pickup, replaced
-// by Sleeping Chamber mechanic in Sprint 3.
 const KEY_X = 1050;
 const KEY_Y = 650;
 
-// Placeholder bottom side-room — Sprint 3 (Sleeping Chamber)
-// replaces this file. For Sprint 1 it just proves the connectivity
-// loop: player enters from hub's bottom door, picks up key, walks
-// back through the back door, returns to hub with keysHeld
-// incremented.
+// Sleeping Chamber — тёмная комната (радиальная видимость 240px).
+// Два Watcher-а с уменьшенным радиусом детекции (270px вместо 700) —
+// в темноте их не видно издалека, но сближение смертельно опасно.
+// Ключ лежит в дальнем углу, убийство не требуется.
+// Если хоть один Watcher перейдёт в aggro — noisySector = true,
+// и hub при возврате будет злее.
 export function buildInfectedHubBottom(): Room {
   const gapLeft = BACK_DOOR_X - BACK_DOOR_W / 2;
   const gapRight = BACK_DOOR_X + BACK_DOOR_W / 2;
@@ -41,14 +38,38 @@ export function buildInfectedHubBottom(): Room {
     { x: 0, y: 0, w: WALL_T, h: ROOM_H, infected: true },
     // Right wall — solid.
     { x: ROOM_W - WALL_T, y: 0, w: WALL_T, h: ROOM_H, infected: true },
+
+    // ──── Внутренние стены — лабиринт ────
+    // Горизонтальная перегородка слева — блокирует прямой прорыв,
+    // заставляет игрока зайти в левый коридор вдоль стены.
+    { x: 30, y: 210, w: 270, h: 22, infected: true },
+    // Правая горизонтальная — зеркально отражает левую, создаёт правый коридор.
+    { x: 790, y: 210, w: 380, h: 22, infected: true },
+    // Вертикальная перегородка по центру — делит верхнюю часть на два пути.
+    { x: 530, y: 265, w: 22, h: 185, infected: true },
+    // Короткая горизонтальная ниже центра — ещё один поворот влево.
+    { x: 140, y: 490, w: 220, h: 22, infected: true },
+    // Вертикальная справа от Watcher 2 — заставляет обходить его.
+    { x: 800, y: 420, w: 22, h: 160, infected: true },
+    // Горизонтальная низко справа — последний барьер перед ключом.
+    { x: 890, y: 540, w: 280, h: 22, infected: true },
+    // Центральный пиллар у W1 — ЛОС-укрытие.
+    { x: 350, y: 365, w: 70, h: 22, infected: true },
   ];
+
+  const sleepingChamber: SleepingChamberCfg = {
+    visibilityRadius: 240,
+  };
+
+  const w1 = new Watcher(300, 460);
+  w1.detectionRadius = 270;
+  const w2 = new Watcher(870, 540);
+  w2.detectionRadius = 270;
 
   return {
     id: "infected-hub-bottom",
     walls,
-    enemies: [],
-    // No forward door — dead-end pickup room. Player returns via
-    // backDoor.
+    enemies: [w1, w2],
     door: null,
     nextRoomId: null,
     backDoor: makeDoor(
@@ -58,15 +79,14 @@ export function buildInfectedHubBottom(): Room {
       BACK_DOOR_H,
       "open",
       false,
-      true, // flipped — arrow points back toward hub
+      true,
     ),
     prevRoomId: "infected-hub",
-    // Spawn just south of the back door so player enters facing
-    // into the room.
     spawnX: BACK_DOOR_X,
     spawnY: WALL_T + 60,
     width: ROOM_W,
     height: ROOM_H,
     initialKey: { x: KEY_X, y: KEY_Y },
+    sleepingChamber,
   };
 }

@@ -59,8 +59,46 @@ export function buildInfectedHub(opts: { noisy: boolean }): Room {
       h: WALL_T,
       infected: true,
     },
-    // Left wall — solid, no back door.
-    { x: 0, y: 0, w: WALL_T, h: ROOM_H, infected: true },
+    // Left wall — split around back door (returns to room1).
+    {
+      x: 0,
+      y: 0,
+      w: WALL_T,
+      h: SPAWN_Y - EAST_DOOR_H / 2,
+      infected: true,
+    },
+    {
+      x: 0,
+      y: SPAWN_Y + EAST_DOOR_H / 2,
+      w: WALL_T,
+      h: ROOM_H - (SPAWN_Y + EAST_DOOR_H / 2),
+      infected: true,
+    },
+    // Безопасный бокс у левого выхода (spawn ≈ 150, 600).
+    // Три dashable-стены толщиной WALL_T — как дашабельные ворота в комнате 1.
+    // Верхняя и нижняя примыкают к зазору backDoor (540–660),
+    // правая закрывает бокс и позволяет выйти дашем в комнату.
+    {
+      x: WALL_T,
+      y: SPAWN_Y - EAST_DOOR_H / 2 - WALL_T,
+      w: 200,
+      h: WALL_T,
+      dashable: true,
+    },
+    {
+      x: WALL_T,
+      y: SPAWN_Y + EAST_DOOR_H / 2,
+      w: 200,
+      h: WALL_T,
+      dashable: true,
+    },
+    {
+      x: WALL_T + 200,
+      y: SPAWN_Y - EAST_DOOR_H / 2 - WALL_T,
+      w: WALL_T,
+      h: EAST_DOOR_H + WALL_T * 2,
+      dashable: true,
+    },
     // Right wall — split around east main door.
     {
       x: ROOM_W - WALL_T,
@@ -84,6 +122,19 @@ export function buildInfectedHub(opts: { noisy: boolean }): Room {
     { x: 1130, y: 640, w: 60, h: 120, infected: true },
     { x: 770, y: 920, w: 60, h: 120, infected: true },
   ];
+
+  // Back door on the LEFT wall — returns to room1 (the infected
+  // corridor). Centred vertically at spawn y, same height as the east
+  // door so the gap is symmetric and reads as an intentional doorway.
+  const backDoor = makeDoor(
+    WALL_T / 2,
+    SPAWN_Y,
+    EAST_DOOR_W, // w = wall thickness (30 px, horizontal extent)
+    EAST_DOOR_H, // h = gap height (120 px, vertical extent)
+    "open",
+    false,
+    true, // flipped — arrow points left toward room1
+  );
 
   // East main door — 2-key gated, leads forward into legacy chain
   // (room3 — narrow trap, no Watcher inside so Watcher 2.0 doesn't
@@ -131,7 +182,9 @@ export function buildInfectedHub(opts: { noisy: boolean }): Room {
     walls,
     enemies: [watcher1, watcher2],
     door: eastDoor,
-    nextRoomId: "room3",
+    nextRoomId: "room5",
+    backDoor,
+    prevRoomId: "room1",
     extraExits: [
       { door: topDoor, nextRoomId: "infected-hub-top" },
       { door: bottomDoor, nextRoomId: "infected-hub-bottom" },
