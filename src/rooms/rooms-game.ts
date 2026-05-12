@@ -422,6 +422,14 @@ type GameState = {
    *  (HP 60 → 40 → 20 boundaries, fired inside the 2 s transition
    *  cinematic). 0 while the player isn't in Room 5. */
   prevBossPhase: 0 | 1 | 2 | 3;
+  /** Set true when the player wakes a sleeping watcher in the
+   *  infected sector's Sleeping Chamber (Sprint 3 wires the flip).
+   *  Persists through `transitionToRoom`; reset to false on
+   *  `restartRun`. The hub builder reads this on entry to decide
+   *  whether to spawn its Watchers in aggro and bump ambient bullet
+   *  density (origin doc R20-R22). Sprint 1 plumbs the field but
+   *  nothing flips it yet. */
+  noisySector: boolean;
 };
 
 export function start(canvas: HTMLCanvasElement): void {
@@ -579,6 +587,7 @@ export function start(canvas: HTMLCanvasElement): void {
     elapsed: 0,
     prevSentinelState: "none",
     prevBossPhase: 0,
+    noisySector: false,
   };
 
   let currentRoom: Room = rooms.get("room1")!;
@@ -806,6 +815,7 @@ export function start(canvas: HTMLCanvasElement): void {
     state.elapsed = 0;
     state.prevSentinelState = "none";
     state.prevBossPhase = 0;
+    state.noisySector = false;
     bullets = [];
     particles = [];
     rings = [];

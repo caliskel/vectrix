@@ -152,7 +152,7 @@ export class Watcher implements Enemy {
   private brakeDirX = 1;
   private brakeDirY = 0;
 
-  constructor(x: number, y: number) {
+  constructor(x: number, y: number, opts?: { startsAggressive?: boolean }) {
     this.x = x;
     this.y = y;
     this.hp = WATCHER_HP_MAX;
@@ -161,6 +161,15 @@ export class Watcher implements Enemy {
     this.idlePupilTimer = randomIdlePupilInterval();
     initAwareness(this, ENEMY_WATCHER_DETECTION);
     this.canDeaggro = false;
+    // Override starting awareness when the room wants this Watcher
+    // already chasing on player entry — used by the infected hub's
+    // "noisy" variant (Sleeping Chamber wake escalated the sector).
+    // Skips alerting telegraph and figure-8 idle drift entirely.
+    if (opts?.startsAggressive) {
+      this.awarenessState = "aggro";
+      this.prevAwarenessState = "aggro";
+      this.firstAgroFired = true;
+    }
   }
 
   isDead(): boolean {
