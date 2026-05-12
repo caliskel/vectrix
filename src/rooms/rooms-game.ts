@@ -192,6 +192,8 @@ import { buildRoom5 } from "./room5";
 import { buildRoomFromJson } from "./build-room-from-json";
 import { createEditor } from "./editor";
 import type { EditorHandle } from "./editor";
+import { createDebouncedDraftSaver, loadDraft } from "./editor-drafts";
+import type { DebouncedDraftSaver } from "./editor-drafts";
 import type { RoomJson } from "./room-json-types";
 import type { AmbientBulletField, Room } from "../lib/room";
 
@@ -1008,12 +1010,20 @@ export function start(canvas: HTMLCanvasElement): void {
     ],
   });
 
-  // In-game level editor (U4). Wrapped in DEV guard so the prod
+  // In-game level editor (U4 + U8). Wrapped in DEV guard so the prod
   // bundle drops the entire editor module — the `editor` binding
   // is `null` at runtime, F3 / frame-loop gate / failRun guard
   // all use optional chaining to fall through cleanly.
   let editor: EditorHandle | null = null;
   if (import.meta.env.DEV) {
+    // Hydrate from localStorage (per U8). First-run returns null and
+    // the editor falls back to its DEFAULT_DRAFT template.
+    const persistedDraft = loadDraft("untitled");
+    let draftSaver: DebouncedDraftSaver = createDebouncedDraftSaver(
+      persistedDraft?.json.id ?? "untitled",
+    );
+    let saverRoomId = persistedDraft?.json.id ?? "untitled";
+
     editor = createEditor({
       getCurrentRoom: () => currentRoom,
       setCurrentRoom: (r) => {
@@ -1046,7 +1056,26 @@ export function start(canvas: HTMLCanvasElement): void {
         state.deathFx = null;
         resetEyeState(player);
       },
+      initialDraft: persistedDraft?.json,
+      onDraftDirty: () => {
+        if (!editor) return;
+        const draft = editor.getDraft();
+        // Rename-aware: when draft.id flips, flush the previous
+        // saver under the old key and rebind to the new one so the
+        // 250 ms debounce doesn't bleed across IDs. The old draft
+        // entry stays in localStorage — U5's properties panel
+        // owns the cleanup UX.
+        if (draft.id !== saverRoomId) {
+          draftSaver.flush();
+          draftSaver = createDebouncedDraftSaver(draft.id);
+          saverRoomId = draft.id;
+        }
+        draftSaver.schedule(draft);
+      },
     });
+    // Best-effort flush on page hide so a quick window close doesn't
+    // drop the last 250 ms of edits.
+    window.addEventListener("pagehide", () => draftSaver.flush());
     // Expose for console-driven smoke-testing before U5 lands the UI.
     (window as unknown as { __editor: EditorHandle | null }).__editor = editor;
   }
