@@ -628,6 +628,18 @@ export function start(canvas: HTMLCanvasElement): void {
     fadeOutDuration: 0.9,
   });
   let roomsBootThoughtAge = 0;
+  // World-space scramble labels (Room 1's INFECTED ZONE sign) share a
+  // single per-room timer. Reset on entry/restart so the intro replays
+  // every time the room is re-entered.
+  const WORLD_LABEL_SCRAMBLE_SCHEDULE = makeScrambleSchedule({
+    appearStart: 0.5,
+    fadeInDuration: 0.4,
+    settleDuration: 1.5,
+    holdDuration: 2.5,
+    fadeOutDuration: 1.0,
+    glitchOutDuration: 0.8,
+  });
+  let worldLabelAge = 0;
   let arenaBg: ArenaBg = createArenaBg(
     currentRoom.width ?? ROOM_W_PX,
     currentRoom.height ?? ROOM_H_PX,
@@ -807,6 +819,7 @@ export function start(canvas: HTMLCanvasElement): void {
     keyHeld = false;
     ambientSpawnTimer = 0;
     ambientInitialFillDone = false;
+    worldLabelAge = 0;
     tryAgainBounds = null;
     spawnPlayerInCurrentRoom();
     applyInitialKey();
@@ -827,6 +840,7 @@ export function start(canvas: HTMLCanvasElement): void {
     keyHeld = false;
     ambientSpawnTimer = 0;
     ambientInitialFillDone = false;
+    worldLabelAge = 0;
     // Lock door triggers for a beat so the freshly-spawned player
     // can't instantly re-enter the door they just came from.
     state.doorEnterCooldown = 0.7;
@@ -1387,6 +1401,16 @@ export function start(canvas: HTMLCanvasElement): void {
       !isScrambleTextDone(roomsBootThoughtAge, roomsBootThoughtSchedule)
     ) {
       roomsBootThoughtAge += dt;
+    }
+    // Scramble world-labels (e.g. Room 1's INFECTED ZONE sign) play
+    // a one-shot intro. The timer ticks until the schedule is done;
+    // afterwards the label stays hidden until the next room entry
+    // resets the age to 0.
+    if (
+      currentRoom.worldLabels?.some((l) => l.scramble) &&
+      !isScrambleTextDone(worldLabelAge, WORLD_LABEL_SCRAMBLE_SCHEDULE)
+    ) {
+      worldLabelAge += dt;
     }
 
     bgFx.update(dt);
@@ -2346,21 +2370,39 @@ export function start(canvas: HTMLCanvasElement): void {
     if (currentRoom.backDoor) drawDoor(ctx, currentRoom.backDoor);
     // World-space signage (e.g. "INFECTED ZONE") — drawn over walls
     // and the floor but under entities so the player + bullets pass
-    // on top.
+    // on top. `scramble` labels run the alien-glyphs intro + glitch
+    // fade-out keyed off `worldLabelAge`; plain labels render flat.
     if (currentRoom.worldLabels) {
       for (const l of currentRoom.worldLabels) {
         const color = l.color ?? "#ff2d55";
         const size = l.size ?? 32;
-        ctx.save();
-        ctx.fillStyle = color;
-        ctx.font = `${size}px 'Space Mono', 'Courier New', monospace`;
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        ctx.shadowColor = color;
-        ctx.shadowBlur = 12;
-        ctx.globalAlpha = 0.7;
-        ctx.fillText(l.text, l.x, l.y);
-        ctx.restore();
+        if (l.scramble) {
+          drawScrambleText(
+            ctx,
+            l.text,
+            worldLabelAge,
+            WORLD_LABEL_SCRAMBLE_SCHEDULE,
+            l.x,
+            l.y,
+            {
+              color,
+              shadowColor: color,
+              shadowBlur: 14,
+              font: `${size}px 'Space Mono', 'Courier New', monospace`,
+            },
+          );
+        } else {
+          ctx.save();
+          ctx.fillStyle = color;
+          ctx.font = `${size}px 'Space Mono', 'Courier New', monospace`;
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          ctx.shadowColor = color;
+          ctx.shadowBlur = 12;
+          ctx.globalAlpha = 0.7;
+          ctx.fillText(l.text, l.x, l.y);
+          ctx.restore();
+        }
       }
     }
     perfEnd("walls");

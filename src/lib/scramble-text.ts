@@ -22,6 +22,10 @@ export type ScrambleSchedule = {
   fadeOutStart: number;
   /** Seconds when alpha reaches 0 (nothing drawn afterwards). */
   totalDuration: number;
+  /** Seconds spent reverse-settling characters back into garble
+   *  during fade-out — "the text glitches as it dies". Set to 0 to
+   *  keep the resolved text clean while it fades. */
+  glitchOutDuration: number;
 };
 
 export type ScrambleVisualOpts = {
@@ -42,6 +46,10 @@ export type ScrambleScheduleOpts = {
   holdDuration?: number;
   /** Seconds spent fading out at the end. */
   fadeOutDuration?: number;
+  /** Seconds within the fade-out window across which resolved chars
+   *  reverse back into garble — produces a "glitching as it dies"
+   *  finish. Capped at fadeOutDuration. Defaults to 0 (clean fade). */
+  glitchOutDuration?: number;
 };
 
 /** Build a sensible default schedule scaled by text length. Callers
@@ -55,6 +63,10 @@ export function makeScrambleSchedule(
   const settleDuration = opts.settleDuration ?? 1.4;
   const holdDuration = opts.holdDuration ?? 0.5;
   const fadeOutDuration = opts.fadeOutDuration ?? 0.6;
+  const glitchOutDuration = Math.min(
+    opts.glitchOutDuration ?? 0,
+    fadeOutDuration,
+  );
   const settleStart = appearStart + fadeInDuration;
   const holdStart = settleStart + settleDuration;
   const fadeOutStart = holdStart + holdDuration;
@@ -65,6 +77,7 @@ export function makeScrambleSchedule(
     holdStart,
     fadeOutStart,
     totalDuration,
+    glitchOutDuration,
   };
 }
 
@@ -105,25 +118,41 @@ export function drawScrambleText(
   }
   if (alpha <= 0) return;
 
-  // Settled character count grows linearly across [settleStart, holdStart].
+  // Settled character count grows linearly across [settleStart, holdStart],
+  // holds at full, then — when `glitchOutDuration > 0` — reverses
+  // back toward 0 during the fade-out window for a "dying glitch"
+  // finish.
   const len = text.length;
   let settledCount = 0;
+  let glitching = false;
   if (time >= schedule.settleStart && time < schedule.holdStart) {
     settledCount = Math.floor(
       ((time - schedule.settleStart) /
         (schedule.holdStart - schedule.settleStart)) *
         len,
     );
-  } else if (time >= schedule.holdStart) {
+  } else if (time >= schedule.holdStart && time < schedule.fadeOutStart) {
     settledCount = len;
+  } else if (time >= schedule.fadeOutStart) {
+    if (schedule.glitchOutDuration > 0) {
+      const u = Math.min(
+        1,
+        (time - schedule.fadeOutStart) / schedule.glitchOutDuration,
+      );
+      settledCount = Math.max(0, Math.floor(len * (1 - u)));
+      glitching = true;
+    } else {
+      settledCount = len;
+    }
   }
 
   // Build display string. Settled prefix is the real text; the tail
   // is pulled from the garble pool with a frame-stable index so it
   // reads as fast-changing static rather than per-frame noise. The
   // per-character seed offsets keep adjacent chars from showing the
-  // same glyph at the same time.
-  const flickerStep = Math.floor(time * 14);
+  // same glyph at the same time. Flicker rate doubles during the
+  // glitch-out window so the death tremor reads as a faster breakdown.
+  const flickerStep = Math.floor(time * (glitching ? 32 : 14));
   let display = "";
   for (let i = 0; i < len; i++) {
     const real = text[i];

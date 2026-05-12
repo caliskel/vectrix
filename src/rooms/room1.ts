@@ -160,11 +160,15 @@ export function buildRoom1(): Room {
     },
     worldLabels: [
       {
+        // Hanging above the top wall, outside the playable arena.
+        // Scrambles in on room entry → reads "INFECTED ZONE" → glitches
+        // back into garble as it fades. One-shot per visit.
         x: (infectedFieldStart + infectedFieldEnd) / 2,
-        y: WALL_T + 36,
+        y: -50,
         text: "INFECTED ZONE",
         size: 56,
         color: "#ff2d55",
+        scramble: true,
       },
     ],
   };

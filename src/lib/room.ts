@@ -26,6 +26,11 @@ export type WorldLabel = {
   size?: number;
   /** Hex or CSS color. Defaults to neon red ("#ff2d55"). */
   color?: string;
+  /** When true, the label plays the scramble-text intro on room
+   *  entry: alien glyphs → resolve left→right → hold → glitch back
+   *  into garble while fading out. One-shot per room visit; restart
+   *  or re-entry replays it. */
+  scramble?: boolean;
 };
 
 /** Sandbox-style ambient bullet field confined to a rectangle. Bullets
