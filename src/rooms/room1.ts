@@ -28,7 +28,14 @@ export function buildRoom1(): Room {
   const gapTop = DOOR_CENTER_Y - DOOR_H / 2;
   const gapBottom = DOOR_CENTER_Y + DOOR_H / 2;
   const infectedStart = ENTRY_DASH_WALL_X + DASH_WALL_W;
-  const infectedEnd = EXIT_DASH_WALL_X;
+  // Bullet-spawn boundary — bouncing bullets live left of the exit
+  // gate.
+  const infectedFieldEnd = EXIT_DASH_WALL_X;
+  // Perimeter tint boundary — the infected top/bottom strips run all
+  // the way over the exit dashable wall (mirroring how the entry
+  // dashable wall is sealed under the safe-left strip), so there's no
+  // gap on the ceiling/floor at the exit.
+  const infectedTopBottomEnd = EXIT_DASH_WALL_X + DASH_WALL_W;
   const safeRightStart = EXIT_DASH_WALL_X + DASH_WALL_W;
 
   const walls: Wall[] = [
@@ -46,7 +53,7 @@ export function buildRoom1(): Room {
     {
       x: infectedStart,
       y: 0,
-      w: infectedEnd - infectedStart,
+      w: infectedTopBottomEnd - infectedStart,
       h: WALL_T,
       infected: true,
       mergeLeft: true,
@@ -70,7 +77,7 @@ export function buildRoom1(): Room {
     {
       x: infectedStart,
       y: ROOM_H - WALL_T,
-      w: infectedEnd - infectedStart,
+      w: infectedTopBottomEnd - infectedStart,
       h: WALL_T,
       infected: true,
       mergeLeft: true,
@@ -140,7 +147,7 @@ export function buildRoom1(): Room {
       spawnArea: {
         x: infectedStart,
         y: WALL_T,
-        w: infectedEnd - infectedStart,
+        w: infectedFieldEnd - infectedStart,
         h: ROOM_H - WALL_T * 2,
       },
       maxBullets: 30,
@@ -149,7 +156,7 @@ export function buildRoom1(): Room {
     },
     worldLabels: [
       {
-        x: (infectedStart + infectedEnd) / 2,
+        x: (infectedStart + infectedFieldEnd) / 2,
         y: WALL_T + 36,
         text: "INFECTED ZONE",
         size: 56,

@@ -201,6 +201,12 @@ const BRACKET_LEN_PX = 14;
 const BRACKET_INSET_PX = 2;
 const BRACKET_LINE_WIDTH = 2.5;
 const HATCH_SPACING_PX = 8;
+// Width of the gradient blend on a merged edge — the wall's fill
+// fades from the neighbour's colour to its own across this many pixels
+// so cyan→red transitions read as a smooth gradient instead of a hard
+// seam. Picked to feel like "infection bleeds outward" at corridor
+// scale.
+const MERGE_BLEND_PX = 80;
 const MARCHING_DASH_INSET_PX = 4;
 const MARCHING_DASH_PATTERN = [10, 14] as const;
 const MARCHING_DASH_SPEED = 28; // px/s lineDashOffset drift
@@ -765,18 +771,46 @@ export function addWallImpact(fx: WallFx, x: number, y: number): void {
   fx.ripples.push({ x, y, age: 0 });
 }
 
-// Solid fill — flat rect per wall, one batched pass per style.
+// Solid fill — flat rect per wall, one batched pass per style. When
+// `blendNeighborFill` is provided, walls whose left/right edge is
+// flagged `mergeLeft`/`mergeRight` get a `MERGE_BLEND_PX` linear
+// gradient on that edge (neighbour colour → own colour) so the tint
+// transition is smooth instead of a hard seam at the segment join.
 function paintFill(
   ctx: CanvasRenderingContext2D,
   walls: Wall[],
   fill: string,
+  blendNeighborFill?: string,
 ): void {
   if (walls.length === 0) return;
   ctx.save();
-  ctx.fillStyle = fill;
   ctx.shadowBlur = 0;
   for (const w of walls) {
-    ctx.fillRect(w.x, w.y, w.w, w.h);
+    const leftBlend =
+      blendNeighborFill && w.mergeLeft ? Math.min(MERGE_BLEND_PX, w.w / 2) : 0;
+    const rightBlend =
+      blendNeighborFill && w.mergeRight ? Math.min(MERGE_BLEND_PX, w.w / 2) : 0;
+    const midX = w.x + leftBlend;
+    const midW = w.w - leftBlend - rightBlend;
+    if (midW > 0) {
+      ctx.fillStyle = fill;
+      ctx.fillRect(midX, w.y, midW, w.h);
+    }
+    if (leftBlend > 0 && blendNeighborFill) {
+      const g = ctx.createLinearGradient(w.x, 0, w.x + leftBlend, 0);
+      g.addColorStop(0, blendNeighborFill);
+      g.addColorStop(1, fill);
+      ctx.fillStyle = g;
+      ctx.fillRect(w.x, w.y, leftBlend, w.h);
+    }
+    if (rightBlend > 0 && blendNeighborFill) {
+      const x0 = w.x + w.w - rightBlend;
+      const g = ctx.createLinearGradient(x0, 0, w.x + w.w, 0);
+      g.addColorStop(0, fill);
+      g.addColorStop(1, blendNeighborFill);
+      ctx.fillStyle = g;
+      ctx.fillRect(x0, w.y, rightBlend, w.h);
+    }
   }
   ctx.restore();
 }
@@ -822,9 +856,10 @@ function paintSolidGroup(
   ctx: CanvasRenderingContext2D,
   walls: Wall[],
   style: WallStyle,
+  blendNeighborFill?: string,
 ): void {
   if (walls.length === 0) return;
-  paintFill(ctx, walls, style.fill);
+  paintFill(ctx, walls, style.fill, blendNeighborFill);
   paintHatch(ctx, walls, style.stroke, style.hatchAlpha);
 
   // Outer stroke — emit only the edges that are NOT marked as merged.
@@ -933,7 +968,16 @@ function paintWalls(ctx: CanvasRenderingContext2D, walls: Wall[]): void {
   }
 
   paintSolidGroup(ctx, normalSolid, NORMAL_WALL_STYLE);
-  paintSolidGroup(ctx, infectedSolid, INFECTED_WALL_STYLE);
+  // Infected segments blend into the normal cyan fill on every merged
+  // edge so the corridor's cyan→red→cyan transition reads as one
+  // continuous panel with a tint gradient rather than three abutting
+  // colour blocks.
+  paintSolidGroup(
+    ctx,
+    infectedSolid,
+    INFECTED_WALL_STYLE,
+    NORMAL_WALL_STYLE.fill,
+  );
   paintDashableGroup(ctx, dashableWalls);
 }
 
