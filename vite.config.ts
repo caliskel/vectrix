@@ -1,8 +1,10 @@
 import { resolve } from "path";
 import { defineConfig } from "vite";
+import editorPlugin from "./vite-plugin-editor";
 
 export default defineConfig({
   base: "/vectrix/",
+  plugins: [editorPlugin()],
   build: {
     rollupOptions: {
       input: {

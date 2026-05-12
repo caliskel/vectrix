@@ -29,6 +29,7 @@ import type {
   PendingSpawnSpec,
   RoomJson,
 } from "./room-json-types";
+import { validateRoomJson } from "./validate-room-json";
 
 const DEFAULT_WIDTH = 1200;
 const DEFAULT_HEIGHT = 800;
@@ -121,54 +122,12 @@ function buildDoor(spec: DoorSpec): Door {
   );
 }
 
-function validate(json: RoomJson, idHint?: string): void {
-  const id = idHint ?? json.id;
-  const need = (cond: boolean, msg: string) => {
-    if (!cond) throw new Error(`buildRoomFromJson(${id}): ${msg}`);
-  };
-  need(typeof json.id === "string" && json.id.length > 0, "missing id");
-  need(typeof json.spawnX === "number", "missing spawnX");
-  need(typeof json.spawnY === "number", "missing spawnY");
-  need(Array.isArray(json.walls), "walls must be an array");
-  need(Array.isArray(json.enemies), "enemies must be an array");
-  if (json.width !== undefined) {
-    need(json.width > 0, "width must be positive");
-  }
-  if (json.height !== undefined) {
-    need(json.height > 0, "height must be positive");
-  }
-  for (const w of json.walls) {
-    need(w.w > 0 && w.h > 0, `wall at (${w.x}, ${w.y}) has non-positive size`);
-  }
-  if (json.pendingEnemies) {
-    for (const p of json.pendingEnemies) {
-      need(
-        p.spawn.kind === "point" || p.spawn.kind === "randomY",
-        `pendingEnemy spawn.kind must be 'point' or 'randomY', got ${(p.spawn as { kind?: string }).kind}`,
-      );
-      if (p.spawn.kind === "randomY") {
-        const [a, b] = p.spawn.yRange;
-        need(
-          typeof a === "number" && typeof b === "number" && a !== b,
-          `pendingEnemy at triggerX=${p.triggerX} has invalid yRange`,
-        );
-      }
-    }
-  }
-  if (json.backDoor) {
-    need(
-      typeof json.prevRoomId === "string" || json.prevRoomId === null,
-      "backDoor requires prevRoomId",
-    );
-  }
-}
-
 /** Build a runtime `Room` from a JSON definition. Idempotent: each call
  *  produces fresh enemy instances, fresh `pendingEnemies` closures
  *  (`spawned: false`), and a fresh `Door` — safe to call from
  *  `start()` and `rebuildAllRooms()` repeatedly. */
 export function buildRoomFromJson(json: RoomJson, idHint?: string): Room {
-  validate(json, idHint);
+  validateRoomJson(json, idHint);
   const width = json.width ?? DEFAULT_WIDTH;
   const height = json.height ?? DEFAULT_HEIGHT;
   const useCamera = width > DEFAULT_WIDTH || height > DEFAULT_HEIGHT;
