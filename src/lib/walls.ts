@@ -15,6 +15,16 @@ export type Wall = {
    *  instead of the default cyan. Physics behaviour is unchanged.
    *  Used in Room 1's infected zone. */
   infected?: boolean;
+  /** Suppress the outer stroke + corner brackets on the given side
+   *  because another wall continues the panel there. Used to make
+   *  the cyan↔red transition on Room 1's top/bottom perimeter look
+   *  like one continuous wall with a tint change rather than three
+   *  abutting boxes with visible seams. Coordinates of the touching
+   *  edges must match exactly for the visual continuity to hold. */
+  mergeLeft?: boolean;
+  mergeRight?: boolean;
+  mergeTop?: boolean;
+  mergeBottom?: boolean;
 };
 
 /** Anything we resolve walls against. Player and the moving enemies
@@ -755,31 +765,34 @@ export function addWallImpact(fx: WallFx, x: number, y: number): void {
   fx.ripples.push({ x, y, age: 0 });
 }
 
-// Solid-wall pass: fill + diagonal hatch + outer stroke + corner
-// brackets, all parameterized so the normal (cyan) and infected (red)
-// groups share the same draw path. shadowBlur is set once per pass to
-// keep the per-wall cost low.
-function paintSolidGroup(
+// Solid fill — flat rect per wall, one batched pass per style.
+function paintFill(
   ctx: CanvasRenderingContext2D,
   walls: Wall[],
-  style: WallStyle,
+  fill: string,
 ): void {
   if (walls.length === 0) return;
-
-  // 1. Solid fill.
   ctx.save();
-  ctx.fillStyle = style.fill;
+  ctx.fillStyle = fill;
   ctx.shadowBlur = 0;
   for (const w of walls) {
     ctx.fillRect(w.x, w.y, w.w, w.h);
   }
   ctx.restore();
+}
 
-  // 2. Inner diagonal hatching — clipped per wall so the lines stop
-  // at the boundary.
+// Inner diagonal hatch — clipped per wall so the lines stop at the
+// boundary.
+function paintHatch(
+  ctx: CanvasRenderingContext2D,
+  walls: Wall[],
+  color: string,
+  alpha: number,
+): void {
+  if (walls.length === 0) return;
   ctx.save();
-  ctx.strokeStyle = style.stroke;
-  ctx.globalAlpha = style.hatchAlpha;
+  ctx.strokeStyle = color;
+  ctx.globalAlpha = alpha;
   ctx.lineWidth = 1;
   ctx.shadowBlur = 0;
   for (const w of walls) {
@@ -798,8 +811,23 @@ function paintSolidGroup(
     ctx.restore();
   }
   ctx.restore();
+}
 
-  // 3. Outer stroke — one batched path with glow.
+// Solid-wall pass: fill + hatch + per-edge outer stroke + corner
+// brackets, all parameterized so the normal (cyan) and infected (red)
+// groups share the same draw path. Edges flagged with `mergeX` on a
+// wall are skipped so the wall blends visually into its neighbour
+// without a seam.
+function paintSolidGroup(
+  ctx: CanvasRenderingContext2D,
+  walls: Wall[],
+  style: WallStyle,
+): void {
+  if (walls.length === 0) return;
+  paintFill(ctx, walls, style.fill);
+  paintHatch(ctx, walls, style.stroke, style.hatchAlpha);
+
+  // Outer stroke — emit only the edges that are NOT marked as merged.
   ctx.save();
   ctx.globalAlpha = style.strokeAlpha;
   ctx.strokeStyle = style.stroke;
@@ -808,13 +836,32 @@ function paintSolidGroup(
   ctx.lineWidth = 1.5;
   ctx.beginPath();
   for (const w of walls) {
-    ctx.rect(w.x + 0.5, w.y + 0.5, w.w - 1, w.h - 1);
+    const x1 = w.x + 0.5;
+    const y1 = w.y + 0.5;
+    const x2 = w.x + w.w - 0.5;
+    const y2 = w.y + w.h - 0.5;
+    if (!w.mergeTop) {
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y1);
+    }
+    if (!w.mergeRight) {
+      ctx.moveTo(x2, y1);
+      ctx.lineTo(x2, y2);
+    }
+    if (!w.mergeBottom) {
+      ctx.moveTo(x2, y2);
+      ctx.lineTo(x1, y2);
+    }
+    if (!w.mergeLeft) {
+      ctx.moveTo(x1, y2);
+      ctx.lineTo(x1, y1);
+    }
   }
   ctx.stroke();
   ctx.restore();
 
-  // 4. Corner brackets — brighter, thicker strokes at each corner so
-  // the wall reads as a technical panel rather than a flat box.
+  // Corner brackets — skip any corner whose adjacent edge is merged,
+  // since the L-shape would cross into the neighbour wall.
   ctx.save();
   ctx.strokeStyle = style.stroke;
   ctx.shadowColor = style.stroke;
@@ -829,14 +876,43 @@ function paintSolidGroup(
     const y1 = w.y + BRACKET_INSET_PX;
     const x2 = w.x + w.w - BRACKET_INSET_PX;
     const y2 = w.y + w.h - BRACKET_INSET_PX;
-    // top-left
-    ctx.moveTo(x1, y1 + len); ctx.lineTo(x1, y1); ctx.lineTo(x1 + len, y1);
-    // top-right
-    ctx.moveTo(x2 - len, y1); ctx.lineTo(x2, y1); ctx.lineTo(x2, y1 + len);
-    // bottom-right
-    ctx.moveTo(x2, y2 - len); ctx.lineTo(x2, y2); ctx.lineTo(x2 - len, y2);
-    // bottom-left
-    ctx.moveTo(x1 + len, y2); ctx.lineTo(x1, y2); ctx.lineTo(x1, y2 - len);
+    if (!w.mergeTop && !w.mergeLeft) {
+      ctx.moveTo(x1, y1 + len); ctx.lineTo(x1, y1); ctx.lineTo(x1 + len, y1);
+    }
+    if (!w.mergeTop && !w.mergeRight) {
+      ctx.moveTo(x2 - len, y1); ctx.lineTo(x2, y1); ctx.lineTo(x2, y1 + len);
+    }
+    if (!w.mergeBottom && !w.mergeRight) {
+      ctx.moveTo(x2, y2 - len); ctx.lineTo(x2, y2); ctx.lineTo(x2 - len, y2);
+    }
+    if (!w.mergeBottom && !w.mergeLeft) {
+      ctx.moveTo(x1 + len, y2); ctx.lineTo(x1, y2); ctx.lineTo(x1, y2 - len);
+    }
+  }
+  ctx.stroke();
+  ctx.restore();
+}
+
+// Dashable wall: same dark fill + cyan hatch as a normal wall (so it
+// reads as a panel, not an empty outline), but with the canonical
+// cyan dashed outline instead of solid stroke + brackets. Carries no
+// merge logic — dashable gates are visually distinct on purpose.
+function paintDashableGroup(
+  ctx: CanvasRenderingContext2D,
+  walls: Wall[],
+): void {
+  if (walls.length === 0) return;
+  paintFill(ctx, walls, WALL_FILL);
+  paintHatch(ctx, walls, WALL_STROKE, NORMAL_WALL_STYLE.hatchAlpha);
+  ctx.save();
+  ctx.strokeStyle = PALETTE.playerDash;
+  ctx.shadowColor = PALETTE.playerDash;
+  ctx.shadowBlur = DASHABLE_GLOW_BLUR;
+  ctx.lineWidth = 1.5;
+  ctx.setLineDash([6, 6]);
+  ctx.beginPath();
+  for (const w of walls) {
+    ctx.rect(w.x + 0.5, w.y + 0.5, w.w - 1, w.h - 1);
   }
   ctx.stroke();
   ctx.restore();
@@ -844,9 +920,9 @@ function paintSolidGroup(
 
 function paintWalls(ctx: CanvasRenderingContext2D, walls: Wall[]): void {
   // Split into three render groups: normal solid (cyan), infected
-  // solid (red quarantine), dashable (cyan dashed outline only). Each
-  // group runs through its own style so shadowBlur fires once per
-  // group instead of once per wall.
+  // solid (red quarantine), dashable (dark fill + cyan dashed
+  // outline). Each runs its own paint pipeline so shadowBlur fires
+  // once per pass instead of per wall.
   const normalSolid: Wall[] = [];
   const infectedSolid: Wall[] = [];
   const dashableWalls: Wall[] = [];
@@ -858,21 +934,7 @@ function paintWalls(ctx: CanvasRenderingContext2D, walls: Wall[]): void {
 
   paintSolidGroup(ctx, normalSolid, NORMAL_WALL_STYLE);
   paintSolidGroup(ctx, infectedSolid, INFECTED_WALL_STYLE);
-
-  if (dashableWalls.length > 0) {
-    ctx.save();
-    ctx.strokeStyle = PALETTE.playerDash;
-    ctx.shadowColor = PALETTE.playerDash;
-    ctx.shadowBlur = DASHABLE_GLOW_BLUR;
-    ctx.lineWidth = 1.5;
-    ctx.setLineDash([6, 6]);
-    ctx.beginPath();
-    for (const w of dashableWalls) {
-      ctx.rect(w.x + 0.5, w.y + 0.5, w.w - 1, w.h - 1);
-    }
-    ctx.stroke();
-    ctx.restore();
-  }
+  paintDashableGroup(ctx, dashableWalls);
 }
 
 function getWallLayer(walls: Wall[]): CachedLayer | null {

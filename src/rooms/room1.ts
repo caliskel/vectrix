@@ -32,22 +32,32 @@ export function buildRoom1(): Room {
   const safeRightStart = EXIT_DASH_WALL_X + DASH_WALL_W;
 
   const walls: Wall[] = [
-    // perimeter top — three segments (safe / infected / safe) so the
-    // middle band can carry the infected tint without painting the
-    // safe zones red.
-    { x: 0, y: 0, w: infectedStart, h: WALL_T },
+    // perimeter top — three segments (safe / infected / safe). The
+    // merge flags suppress the outer stroke + corner brackets on the
+    // touching edges so the cyan→red→cyan transition reads as a
+    // single continuous panel with a tint change.
+    {
+      x: 0,
+      y: 0,
+      w: infectedStart,
+      h: WALL_T,
+      mergeRight: true,
+    },
     {
       x: infectedStart,
       y: 0,
       w: infectedEnd - infectedStart,
       h: WALL_T,
       infected: true,
+      mergeLeft: true,
+      mergeRight: true,
     },
     {
       x: safeRightStart,
       y: 0,
       w: ROOM_W - safeRightStart,
       h: WALL_T,
+      mergeLeft: true,
     },
     // perimeter bottom — same split.
     {
@@ -55,6 +65,7 @@ export function buildRoom1(): Room {
       y: ROOM_H - WALL_T,
       w: infectedStart,
       h: WALL_T,
+      mergeRight: true,
     },
     {
       x: infectedStart,
@@ -62,12 +73,15 @@ export function buildRoom1(): Room {
       w: infectedEnd - infectedStart,
       h: WALL_T,
       infected: true,
+      mergeLeft: true,
+      mergeRight: true,
     },
     {
       x: safeRightStart,
       y: ROOM_H - WALL_T,
       w: ROOM_W - safeRightStart,
       h: WALL_T,
+      mergeLeft: true,
     },
     // perimeter left + right (right is split around the door gap).
     { x: 0, y: 0, w: WALL_T, h: ROOM_H },
