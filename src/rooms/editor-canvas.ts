@@ -293,56 +293,10 @@ export function createEditorCanvas(
     commit("pending", { pendingIndex: draft.pendingEnemies.length - 1 });
   }
 
-  function deleteSelection(): void {
-    const sel = editor.getSelection();
-    if (!sel) return;
-    const draft = editor.getDraft();
-    const room = config.getCurrentRoom();
-    switch (sel.kind) {
-      case "wall":
-        draft.walls.splice(sel.index, 1);
-        room.walls.splice(sel.index, 1);
-        editor.setSelection(null);
-        commit("wall");
-        break;
-      case "turret":
-      case "watcher":
-      case "hunter":
-        draft.enemies.splice(sel.index, 1);
-        room.enemies.splice(sel.index, 1);
-        editor.setSelection(null);
-        commit("enemy");
-        break;
-      case "door":
-        draft.door = null;
-        room.door = null;
-        editor.setSelection(null);
-        commit("door");
-        break;
-      case "backDoor":
-        draft.backDoor = null;
-        room.backDoor = null;
-        editor.setSelection(null);
-        commit("door");
-        break;
-      case "key":
-        delete draft.initialKey;
-        room.initialKey = undefined;
-        editor.setSelection(null);
-        commit("key");
-        break;
-      case "pending":
-        if (draft.pendingEnemies) draft.pendingEnemies.splice(sel.index, 1);
-        if (room.pendingEnemies) room.pendingEnemies.splice(sel.index, 1);
-        editor.setSelection(null);
-        commit("pending");
-        break;
-      case "spawn":
-      case "room":
-        // Spawn and room pseudo-entity are not deletable.
-        break;
-    }
-  }
+  // Deletion routes through editor.deleteSelection so the keyboard
+  // shortcut and the properties-panel Delete button share one
+  // implementation; the editor handle owns draft + currentRoom
+  // mutation + selection clear in one call.
 
   // ------- mouse handlers -------
 
@@ -523,7 +477,7 @@ export function createEditorCanvas(
       return;
     if (e.code === "Delete" || e.code === "Backspace") {
       e.preventDefault();
-      deleteSelection();
+      editor.deleteSelection();
       return;
     }
     if (e.code === "Space" && !spaceHeld) {

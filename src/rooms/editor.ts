@@ -140,6 +140,10 @@ export type EditorHandle = {
     kind: MutationKind,
     opts?: { pendingIndex?: number },
   ): void;
+  /** Delete whatever is currently selected. Mutates both draft and
+   *  currentRoom and clears selection. Spawn and the room
+   *  pseudo-entity are not deletable. */
+  deleteSelection(): void;
   /** Subscribe to mode transitions. Fires after the state machine
    *  has settled (the side-effects for the new mode have all run).
    *  Returns an unsubscribe function. */
@@ -335,6 +339,53 @@ export function createEditor(config: EditorConfig): EditorHandle {
     }
   }
 
+  function deleteSelection(): void {
+    if (mode === "closed") return;
+    const sel = selection;
+    if (!sel) return;
+    const room = config.getCurrentRoom();
+    switch (sel.kind) {
+      case "wall":
+        draft.walls.splice(sel.index, 1);
+        room.walls.splice(sel.index, 1);
+        config.triggerSyncRoomFx();
+        break;
+      case "turret":
+      case "watcher":
+      case "hunter":
+        draft.enemies.splice(sel.index, 1);
+        room.enemies.splice(sel.index, 1);
+        break;
+      case "door":
+        draft.door = null;
+        room.door = null;
+        break;
+      case "backDoor":
+        draft.backDoor = null;
+        room.backDoor = null;
+        break;
+      case "key":
+        delete draft.initialKey;
+        room.initialKey = undefined;
+        break;
+      case "pending":
+        if (draft.pendingEnemies) draft.pendingEnemies.splice(sel.index, 1);
+        if (room.pendingEnemies) room.pendingEnemies.splice(sel.index, 1);
+        break;
+      case "spawn":
+      case "room":
+        // Spawn + room pseudo-entity intentionally not deletable —
+        // every room needs a spawn point, and the room itself is the
+        // canvas.
+        return;
+    }
+    selection = null;
+    for (const cb of selectionListeners) {
+      try { cb(null); } catch (e) { console.error(e); }
+    }
+    config.onDraftDirty?.();
+  }
+
   function commitRoomMutation(
     kind: MutationKind,
     opts?: { pendingIndex?: number },
@@ -373,6 +424,7 @@ export function createEditor(config: EditorConfig): EditorHandle {
     exitToEditing,
     restartFromSpawn,
     commitRoomMutation,
+    deleteSelection,
     onModeChange: (cb) => {
       modeListeners.add(cb);
       return () => modeListeners.delete(cb);

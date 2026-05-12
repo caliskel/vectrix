@@ -546,6 +546,21 @@ export function createEditorUI(config: EditorUIConfig): EditorUIHandle {
       },
     );
     propsBody.appendChild(form);
+    // Delete button — always available when a deletable entity is
+    // selected, so users can't get stuck if focus is in a number
+    // input (Backspace/Delete would otherwise just edit the field).
+    if (sel && sel.kind !== "spawn" && sel.kind !== "room") {
+      const del = document.createElement("button");
+      del.className = "dp-ed-btn danger";
+      del.textContent = `Delete ${selectionLabel(sel)}`;
+      del.style.marginTop = "12px";
+      del.style.width = "100%";
+      del.addEventListener("click", () => {
+        editor.deleteSelection();
+        markDirty();
+      });
+      propsBody.appendChild(del);
+    }
   }
 
   function markDirty(): void {
