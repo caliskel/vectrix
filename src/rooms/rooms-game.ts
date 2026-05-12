@@ -676,11 +676,14 @@ export function start(canvas: HTMLCanvasElement): void {
     // Camera always follows the player now (useCamera flag retained
     // for legacy room data but no longer gates behaviour). The
     // visible-world rect in canonical space depends on where the
-    // player is; the same math handles any room size.
-    const canonLeft = Math.max(0, -camera.x);
-    const canonTop = Math.max(0, -camera.y);
-    const canonRight = Math.min(ROOM_W_PX, worldW - camera.x);
-    const canonBottom = Math.min(ROOM_H_PX, worldH - camera.y);
+    // player is; the same math handles any room size. Editor zoom
+    // stretches the world inside the canonical viewport — a world
+    // delta of D in viewport canonical px is `D * zoom`.
+    const z = camera.zoom;
+    const canonLeft = Math.max(0, -camera.x * z);
+    const canonTop = Math.max(0, -camera.y * z);
+    const canonRight = Math.min(ROOM_W_PX, (worldW - camera.x) * z);
+    const canonBottom = Math.min(ROOM_H_PX, (worldH - camera.y) * z);
     return {
       x: offsetX + canonLeft * scale,
       y: offsetY + canonTop * scale,
@@ -2364,8 +2367,12 @@ export function start(canvas: HTMLCanvasElement): void {
     // walls / world content over it.
 
     // Camera always scrolls the world so the player stays centred,
-    // regardless of arena size.
+    // regardless of arena size. Editor-mode zoom is applied here so
+    // every world-space draw call below scales transparently — order
+    // is scale-then-translate so the world-to-screen formula matches
+    // editor cursor-pivot math: screen = (world - camera) * zoom * scale + offset.
     ctx.save();
+    if (camera.zoom !== 1) ctx.scale(camera.zoom, camera.zoom);
     ctx.translate(-camera.x, -camera.y);
 
     // DEEP FIELD background — radial spark + vignette anchored on
@@ -2463,10 +2470,14 @@ export function start(canvas: HTMLCanvasElement): void {
     // off-screen bullets is the biggest per-frame draw-call save
     // these corridor rooms can get.
     const cullMargin = 80;
+    // Visible world rect: zoom < 1 expands what's on-screen, zoom > 1
+    // shrinks it. World width visible = ROOM_W_PX / zoom.
+    const cullViewW = ROOM_W_PX / camera.zoom;
+    const cullViewH = ROOM_H_PX / camera.zoom;
     const cullLeft = camera.x - cullMargin;
-    const cullRight = camera.x + ROOM_W_PX + cullMargin;
+    const cullRight = camera.x + cullViewW + cullMargin;
     const cullTop = camera.y - cullMargin;
-    const cullBottom = camera.y + ROOM_H_PX + cullMargin;
+    const cullBottom = camera.y + cullViewH + cullMargin;
     const bSize = settings.bullets.size;
     const bColor = settings.bullets.color;
     perfBegin("trails");
