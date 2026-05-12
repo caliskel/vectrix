@@ -640,6 +640,12 @@ export function start(canvas: HTMLCanvasElement): void {
     glitchOutDuration: 0.8,
   });
   let worldLabelAge = 0;
+  // Scramble labels stay dormant until they enter the visible
+  // viewport for the first time (player has to walk close enough for
+  // the camera to bring the label into frame). Once started, the
+  // intro plays through even if the player walks away — we don't
+  // want it to loop.
+  let worldLabelStarted = false;
   let arenaBg: ArenaBg = createArenaBg(
     currentRoom.width ?? ROOM_W_PX,
     currentRoom.height ?? ROOM_H_PX,
@@ -820,6 +826,7 @@ export function start(canvas: HTMLCanvasElement): void {
     ambientSpawnTimer = 0;
     ambientInitialFillDone = false;
     worldLabelAge = 0;
+    worldLabelStarted = false;
     tryAgainBounds = null;
     spawnPlayerInCurrentRoom();
     applyInitialKey();
@@ -841,6 +848,7 @@ export function start(canvas: HTMLCanvasElement): void {
     ambientSpawnTimer = 0;
     ambientInitialFillDone = false;
     worldLabelAge = 0;
+    worldLabelStarted = false;
     // Lock door triggers for a beat so the freshly-spawned player
     // can't instantly re-enter the door they just came from.
     state.doorEnterCooldown = 0.7;
@@ -1403,14 +1411,36 @@ export function start(canvas: HTMLCanvasElement): void {
       roomsBootThoughtAge += dt;
     }
     // Scramble world-labels (e.g. Room 1's INFECTED ZONE sign) play
-    // a one-shot intro. The timer ticks until the schedule is done;
-    // afterwards the label stays hidden until the next room entry
-    // resets the age to 0.
-    if (
-      currentRoom.worldLabels?.some((l) => l.scramble) &&
-      !isScrambleTextDone(worldLabelAge, WORLD_LABEL_SCRAMBLE_SCHEDULE)
-    ) {
-      worldLabelAge += dt;
+    // a one-shot intro. The timer only starts once the label first
+    // enters the visible viewport — the player has to walk close
+    // enough for the camera to bring the label into frame. After
+    // that the intro runs through and the timer stops at the
+    // schedule's end; the next room entry resets both flags.
+    const scrambleLabels = currentRoom.worldLabels?.filter((l) => l.scramble);
+    if (scrambleLabels && scrambleLabels.length > 0) {
+      if (!worldLabelStarted) {
+        const viewLeft = camera.x;
+        const viewRight = camera.x + ROOM_W_PX;
+        const viewTop = camera.y;
+        const viewBottom = camera.y + ROOM_H_PX;
+        for (const l of scrambleLabels) {
+          if (
+            l.x >= viewLeft &&
+            l.x <= viewRight &&
+            l.y >= viewTop &&
+            l.y <= viewBottom
+          ) {
+            worldLabelStarted = true;
+            break;
+          }
+        }
+      }
+      if (
+        worldLabelStarted &&
+        !isScrambleTextDone(worldLabelAge, WORLD_LABEL_SCRAMBLE_SCHEDULE)
+      ) {
+        worldLabelAge += dt;
+      }
     }
 
     bgFx.update(dt);
