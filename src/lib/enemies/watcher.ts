@@ -24,7 +24,7 @@ import {
   WATCHER_IDLE_SEC,
   WATCHER_SPEED_FACTOR,
 } from "../config";
-import { isSegmentBlocked } from "../walls";
+import { isSegmentBlocked, type Wall } from "../walls";
 import { resolveEntityWallCollisions } from "../walls";
 import { applyAwarenessJitter, initAwareness } from "./awareness";
 import { applyEnemyKnockback, drawEnemyHitFlash } from "./fx";
@@ -135,8 +135,11 @@ export class Watcher implements Enemy {
   gazeAtPlayer = 0;
   vx = 0;
   vy = 0;
-  private pupilOffsetX = 0;
-  private pupilOffsetY = 0;
+  // Pupil offset — driven by aim/idle-look behaviour. Exposed so the
+  // gaze-line helper can anchor its line at the eye, not the body
+  // centre.
+  pupilOffsetX = 0;
+  pupilOffsetY = 0;
   private pupilLockX = 0;
   private pupilLockY = 0;
   private phase: WatcherPhase = "idle";
@@ -581,6 +584,70 @@ function randomIdlePupilInterval(): number {
   const minSec = WATCHER_IDLE_PUPIL_INTERVAL_MIN_MS / 1000;
   const maxSec = WATCHER_IDLE_PUPIL_INTERVAL_MAX_MS / 1000;
   return minSec + Math.random() * (maxSec - minSec);
+}
+
+// 8 Hz flicker driven by performance.now() — used for the high-meter
+// gaze line and the lock-on indicator. Returns a 0..1 multiplier.
+const GAZE_FLICKER_HZ = 8;
+
+/**
+ * Render the "you are being watched" line from this Watcher's eye to
+ * the player. Skipped when not in aggro or when a wall breaks the
+ * sightline. Width and alpha scale with gazeAtPlayer; high-meter ticks
+ * a flicker so the marked state reads as urgent.
+ *
+ * Called from rooms-game / tutorial-game render after walls / detection
+ * but before lasers + enemy bodies, so the line lives just under the
+ * active threat layer.
+ */
+export function drawWatcherGazeLine(
+  ctx: CanvasRenderingContext2D,
+  watcher: Watcher,
+  playerX: number,
+  playerY: number,
+  walls: Wall[],
+  nowMs: number,
+): void {
+  if (watcher.isDead()) return;
+  if (watcher.awarenessState !== "aggro") return;
+  if (watcher.gazeAtPlayer <= 0) return;
+  if (
+    isSegmentBlocked(watcher.x, watcher.y, playerX, playerY, walls)
+  )
+    return;
+
+  const gaze = watcher.gazeAtPlayer;
+  let lineWidth: number;
+  let alpha: number;
+  if (gaze < 0.5) {
+    lineWidth = 0.8;
+    alpha = 0.25;
+  } else if (gaze < 1.0) {
+    lineWidth = 1.4;
+    alpha = 0.45;
+  } else {
+    lineWidth = 1.8;
+    // 8 Hz flicker ±25 % around the base alpha so a marked beam reads
+    // as "imminent" without becoming strobe-painful.
+    const flicker = 0.5 + 0.5 * Math.sin(nowMs * 0.001 * GAZE_FLICKER_HZ * Math.PI * 2);
+    alpha = 0.45 + flicker * 0.30;
+  }
+
+  // The "I'm looking at you" anchor is the iris/pupil, not the orb
+  // centre — pulls the line off the body so it doesn't look like a
+  // weapon barrel.
+  const eyeX = watcher.x + watcher.pupilOffsetX;
+  const eyeY = watcher.y + watcher.pupilOffsetY;
+
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.strokeStyle = "#ff1744";
+  ctx.lineWidth = lineWidth;
+  ctx.beginPath();
+  ctx.moveTo(eyeX, eyeY);
+  ctx.lineTo(playerX, playerY);
+  ctx.stroke();
+  ctx.restore();
 }
 
 // 15 % chance the pupil snaps to dead-center; otherwise pick a random

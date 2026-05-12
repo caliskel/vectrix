@@ -89,7 +89,7 @@ import {
   SENTINEL_PHASE_HP_BOUNDARY_2_TO_3,
 } from "../lib/enemies/sentinel";
 import type { Enemy, Laser } from "../lib/enemies/types";
-import { Watcher } from "../lib/enemies/watcher";
+import { drawWatcherGazeLine, Watcher } from "../lib/enemies/watcher";
 import {
   emitBulletHit,
   emitEnemyDamage,
@@ -146,6 +146,7 @@ import {
   type PlayerProfile,
   createPlayer,
   dashSpeed,
+  drawMarkedIndicator,
   drawPlayerEye,
   eyeOnHit,
   eyeStartClosing,
@@ -2606,6 +2607,25 @@ export function start(canvas: HTMLCanvasElement): void {
     }
     perfEnd("detection");
 
+    // Watcher gaze lines — "the eye is on you" thread from each
+    // aggro'd Watcher's pupil to the player while LOS is clear. Sits
+    // under lasers so a firing beam paints on top.
+    {
+      const nowMs = performance.now();
+      for (const e of currentRoom.enemies) {
+        if (e.type === "watcher") {
+          drawWatcherGazeLine(
+            ctx,
+            e as Watcher,
+            player.x,
+            player.y,
+            currentRoom.walls,
+            nowMs,
+          );
+        }
+      }
+    }
+
     // lasers (under enemies so the beam appears to emerge from behind)
     perfBegin("lasers");
     for (const l of lasers) drawLaser(ctx, l);
@@ -2717,6 +2737,16 @@ export function start(canvas: HTMLCanvasElement): void {
         dashCooldownSec: DASH_COOLDOWN_MS / 1000,
         profile,
       });
+      // Lock-on ring — marked if any aggro'd Watcher's gaze stack
+      // is full. Skipped when no Watchers are in the room.
+      let maxGaze = 0;
+      for (const e of currentRoom.enemies) {
+        if (e.type === "watcher" && !e.isDead()) {
+          const g = (e as Watcher).gazeAtPlayer;
+          if (g > maxGaze) maxGaze = g;
+        }
+      }
+      drawMarkedIndicator(ctx, player, pSize, maxGaze >= 1.0, performance.now());
       perfEnd("player");
     }
 

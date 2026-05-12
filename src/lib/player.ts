@@ -1380,3 +1380,41 @@ function drawDashCooldownIndicator(
     ctx.restore();
   }
 }
+
+// Lock-on indicator — visualises the marked state from Watcher 2.0's
+// gaze stack. Renders a red ring around the player at an 8 Hz flicker
+// while `isMarked` is true. Sized just outside the player's body so
+// the ring reads as targeting reticle, not body outline.
+const MARKED_RING_RADIUS_FACTOR = 1.4;
+const MARKED_RING_LINEWIDTH = 1.2;
+const MARKED_RING_FLICKER_HZ = 8;
+
+/**
+ * Draw the lock-on ring around the player when at least one Watcher
+ * has a full gaze stack. Cheap: no shadowBlur, single stroke pass.
+ *
+ * Callers compute `isMarked` from `Math.max(...watcher.gazeAtPlayer)
+ * >= 1.0` and skip the call when false (or pass false to short-circuit
+ * — both work, but skipping is faster).
+ */
+export function drawMarkedIndicator(
+  ctx: CanvasRenderingContext2D,
+  p: Player,
+  size: number,
+  isMarked: boolean,
+  nowMs: number,
+): void {
+  if (!isMarked) return;
+  const r = (size / 2) * MARKED_RING_RADIUS_FACTOR;
+  const flicker =
+    0.5 + 0.5 * Math.sin(nowMs * 0.001 * MARKED_RING_FLICKER_HZ * Math.PI * 2);
+  const alpha = 0.4 + flicker * 0.4;
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.strokeStyle = "#ff1744";
+  ctx.lineWidth = MARKED_RING_LINEWIDTH;
+  ctx.beginPath();
+  ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.restore();
+}

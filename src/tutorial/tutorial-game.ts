@@ -63,7 +63,7 @@ import {
   updateEnemyAwareness,
 } from "../lib/enemies/awareness";
 import type { Enemy, Laser } from "../lib/enemies/types";
-import { Watcher } from "../lib/enemies/watcher";
+import { drawWatcherGazeLine, Watcher } from "../lib/enemies/watcher";
 import {
   emitBulletHit,
   emitEnemyDamage,
@@ -120,6 +120,7 @@ import {
   type PlayerProfile,
   createPlayer,
   dashSpeed,
+  drawMarkedIndicator,
   drawPlayerEye,
   eyeOnHit,
   eyeStartClosing,
@@ -2419,6 +2420,23 @@ export function start(canvas: HTMLCanvasElement): void {
       drawEnemyDetection(ctx, e, player.x, player.y);
     }
 
+    // Watcher gaze lines — see rooms-game equivalent for rationale.
+    {
+      const nowMs = performance.now();
+      for (const e of currentRoom.enemies) {
+        if (e.type === "watcher") {
+          drawWatcherGazeLine(
+            ctx,
+            e as Watcher,
+            player.x,
+            player.y,
+            currentRoom.walls,
+            nowMs,
+          );
+        }
+      }
+    }
+
     // lasers (under enemies so the beam appears to emerge from behind)
     for (const l of lasers) drawLaser(ctx, l);
 
@@ -2494,6 +2512,17 @@ export function start(canvas: HTMLCanvasElement): void {
         dashCooldownSec: DASH_COOLDOWN_MS / 1000,
         profile,
       });
+      // Lock-on ring — marked if any aggro'd Watcher's gaze stack
+      // is full. Tutorial Room 2 is the only Watcher encounter, so
+      // most frames this is a single comparison + early-return.
+      let maxGaze = 0;
+      for (const e of currentRoom.enemies) {
+        if (e.type === "watcher" && !e.isDead()) {
+          const g = (e as Watcher).gazeAtPlayer;
+          if (g > maxGaze) maxGaze = g;
+        }
+      }
+      drawMarkedIndicator(ctx, player, pSize, maxGaze >= 1.0, performance.now());
     }
 
     // rings — wide-dim outer + bright inner stroke replaces shadowBlur
