@@ -10,11 +10,14 @@ const DOOR_W = 30;
 const DOOR_H = 120;
 const SPAWN_X = 200;
 const KEY_X = 300;
+const DASH_WALL_X = 600;
+const DASH_WALL_W = 30;
 
-// Long horizontal corridor — empty intro. Player spawns at the left,
-// the key sits a few steps ahead on the floor, and the door at the
-// far right opens on key pickup. No enemies — this room teaches the
-// "see key → grab → walk to door" loop before combat starts.
+// Long horizontal corridor — intro encounter. Player spawns at the
+// left, the key sits a few steps ahead, then a vertical dashable
+// wall blocks the corridor (cyan dashed, phases through during dash
+// i-frames). The whole zone right of the wall is filled with
+// sandbox-style bouncing bullets. No enemies.
 export function buildRoom1(): Room {
   const gapTop = DOOR_CENTER_Y - DOOR_H / 2;
   const gapBottom = DOOR_CENTER_Y + DOOR_H / 2;
@@ -30,12 +33,23 @@ export function buildRoom1(): Room {
       w: WALL_T,
       h: ROOM_H - gapBottom,
     },
+    // Dashable gate — solid for bullets (they bounce off), permeable
+    // for the player only during dash i-frames. Same flag as the
+    // tutorial Room 0 phase-2 wall.
+    {
+      x: DASH_WALL_X,
+      y: WALL_T,
+      w: DASH_WALL_W,
+      h: ROOM_H - WALL_T * 2,
+      dashable: true,
+    },
     // interior obstacles — short pillars that shape the corridor.
     { x: 1100, y: 280, w: 60, h: 120 },
     { x: 1900, y: 100, w: 60, h: 120 },
     { x: 2700, y: 360, w: 60, h: 120 },
   ];
 
+  const fieldX = DASH_WALL_X + DASH_WALL_W;
   return {
     id: "room1",
     walls,
@@ -55,5 +69,16 @@ export function buildRoom1(): Room {
     height: ROOM_H,
     useCamera: true,
     initialKey: { x: KEY_X, y: DOOR_CENTER_Y },
+    ambientBullets: {
+      spawnArea: {
+        x: fieldX,
+        y: WALL_T,
+        w: ROOM_W - WALL_T - fieldX,
+        h: ROOM_H - WALL_T * 2,
+      },
+      maxBullets: 30,
+      spawnIntervalMs: 1200,
+      speed: 250,
+    },
   };
 }

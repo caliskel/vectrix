@@ -75,6 +75,49 @@ export function resolvePlayerWallCollisions(
   return resolveEntityWallCollisions(player, walls, halfSize);
 }
 
+/**
+ * AABB resolve for a moving bullet against walls: pushes the bullet
+ * out along the smallest-penetration axis and flips the matching
+ * velocity component so it bounces off the surface. Mirrors the
+ * resolve in `resolveEntityWallCollisions` but for non-axis-aligned
+ * bullet trajectories. Returns true on contact so callers can fire
+ * impact FX if needed.
+ */
+export function bounceBulletOffWalls(
+  b: { x: number; y: number; vx: number; vy: number },
+  walls: Wall[],
+  radius: number,
+): boolean {
+  for (const w of walls) {
+    const bx1 = b.x - radius;
+    const bx2 = b.x + radius;
+    const by1 = b.y - radius;
+    const by2 = b.y + radius;
+    if (bx2 <= w.x || bx1 >= w.x + w.w || by2 <= w.y || by1 >= w.y + w.h)
+      continue;
+    const oLeft = bx2 - w.x;
+    const oRight = w.x + w.w - bx1;
+    const oTop = by2 - w.y;
+    const oBottom = w.y + w.h - by1;
+    const m = Math.min(oLeft, oRight, oTop, oBottom);
+    if (m === oLeft) {
+      b.x -= oLeft;
+      if (b.vx > 0) b.vx = -b.vx;
+    } else if (m === oRight) {
+      b.x += oRight;
+      if (b.vx < 0) b.vx = -b.vx;
+    } else if (m === oTop) {
+      b.y -= oTop;
+      if (b.vy > 0) b.vy = -b.vy;
+    } else {
+      b.y += oBottom;
+      if (b.vy < 0) b.vy = -b.vy;
+    }
+    return true;
+  }
+  return false;
+}
+
 // True if the bullet's center sits inside any wall's AABB. Returns the
 // hit wall so callers can spawn an impact ripple at the contact point.
 export function bulletInsideWall(

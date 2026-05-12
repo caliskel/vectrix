@@ -21,7 +21,13 @@ import {
   isInstakill,
   setInstakill,
 } from "../lib/god-mode";
-import { type Bullet, compactBullets, pushTrailSample } from "../lib/bullets";
+import {
+  acquireBullet,
+  releaseBullet,
+  type Bullet,
+  compactBullets,
+  pushTrailSample,
+} from "../lib/bullets";
 import {
   getBulletSprite,
   getBulletSpriteOffset,
@@ -167,6 +173,7 @@ import { PostProcessor, DEFAULT_POST } from "../lib/postprocess";
 import { type Bounds, hitBounds } from "../lib/types";
 import {
   addWallImpact,
+  bounceBulletOffWalls,
   createWallFx,
   drawWallOverlay,
   drawWalls,
@@ -181,7 +188,7 @@ import { buildRoom2 } from "./room2";
 import { buildRoom3 } from "./room3";
 import { buildRoom4 } from "./room4";
 import { buildRoom5 } from "./room5";
-import type { Room } from "../lib/room";
+import type { AmbientBulletField, Room } from "../lib/room";
 
 // Canonical letterbox viewport (constant across all rooms; camera-
 // rooms scroll a wider/taller world inside this frame).
@@ -549,6 +556,13 @@ export function start(canvas: HTMLCanvasElement): void {
   let currentKey: Key | null = null;
   let keyHeld = false;
 
+  // Ambient bullet field — Room 1 fills its right half with sandbox-
+  // style bouncing bullets via `Room.ambientBullets`. Initial fill
+  // ramps to cap fast (4 per 40 ms) like sandbox, then settles to the
+  // configured cadence. Both flags reset on restart + transition.
+  let ambientSpawnTimer = 0;
+  let ambientInitialFillDone = false;
+
   const rooms = new Map<string, Room>();
   rooms.set("room1", buildRoom1());
   rooms.set("room2", buildRoom2());
@@ -682,6 +696,58 @@ export function start(canvas: HTMLCanvasElement): void {
     player.cooldown = 0;
   }
 
+  // Sandbox-parity spawn for ambient bullets: pick one of the four
+  // edges of `cfg.spawnArea`, place the bullet just inside it, aim
+  // inward with ±60° spread (mirrors sandbox-game.ts:572 `spawnBullet`
+  // verbatim except the bounds are the rectangle's edges instead of
+  // the viewport's, and `bounces` is forced true).
+  function spawnAmbientBullet(cfg: AmbientBulletField): void {
+    const sz = settings.bullets.size;
+    const h = sz / 2;
+    const a = cfg.spawnArea;
+    const edge = Math.floor(Math.random() * 4);
+    const xRange = Math.max(0, a.w - 2 * h);
+    const yRange = Math.max(0, a.h - 2 * h);
+    let x = 0;
+    let y = 0;
+    let nx = 0;
+    let ny = 0;
+    if (edge === 0) {
+      x = a.x + h + Math.random() * xRange;
+      y = a.y + h;
+      ny = 1;
+    } else if (edge === 1) {
+      x = a.x + a.w - h;
+      y = a.y + h + Math.random() * yRange;
+      nx = -1;
+    } else if (edge === 2) {
+      x = a.x + h + Math.random() * xRange;
+      y = a.y + a.h - h;
+      ny = -1;
+    } else {
+      x = a.x + h;
+      y = a.y + h + Math.random() * yRange;
+      nx = 1;
+    }
+    const baseAngle = Math.atan2(ny, nx);
+    const offset = (Math.random() * 2 - 1) * (Math.PI / 3);
+    const angle = baseAngle + offset;
+    const speed = cfg.speed;
+    while (bullets.length >= cfg.maxBullets) {
+      const evicted = bullets.shift();
+      if (evicted) releaseBullet(evicted);
+    }
+    bullets.push(
+      acquireBullet(
+        x,
+        y,
+        Math.cos(angle) * speed,
+        Math.sin(angle) * speed,
+        true,
+      ),
+    );
+  }
+
   function applyInitialKey() {
     // Pre-placed key on the floor (Room 4). Seeded fresh on every
     // entry to the room so a restart or back-track recreates the
@@ -738,6 +804,8 @@ export function start(canvas: HTMLCanvasElement): void {
     lasers = [];
     currentKey = null;
     keyHeld = false;
+    ambientSpawnTimer = 0;
+    ambientInitialFillDone = false;
     tryAgainBounds = null;
     spawnPlayerInCurrentRoom();
     applyInitialKey();
@@ -756,6 +824,8 @@ export function start(canvas: HTMLCanvasElement): void {
     lasers = [];
     currentKey = null;
     keyHeld = false;
+    ambientSpawnTimer = 0;
+    ambientInitialFillDone = false;
     // Lock door triggers for a beat so the freshly-spawned player
     // can't instantly re-enter the door they just came from.
     state.doorEnterCooldown = 0.7;
@@ -1931,11 +2001,49 @@ export function start(canvas: HTMLCanvasElement): void {
       }
     }
 
-    // bullet movement + wall expiry (no bouncing in rooms)
+    // Ambient bullet field — spawn-from-edge loop mirroring sandbox's
+    // `spawnBullet` + initial-fill ramp (sandbox-game.ts:1221+). Active
+    // only when the current room sets `ambientBullets`. All bullets
+    // produced here carry `bounces=true`; turret/sentinel bullets keep
+    // their existing `bounces=false` so the bounce branch below is a
+    // no-op for them.
+    if (currentRoom.ambientBullets) {
+      const cfg = currentRoom.ambientBullets;
+      if (!ambientInitialFillDone && bullets.length >= cfg.maxBullets) {
+        ambientInitialFillDone = true;
+      }
+      const baseInterval = cfg.spawnIntervalMs / 1000;
+      const filling =
+        !ambientInitialFillDone && bullets.length < cfg.maxBullets;
+      const effInterval = filling ? 0.04 : baseInterval;
+      const perTick = filling ? 4 : 1;
+      ambientSpawnTimer += dt;
+      while (
+        ambientSpawnTimer >= effInterval &&
+        bullets.length < cfg.maxBullets
+      ) {
+        ambientSpawnTimer -= effInterval;
+        for (
+          let i = 0;
+          i < perTick && bullets.length < cfg.maxBullets;
+          i++
+        ) {
+          spawnAmbientBullet(cfg);
+        }
+      }
+    }
+
+    // bullet movement + wall handling (bounce when `bounces`, expire
+    // otherwise — mirrors sandbox-game.ts:1250 with walls in place of
+    // viewport edges).
     perfBegin("upd_bullets");
+    const bulletRadius = settings.bullets.size / 2;
     for (const b of bullets) {
       b.x += b.vx * dt;
       b.y += b.vy * dt;
+      if (b.bounces) {
+        bounceBulletOffWalls(b, currentRoom.walls, bulletRadius);
+      }
       pushTrailSample(b);
     }
     // Bullet bounds use the CURRENT room's world dimensions, not the
@@ -1950,6 +2058,10 @@ export function start(canvas: HTMLCanvasElement): void {
     compactBullets(bullets, (b) => {
       if (b.x < -40 || b.x > worldW + 40) return false;
       if (b.y < -40 || b.y > worldH + 40) return false;
+      // Bouncing bullets are kept inside the room by the resolve pass
+      // above; the wall-expiry path is reserved for non-bouncing
+      // enemy fire.
+      if (b.bounces) return true;
       const hitWall = findContainingWall(b.x, b.y, currentRoom.walls);
       if (hitWall) {
         addWallImpact(wallFx, b.x, b.y);

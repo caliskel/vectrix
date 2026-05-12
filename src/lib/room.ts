@@ -13,6 +13,19 @@ export type PendingEnemy = {
   spawn: () => Enemy;
 };
 
+/** Sandbox-style ambient bullet field confined to a rectangle. Bullets
+ *  spawn from a random edge of the rectangle, aim inward with ±60°
+ *  spread, and ALL bounce off walls inside the room (perimeter +
+ *  pillars + the dashable wall on the rectangle's edge). Used by
+ *  Room 1 to fill the right half of the corridor with a moving threat
+ *  the player has to dash through. */
+export type AmbientBulletField = {
+  spawnArea: { x: number; y: number; w: number; h: number };
+  maxBullets: number;
+  spawnIntervalMs: number;
+  speed: number;
+};
+
 export type Room = {
   id: string;
   walls: Wall[];
@@ -51,4 +64,9 @@ export type Room = {
   /** Id of the room this back door returns to. Required if backDoor
    *  is set; unused otherwise. */
   prevRoomId?: string | null;
+  /** Ambient bullet field — bullets spawn continuously inside the
+   *  configured rectangle and bounce off every wall in the room.
+   *  Mutually independent of enemy fire; the spawn loop runs in
+   *  rooms-game whenever this is set. */
+  ambientBullets?: AmbientBulletField;
 };
