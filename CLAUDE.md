@@ -1917,3 +1917,129 @@ god mode off, so dev tweaks can't leak into a built session.
 The frame loop short-circuits while the dev menu is open
 (`if (menu.isOpen() || devMenu.isOpen()) { render(); return; }`)
 so the world freezes behind the overlay.
+
+## Performance architecture
+
+The hot path was rewritten across one pass to eliminate the two
+biggest cost sources in the original Canvas 2D loop: per-frame
+`shadowBlur` (especially expensive in Safari/WebKit) and per-frame
+`{...}` object allocations on bullets / particles / rings / floating
+texts (V8 GC churn during boss combat).
+
+Before doing perf work, **use the breakdown overlay** — guessing
+without measurement is how the watcher laser fix shipped without
+actually helping the laggy room. Press **F2** in rooms.html: a
+top-right panel paints ms per section with green/amber/red coding.
+Sections include the update pass (`update`, `upd_enemies`,
+`upd_bullets`) and the render pass (`bg`, `energy`, `bgtext`,
+`arenabg`, `grid`, `walls`, `detection`, `lasers`, `enemies`,
+`trails`, `bullets`, `particles`, `player`, `rings`). The total is
+smoothed over a rolling window. Implementation: `src/lib/perf-meter.ts`.
+
+### Object pools
+
+Every hot allocation path uses a pool. Don't go back to
+`list.push({...})` or `list = list.filter(...)` — both reallocate
+needlessly and (in the case of bullets) leak Float32Array trail
+buffers that the pool would recycle.
+
+**Bullets** — `src/lib/bullets.ts`:
+- `acquireBullet(x, y, vx, vy, bounces)` — pops a recycled bullet
+  (resetting state + reusing both Float32Array trail buffers) or
+  falls back to a fresh allocation.
+- `releaseBullet(b)` — explicit return-to-pool (used by the sandbox
+  cap-overflow eviction path).
+- `compactBullets(bullets, keep)` — in-place compaction; replaces
+  `bullets = bullets.filter(...)` and returns dead bullets to the
+  pool. Use this instead of `.filter()`.
+- `makeBullet(...)` — kept as the internal allocator (called by
+  `acquireBullet` when the pool is empty). Don't call directly from
+  new code; use `acquireBullet`.
+
+**Particles + Rings + FloatingTexts** — `src/lib/particles.ts`:
+- `pushParticle(list, x, y, vx, vy, size, color, lifetime,
+  glowStrong, glowSoft, drag)` — pool acquire + push in one. All 12
+  particle push sites in `sentinel.ts`, the 4 in `impacts.ts`, plus
+  the rest of the codebase use this; don't bring back literal
+  `{...}` pushes.
+- `pushRing(list, x, y, lifetime, startR, endR, color,
+  startLineWidth?, endLineWidth?, glowBlur?)` — same for rings.
+- `pushFloatingText(list, x, y, text, size, color, lifetime, vy)`.
+- `addRing(...)` and `addFloatingText(...)` are option-object
+  convenience wrappers that **route through the pool internally** —
+  any caller using them is already pooled.
+- `compactParticles(list, keep)` / `compactRings(list, keep)` /
+  `compactFloatingTexts(list, keep)` — in-place compaction. The 8
+  filter sites in rooms / tutorial / sandbox all use these now.
+
+### Sprite caches
+
+Anything with a heavy `shadowBlur` glow or a complex multi-pass body
+gets baked into an offscreen `HTMLCanvasElement` once and blitted at
+runtime. The per-frame cost drops from N × `shadowBlur` to N ×
+`drawImage`, which is ~10× cheaper in Safari and noticeably cheaper
+in Chrome.
+
+| Module | Purpose |
+| --- | --- |
+| `src/lib/bullet-sprite.ts` | Bullet body + halo per `(color, size)` |
+| `src/lib/laser-sprite.ts` | Watcher / Sweep laser BEAM stretched along the line, plus the wall-hit impact dot |
+| `src/lib/keys.ts` (internal sprite cache) | Golden key body + glow baked once |
+| `src/lib/pickups.ts` (internal sprite cache) | One sprite per pickup type (hp / shield / scoreBoost / breaker), glow baked |
+| `src/lib/enemies/turret-sprite.ts` | Turret body + barrel (rotated at runtime) |
+| `src/lib/enemies/watcher-sprite.ts` | Watcher eye + pupil + translucent ellipse |
+| `src/lib/enemies/hunter-sprite.ts` | Hunter arrow body |
+| `src/lib/player-eye-sprite.ts` | Player outer ring + halo per `(ringColor, haloColor, radius)` |
+| `src/lib/walls.ts` wall layer | Whole arena wall geometry baked once per room |
+| `src/lib/arena-bg.ts` light sprite | Spark glow + vignette stacked into one bake |
+
+**Ring fake glow** — `rooms-game.ts` and `tutorial-game.ts` ring
+loops bumped impact-ring rendering from a `shadowBlur` halo per ring
+to a wide-dim outer stroke + bright inner stroke. ~10× cheaper in
+Safari, visually nearly identical. Boss radial bursts spawn 10+
+rings simultaneously, so this is a real combat-time win.
+
+### Off-screen culling
+
+Rooms-game's bullet trail / bullet body / particle render loops cull
+out anything outside `[camera.x - 80, camera.x + ROOM_W_PX + 80]`
+(and the same band on y). Room 1 (3600 px wide corridor) and Room 4
+(8000 px wide) keep many entities far outside the viewport that
+would otherwise pay full draw cost every frame. The cull rect is
+computed once per frame; the per-entity check is four compares.
+
+### Watcher / sweep laser
+
+The watcher's firing pass used to issue three `shadowBlur` strokes
+on an arena-spanning line (radius 16 + 8 + 12). Now the beam body is
+a cached `LASER_BEAM_COLOR` sprite stretched along the live beam
+angle via `translate → rotate → drawImage(sprite, 0, -h/2, length,
+h)`, and the wall-hit impact is a cached radial dot. One drawImage
++ one drawImage per laser per frame, no live shadowBlur. Same module
+serves the rooms `drawLaser` and the tutorial `drawLaser`.
+
+### Migration patterns (for adding new entities)
+
+When you're tempted to type `list.push({...})` or
+`list = list.filter(...)` in a hot loop — STOP and use the pool
+helpers instead. The whole codebase is pooled; deviations leak
+allocations.
+
+When you add a new enemy / pickup / FX with a `shadowBlur` glow — bake
+it into an offscreen sprite at module init or lazily on first use,
+then blit. Per-frame `shadowBlur` is reserved for ONE-OFF events
+(boss attack telegraphs, phase transitions) where the cost-per-frame
+is bounded.
+
+When you add a render loop that draws world-space entities — gate it
+behind the cull rect if the room can be larger than the canonical
+viewport.
+
+### Tags for rollback
+
+- `perf-pass-stable` — current state after pool + sprite + culling
+  pass. Roll back here if a future change regresses a 60 fps run:
+  `git reset --hard perf-pass-stable`.
+- `pre-safari-perf-pass` — before the shadowBlur-killing pass.
+- `pre-phaser-pilot` — before the failed Phaser 4 experiment (rolled
+  back; lessons in `LESSONS.md`).
