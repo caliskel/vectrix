@@ -194,6 +194,8 @@ import { createEditor } from "./editor";
 import type { EditorHandle } from "./editor";
 import { createEditorUI } from "./editor-ui";
 import type { EditorUIHandle } from "./editor-ui";
+import { createEditorCanvas } from "./editor-canvas";
+import type { EditorCanvasHandle } from "./editor-canvas";
 import { createDebouncedDraftSaver, loadDraft } from "./editor-drafts";
 import type { DebouncedDraftSaver } from "./editor-drafts";
 import type { RoomJson } from "./room-json-types";
@@ -1017,6 +1019,7 @@ export function start(canvas: HTMLCanvasElement): void {
   // is `null` at runtime, F3 / frame-loop gate / failRun guard
   // all use optional chaining to fall through cleanly.
   let editor: EditorHandle | null = null;
+  let editorCanvas: EditorCanvasHandle | null = null;
   if (import.meta.env.DEV) {
     // Hydrate from localStorage (per U8). First-run returns null and
     // the editor falls back to its DEFAULT_DRAFT template.
@@ -1079,21 +1082,39 @@ export function start(canvas: HTMLCanvasElement): void {
     // drop the last 250 ms of edits.
     window.addEventListener("pagehide", () => draftSaver.flush());
 
-    // DOM overlay UI (U5). U6 will inject the canvas interaction
-    // layer alongside this — both call into the same editor handle.
+    // DOM overlay UI (U5) + canvas interaction layer (U6). Both
+    // call into the same editor handle for state + selection; the
+    // canvas handle owns mouse + wheel listeners, the UI handle owns
+    // toolbar + properties.
     const editorUI: EditorUIHandle = createEditorUI({
       editor,
       getCurrentRoom: () => currentRoom,
+    });
+    editorCanvas = createEditorCanvas({
+      editor,
+      ui: editorUI,
+      canvas,
+      getCurrentRoom: () => currentRoom,
+      getCamera: () => camera,
+      getLetterboxOffset: () => ({ x: offsetX, y: offsetY }),
+      getScale: () => scale,
     });
     // Expose for console-driven smoke-testing.
     (window as unknown as {
       __editor: EditorHandle | null;
       __editorUI: EditorUIHandle | null;
+      __editorCanvas: EditorCanvasHandle | null;
     }).__editor = editor;
     (window as unknown as {
       __editor: EditorHandle | null;
       __editorUI: EditorUIHandle | null;
+      __editorCanvas: EditorCanvasHandle | null;
     }).__editorUI = editorUI;
+    (window as unknown as {
+      __editor: EditorHandle | null;
+      __editorUI: EditorUIHandle | null;
+      __editorCanvas: EditorCanvasHandle | null;
+    }).__editorCanvas = editorCanvas;
   }
 
   window.addEventListener("keydown", (e) => {
@@ -2772,6 +2793,12 @@ export function start(canvas: HTMLCanvasElement): void {
     // Death cinematic draws in world space so it tracks the player's
     // last position even in scrolling rooms.
     if (state.deathFx) drawDeathFx(ctx, state.deathFx);
+
+    // Editor overlays (grid, selection ring, ghost rect, lazy-spawn
+    // markers). Only renders when editor is in editing mode; the
+    // module short-circuits otherwise. DEV-only — prod `editorCanvas`
+    // is null and the optional chain skips the call entirely.
+    editorCanvas?.draw(ctx);
 
     ctx.restore();
 
