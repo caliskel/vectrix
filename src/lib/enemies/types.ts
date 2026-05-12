@@ -72,6 +72,10 @@ export type EnemyContext = {
   /** Walls of the current room — moving enemies (Watcher, Hunter)
    *  resolve collisions against these so they don't clip through. */
   walls: Wall[];
+  /** When true, Watcher treats its LOS to the player as blocked this
+   *  frame — gaze decays even if the wall raycast is clear. Injected
+   *  by rooms-game for the Pulsing Heart pulse-ring LOS cover windows. */
+  forceLosBlocked?: boolean;
 };
 
 export interface Enemy {

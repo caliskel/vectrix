@@ -1,6 +1,7 @@
 import { audio } from "../audio";
 import {
   ENEMY_WATCHER_DETECTION,
+  PLAYER_WALK_FACTOR,
   WATCHER_ACCEL_LERP,
   WATCHER_AIM_TRACKING_RAD_PER_SEC,
   WATCHER_AIMING_SEC,
@@ -106,6 +107,14 @@ export class Watcher implements Enemy {
   // Once it transitions to aggro, it stays there for the encounter.
   canDeaggro = false;
   deAggroCooldownTimer = 0;
+  // Sleeping Chamber state — set by startsAsleep constructor opt.
+  // `isSleeping` gates the disturbance-radius wake mechanic instead
+  // of normal detection + combat. `justWoke` is a one-frame signal
+  // that rooms-game reads to set the noisySector flag.
+  isSleeping = false;
+  wakeProgress = 0; // 0..1
+  disturbanceRadius = 0;
+  justWoke = false;
   // Idle posture — Watcher drifts in a slow figure-eight around its
   // home position while sleeping, and the pupil wanders idle-look
   // style instead of tracking the player. Both gated on
@@ -152,7 +161,7 @@ export class Watcher implements Enemy {
   private brakeDirX = 1;
   private brakeDirY = 0;
 
-  constructor(x: number, y: number) {
+  constructor(x: number, y: number, opts?: { startsAggressive?: boolean; startsAsleep?: boolean; disturbanceRadius?: number }) {
     this.x = x;
     this.y = y;
     this.hp = WATCHER_HP_MAX;
@@ -161,6 +170,20 @@ export class Watcher implements Enemy {
     this.idlePupilTimer = randomIdlePupilInterval();
     initAwareness(this, ENEMY_WATCHER_DETECTION);
     this.canDeaggro = false;
+    // Override starting awareness when the room wants this Watcher
+    // already chasing on player entry — used by the infected hub's
+    // "noisy" variant (Sleeping Chamber wake escalated the sector).
+    // Skips alerting telegraph and figure-8 idle drift entirely.
+    if (opts?.startsAggressive) {
+      this.awarenessState = "aggro";
+      this.prevAwarenessState = "aggro";
+      this.firstAgroFired = true;
+    }
+    if (opts?.startsAsleep) {
+      this.isSleeping = true;
+      this.detectionRadius = 0; // suppressed — wake only via disturbance radius
+      this.disturbanceRadius = opts.disturbanceRadius ?? 180;
+    }
   }
 
   isDead(): boolean {
@@ -179,6 +202,15 @@ export class Watcher implements Enemy {
   update(ctxRoom: EnemyContext): void {
     if (this.destroyed) return;
     const { dt, player } = ctxRoom;
+
+    // Clear one-frame wake signal from the previous tick.
+    this.justWoke = false;
+
+    // Sleeping state — pre-idle disturbance-radius mechanic.
+    if (this.isSleeping) {
+      this.updateSleeping(ctxRoom);
+      return;
+    }
 
     // Latch idle home on idle → non-idle transition so a future
     // de-aggro returns the Watcher to wherever it was alerted, not
@@ -266,13 +298,9 @@ export class Watcher implements Enemy {
     // Gaze stack — fills while LOS to player is clear, decays faster
     // when broken. Drives the "marked" mechanic + visual/audio
     // intensity downstream. Cheap: one raycast per Watcher per frame.
-    const losClear = !isSegmentBlocked(
-      this.x,
-      this.y,
-      player.x,
-      player.y,
-      ctxRoom.walls,
-    );
+    const losClear =
+      !ctxRoom.forceLosBlocked &&
+      !isSegmentBlocked(this.x, this.y, player.x, player.y, ctxRoom.walls);
     if (losClear) {
       this.gazeAtPlayer = Math.min(
         1,
@@ -463,6 +491,52 @@ export class Watcher implements Enemy {
     }
   }
 
+  private updateSleeping(ctx: EnemyContext): void {
+    const { dt, player, playerMaxSpeed } = ctx;
+    // Idle pupil wander — narrow, like a sleeping eye twitch.
+    this.idlePupilTimer -= dt;
+    if (this.idlePupilTimer <= 0) {
+      const angle = Math.random() * Math.PI * 2;
+      const r = (0.1 + Math.random() * 0.25) * MAX_PUPIL_OFFSET;
+      this.idlePupilTargetX = Math.cos(angle) * r;
+      this.idlePupilTargetY = Math.sin(angle) * r;
+      this.idlePupilTimer = randomIdlePupilInterval();
+    }
+    const kp = 1 - Math.pow(1 - WATCHER_IDLE_PUPIL_LERP, dt * 60);
+    this.pupilOffsetX += (this.idlePupilTargetX - this.pupilOffsetX) * kp;
+    this.pupilOffsetY += (this.idlePupilTargetY - this.pupilOffsetY) * kp;
+
+    if (this.disturbanceRadius <= 0) return;
+    const playerDist = Math.hypot(player.x - this.x, player.y - this.y);
+    if (playerDist >= this.disturbanceRadius) {
+      this.wakeProgress = Math.max(0, this.wakeProgress - dt * 0.5);
+      return;
+    }
+    const isDashing =
+      player.dashTime > 0 || player.dashIframeTime > 0;
+    const speed = Math.hypot(player.vx, player.vy);
+    const walkMax = playerMaxSpeed * (PLAYER_WALK_FACTOR + 0.05);
+    let wakeRate = 0;
+    if (isDashing) {
+      wakeRate = 5.0; // fills in ~0.2 s
+    } else if (speed > walkMax) {
+      wakeRate = 1 / 1.5; // fills in ~1.5 s
+    } else {
+      // Walking — slowly decay.
+      this.wakeProgress = Math.max(0, this.wakeProgress - dt * 0.3);
+      return;
+    }
+    this.wakeProgress = Math.min(1, this.wakeProgress + dt * wakeRate);
+    if (this.wakeProgress >= 1) {
+      this.isSleeping = false;
+      this.wakeProgress = 0;
+      this.justWoke = true;
+      // Restore detection radius so updateEnemyAwareness fires the
+      // standard idle → alerting burst on the very next frame.
+      this.detectionRadius = ENEMY_WATCHER_DETECTION;
+    }
+  }
+
   draw(ctx: CanvasRenderingContext2D): void {
     if (this.destroyed) {
       drawEnemyHitFlash(ctx, this, () => {
@@ -470,6 +544,11 @@ export class Watcher implements Enemy {
         ctx.arc(this.x, this.y, WATCHER_RADIUS, 0, Math.PI * 2);
         ctx.fill();
       });
+      return;
+    }
+
+    if (this.isSleeping) {
+      this.drawSleeping(ctx);
       return;
     }
 
@@ -555,6 +634,85 @@ export class Watcher implements Enemy {
       ctx.fill();
     });
     ctx.restore();
+  }
+
+  private drawSleeping(ctx: CanvasRenderingContext2D): void {
+    const wp = this.wakeProgress;
+
+    // Disturbance radius — мягкое радиальное свечение вместо пунктира.
+    if (this.disturbanceRadius > 0) {
+      ctx.save();
+      const grad = ctx.createRadialGradient(
+        this.x, this.y, this.disturbanceRadius * 0.55,
+        this.x, this.y, this.disturbanceRadius,
+      );
+      grad.addColorStop(0, "rgba(255, 29, 68, 0)");
+      grad.addColorStop(1, `rgba(255, 29, 68, ${0.07 + wp * 0.20})`);
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(this.x, this.y, this.disturbanceRadius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    ctx.save();
+    ctx.translate(this.x, this.y);
+
+    // Внешнее кольцо — полное, приглушённое, разгорается при пробуждении.
+    ctx.strokeStyle = "#ff1744";
+    ctx.globalAlpha = 0.28 + wp * 0.55;
+    ctx.lineWidth = 3;
+    ctx.shadowColor = "#ff1744";
+    ctx.shadowBlur = 5 + wp * 14;
+    ctx.beginPath();
+    ctx.arc(0, 0, WATCHER_RADIUS, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+
+    // Тёмная заливка внутри (глаз закрыт).
+    ctx.fillStyle = "#04080f";
+    ctx.globalAlpha = 0.96;
+    ctx.beginPath();
+    ctx.arc(0, 0, WATCHER_RADIUS - 3, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Веко-щель — узкий красный эллипс, раскрывается с wakeProgress.
+    // wp=0: тончайшая светящаяся линия (глубокий сон).
+    // wp=1: почти полностью открытый глаз (вот-вот проснётся).
+    const slitW = IRIS_OUTER_R * 0.88;
+    const slitH = 1.0 + wp * 14;
+    ctx.fillStyle = "#ff1744";
+    ctx.globalAlpha = 0.40 + wp * 0.50;
+    ctx.shadowColor = "#ff2d55";
+    ctx.shadowBlur = 3 + wp * 16;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, slitW, slitH, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+
+    // Зрачок — появляется только когда щель уже заметно открыта.
+    if (wp > 0.35) {
+      const pupilFade = (wp - 0.35) / 0.65;
+      ctx.fillStyle = "#0a0e1a";
+      ctx.globalAlpha = pupilFade * 0.9;
+      ctx.beginPath();
+      ctx.ellipse(
+        this.pupilOffsetX * 0.3,
+        this.pupilOffsetY * 0.3,
+        PUPIL_RADIUS * 0.7,
+        Math.min(PUPIL_RADIUS * 0.65, slitH * 0.75),
+        0, 0, Math.PI * 2,
+      );
+      ctx.fill();
+    }
+
+    ctx.restore();
+
+    drawEnemyHitFlash(ctx, this, () => {
+      ctx.beginPath();
+      ctx.arc(this.x, this.y, WATCHER_RADIUS, 0, Math.PI * 2);
+      ctx.fill();
+    });
   }
 
   overlapsPlayer(px: number, py: number, half: number): boolean {

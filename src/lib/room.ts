@@ -46,6 +46,22 @@ export type AmbientBulletField = {
   speed: number;
 };
 
+/** Static config for the Pulsing Heart mechanic (top side-room). */
+export type HeartMechanicCfg = {
+  x: number;
+  y: number;
+  registrationRadius: number;
+  pulseOrbitRadius: number;
+  pulseIntervalSec: number;
+  pulseExpandSpeed: number;
+  registrationGoalSec: number;
+};
+
+/** Static config for the Sleeping Chamber mechanic (bottom side-room). */
+export type SleepingChamberCfg = {
+  visibilityRadius: number;
+};
+
 export type Room = {
   id: string;
   walls: Wall[];
@@ -93,4 +109,13 @@ export type Room = {
    *  (so the player and bullets pass on top). Used by Room 1 for the
    *  INFECTED ZONE signage. */
   worldLabels?: WorldLabel[];
+  /** Additional forward exits beyond the main `door`. Used by hub
+   *  rooms (e.g. infected sector hub) that have multiple non-back
+   *  exits — top + bottom doors leading to side-rooms. Each entry
+   *  pairs a Door with the room id it leads to. rooms-game checks
+   *  overlap against each in the same pass as `door` and `backDoor`,
+   *  transitioning forward (not viaBack) when triggered. */
+  extraExits?: Array<{ door: Door; nextRoomId: string }>;
+  heartMechanic?: HeartMechanicCfg;
+  sleepingChamber?: SleepingChamberCfg;
 };

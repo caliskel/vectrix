@@ -88,7 +88,7 @@ import {
   SENTINEL_PHASE_HP_BOUNDARY_1_TO_2,
   SENTINEL_PHASE_HP_BOUNDARY_2_TO_3,
 } from "../lib/enemies/sentinel";
-import type { Enemy, Laser } from "../lib/enemies/types";
+import type { Enemy, EnemyContext, Laser } from "../lib/enemies/types";
 import { drawWatcherGazeLine, Watcher } from "../lib/enemies/watcher";
 import {
   emitBulletHit,
@@ -188,10 +188,10 @@ import {
   type WallFx,
 } from "../lib/walls";
 import { buildRoom1 } from "./room1";
-import { buildRoom2 } from "./room2";
-import { buildRoom3 } from "./room3";
-import { buildRoom4 } from "./room4";
 import { buildRoom5 } from "./room5";
+import { buildInfectedHub } from "./infected-hub";
+import { buildInfectedHubTop } from "./infected-hub-top";
+import { buildInfectedHubBottom } from "./infected-hub-bottom";
 import { buildRoomFromJson } from "./build-room-from-json";
 import { createEditor } from "./editor";
 import type { EditorHandle } from "./editor";
@@ -233,7 +233,7 @@ const SCREEN_SHAKE_DURATION_SEC = 0.2;
 const SCREEN_SHAKE_PX = 4;
 // Campaign currently has Room 4 (corridor) + Room 5 placeholder. The
 // HUD displays them as 1 / 2 since rooms 1–3 moved to the tutorial.
-const ROOM_TOTAL = 5;
+const ROOM_TOTAL = 3;
 const TUTORIAL_COMPLETED_KEY = "dash-proto:tutorial-completed";
 const ROOM_CLEAR_FLASH = 0.2;
 const ROOMS_BEST_KEY = "dash-proto:rooms-best";
@@ -422,6 +422,14 @@ type GameState = {
    *  (HP 60 → 40 → 20 boundaries, fired inside the 2 s transition
    *  cinematic). 0 while the player isn't in Room 5. */
   prevBossPhase: 0 | 1 | 2 | 3;
+  /** Set true when the player wakes a sleeping watcher in the
+   *  infected sector's Sleeping Chamber (Sprint 3 wires the flip).
+   *  Persists through `transitionToRoom`; reset to false on
+   *  `restartRun`. The hub builder reads this on entry to decide
+   *  whether to spawn its Watchers in aggro and bump ambient bullet
+   *  density (origin doc R20-R22). Sprint 1 plumbs the field but
+   *  nothing flips it yet. */
+  noisySector: boolean;
 };
 
 export function start(canvas: HTMLCanvasElement): void {
@@ -504,11 +512,27 @@ export function start(canvas: HTMLCanvasElement): void {
   let lasers: Laser[] = [];
   // Per-run key state. Camera is created once and snapped to each
   // room's bounds on entry. currentKey lives at the kill site of the
-  // enemy flagged dropsKey; keyHeld flips when the player walks over
-  // it. Both reset per room transition.
+  // enemy flagged dropsKey; keysHeld increments when the player
+  // walks over it. keysHeld persists across transitions WITHIN the
+  // hub zone so side-room keys accumulate at the hub's east door.
+  // Multi-key doors (e.g. infected hub's east main) compare keysHeld
+  // against `door.keysRequired ?? 1`.
   const camera: Camera = createCamera();
   let currentKey: Key | null = null;
-  let keyHeld = false;
+  let keysHeld = 0;
+  // Комнаты, из которых ключ уже был подобран в этом прохождении.
+  // Предотвращает повторное появление ключа при повторном входе в комнату.
+  const sectorRoomKeys = new Set<string>();
+
+  // Rooms that share a key-accumulation context. Transitioning
+  // between any two rooms in this set does NOT reset keysHeld so
+  // the player can collect keys from both side-rooms before the hub
+  // east door opens. Transitions into or out of this set always reset.
+  const HUB_ZONE = new Set([
+    "infected-hub",
+    "infected-hub-top",
+    "infected-hub-bottom",
+  ]);
 
   // Ambient bullet field — Room 1 fills its right half with sandbox-
   // style bouncing bullets via `Room.ambientBullets`. Initial fill
@@ -549,10 +573,10 @@ export function start(canvas: HTMLCanvasElement): void {
 
   const rooms = new Map<string, Room>();
   rooms.set("room1", buildRoom1());
-  rooms.set("room2", buildRoom2());
-  rooms.set("room3", buildRoom3());
-  rooms.set("room4", buildRoom4());
   rooms.set("room5", buildRoom5());
+  rooms.set("infected-hub", buildInfectedHub({ noisy: false }));
+  rooms.set("infected-hub-top", buildInfectedHubTop());
+  rooms.set("infected-hub-bottom", buildInfectedHubBottom());
   registerJsonRooms(rooms);
 
   const state: GameState = {
@@ -577,6 +601,7 @@ export function start(canvas: HTMLCanvasElement): void {
     elapsed: 0,
     prevSentinelState: "none",
     prevBossPhase: 0,
+    noisySector: false,
   };
 
   let currentRoom: Room = rooms.get("room1")!;
@@ -612,6 +637,18 @@ export function start(canvas: HTMLCanvasElement): void {
     fadeOutDuration: 0.9,
   });
   let roomsBootThoughtAge = 0;
+  // Мысль ГГ при первом входе в infected-hub: "why is it so dark here?"
+  // Срабатывает один раз за прохождение, не повторяется при перезаходе.
+  const HUB_THOUGHT_TEXT = "why is it so dark here?";
+  const hubThoughtSchedule = makeScrambleSchedule({
+    appearStart: 1.4,
+    fadeInDuration: 0.5,
+    settleDuration: 1.8,
+    holdDuration: 1.2,
+    fadeOutDuration: 0.8,
+  });
+  let hubThoughtAge = 0;
+  let hubThoughtTriggered = false;
   // World-space scramble labels (Room 1's INFECTED ZONE sign) share a
   // single per-room timer. Reset on entry/restart so the intro replays
   // every time the room is re-entered.
@@ -630,6 +667,17 @@ export function start(canvas: HTMLCanvasElement): void {
   // intro plays through even if the player walks away — we don't
   // want it to loop.
   let worldLabelStarted = false;
+  // Pulsing Heart mechanic state — active only in infected-hub-top.
+  type HeartPulseRing = { r: number };
+  let heartProgress = 0; // seconds (0..cfg.registrationGoalSec)
+  let heartPulseTimer = 0;
+  let heartPulseRings: HeartPulseRing[] = [];
+  let heartComplete = false;
+  let heartAge = 0; // running timer for rotation/beat animations
+  // Sleeping Chamber flicker state — имитирует отключение электричества.
+  let chamberFlickerTimer = 3 + Math.random() * 4; // до следующего мигания
+  let chamberFlickerAge = -1; // -1 = неактивно, 0+ = идёт мигание
+  const CHAMBER_FLICKER_DURATION = 0.45;
   let arenaBg: ArenaBg = createArenaBg(
     currentRoom.width ?? ROOM_W_PX,
     currentRoom.height ?? ROOM_H_PX,
@@ -755,10 +803,9 @@ export function start(canvas: HTMLCanvasElement): void {
   }
 
   function applyInitialKey() {
-    // Pre-placed key on the floor (Room 4). Seeded fresh on every
-    // entry to the room so a restart or back-track recreates the
-    // pickup. Mutually exclusive with `dropsKey` enemy spawns.
-    if (currentRoom.initialKey) {
+    // Pre-placed key. Не спавним повторно если ключ в этой комнате
+    // уже был собран в этом прохождении (фикс двойного подбора).
+    if (currentRoom.initialKey && !sectorRoomKeys.has(currentRoom.id)) {
       currentKey = createKey(
         currentRoom.initialKey.x,
         currentRoom.initialKey.y,
@@ -772,10 +819,15 @@ export function start(canvas: HTMLCanvasElement): void {
 
   function rebuildAllRooms() {
     rooms.set("room1", buildRoom1());
-    rooms.set("room2", buildRoom2());
-    rooms.set("room3", buildRoom3());
-    rooms.set("room4", buildRoom4());
     rooms.set("room5", buildRoom5());
+    // Infected sector — hub rebuilt with noisy=false (fresh run).
+    // transitionToRoom rebuilds hub on each entry against live
+    // state.noisySector, so this initial-build value only matters
+    // if the player spawns directly into the hub (test-mode), which
+    // never happens in the current campaign chain.
+    rooms.set("infected-hub", buildInfectedHub({ noisy: false }));
+    rooms.set("infected-hub-top", buildInfectedHubTop());
+    rooms.set("infected-hub-bottom", buildInfectedHubBottom());
     registerJsonRooms(rooms);
   }
 
@@ -804,13 +856,17 @@ export function start(canvas: HTMLCanvasElement): void {
     state.elapsed = 0;
     state.prevSentinelState = "none";
     state.prevBossPhase = 0;
+    state.noisySector = false;
+    hubThoughtTriggered = false;
+    hubThoughtAge = 0;
     bullets = [];
     particles = [];
     rings = [];
     floatingTexts = [];
     lasers = [];
     currentKey = null;
-    keyHeld = false;
+    keysHeld = 0;
+    sectorRoomKeys.clear();
     ambientSpawnTimer = 0;
     ambientInitialFillDone = false;
     worldLabelAge = 0;
@@ -824,39 +880,89 @@ export function start(canvas: HTMLCanvasElement): void {
   }
 
   function transitionToRoom(id: string, viaBack = false) {
+    // Hub rebuild on entry — the hub has two variants (calm vs noisy)
+    // gated on state.noisySector, which Sprint 3 will flip when the
+    // player wakes a sleeping watcher. Building fresh on each entry
+    // keeps the variant correct without baking the flag into the
+    // initial registration. Sprint 1 always sees noisy=false but the
+    // wiring is in place.
+    if (id === "infected-hub") {
+      rooms.set("infected-hub", buildInfectedHub({ noisy: state.noisySector }));
+      // Мысль ГГ — только при первом входе за прохождение.
+      if (!hubThoughtTriggered) {
+        hubThoughtTriggered = true;
+        hubThoughtAge = 0;
+      }
+    }
     const next = rooms.get(id);
     if (!next) return;
+    // Capture before currentRoom is overwritten — needed for hub-zone check.
+    const prevRoomId = currentRoom.id;
     currentRoom = next;
     bullets = [];
     rings = [];
     floatingTexts = [];
     lasers = [];
     currentKey = null;
-    keyHeld = false;
+    // Preserve keysHeld when staying within the hub zone so keys from
+    // both side-rooms accumulate at the east door. Reset for any
+    // transition that enters or exits the zone.
+    if (!(HUB_ZONE.has(prevRoomId) && HUB_ZONE.has(id))) {
+      keysHeld = 0;
+      sectorRoomKeys.clear();
+    }
     ambientSpawnTimer = 0;
     ambientInitialFillDone = false;
     worldLabelAge = 0;
     worldLabelStarted = false;
+    heartProgress = 0;
+    heartPulseTimer = 0;
+    heartPulseRings = [];
+    // Если сердце уже было заряжено в этом прохождении — не сбрасываем.
+    heartComplete = sectorRoomKeys.has(id);
+    heartAge = 0;
     // Lock door triggers for a beat so the freshly-spawned player
     // can't instantly re-enter the door they just came from.
     state.doorEnterCooldown = 0.7;
     if (viaBack) {
-      // Returning to a previously-visited room — drop the player just
-      // inside the forward door rather than at the default spawn so
-      // they don't have to walk the full room again. The forward door
-      // sits on the right wall; back-spawn is 60 px to its left along
-      // its y, which clears both the door rect and the wall thickness.
-      const fwd = currentRoom.door;
-      if (fwd) {
-        // Drop the player well clear of the door so they can't re-
-        // trigger it the moment they step in. Combined with the
-        // doorEnterCooldown above the back transition feels clean.
-        player.x = fwd.x - 140;
-        player.y = fwd.y;
+      // Returning to a previously-visited room. If the room we just left
+      // matches one of the current room's extraExits, spawn near that
+      // exit door (handles hub top/bottom side-rooms where the relevant
+      // door is on the top or bottom wall, not the main forward door).
+      // Otherwise fall back to spawning just inside the main door.
+      const matchingExit = currentRoom.extraExits?.find(
+        (ex) => ex.nextRoomId === prevRoomId,
+      );
+      if (matchingExit) {
+        const ed = matchingExit.door;
+        const roomH2 = currentRoom.height ?? ROOM_H_PX;
+        const isTopWall = ed.y < roomH2 / 2;
+        player.x = ed.x;
+        player.y = isTopWall
+          ? ed.y + ed.h / 2 + 60
+          : ed.y - ed.h / 2 - 60;
+        player.vx = 0;
+        player.vy = 0;
+      } else if (prevRoomId === currentRoom.nextRoomId && currentRoom.backDoor) {
+        // Returning from the room ahead — spawn near the back door
+        // (e.g., hub → room1 is handled by backDoor spawn).
+        const bd = currentRoom.backDoor;
+        player.x = bd.x + bd.w / 2 + 60;
+        player.y = bd.y;
         player.vx = 0;
         player.vy = 0;
       } else {
-        spawnPlayerInCurrentRoom();
+        const fwd = currentRoom.door;
+        if (fwd) {
+          // Drop the player well clear of the main door so they can't
+          // re-trigger it the moment they step in.
+          player.x = fwd.x - 140;
+          player.y = fwd.y;
+          player.vx = 0;
+          player.vy = 0;
+        } else {
+          spawnPlayerInCurrentRoom();
+        }
       }
     } else {
       spawnPlayerInCurrentRoom();
@@ -949,11 +1055,11 @@ export function start(canvas: HTMLCanvasElement): void {
       lastTime = performance.now();
     },
     rooms: [
-      { id: "room1", label: "Room 1 — Corridor" },
-      { id: "room3", label: "Room 2 — Trap" },
-      { id: "room2", label: "Room 3 — Arena" },
-      { id: "room4", label: "Room 4 — Phase Corridor" },
-      { id: "room5", label: "Room 5 — Boss" },
+      { id: "room1", label: "1 — Corridor" },
+      { id: "infected-hub", label: "2 — Infected Hub" },
+      { id: "infected-hub-top", label: "2T — Pulsing Heart" },
+      { id: "infected-hub-bottom", label: "2B — Sleeping Chamber" },
+      { id: "room5", label: "3 — Boss" },
     ],
   });
 
@@ -1010,11 +1116,15 @@ export function start(canvas: HTMLCanvasElement): void {
         // away from so it doesn't ghost into the editor's tempRoom.
         // Then seeds initialKey if the new room declares one.
         currentKey = null;
-        keyHeld = false;
+        keysHeld = 0;
         ambientSpawnTimer = 0;
         ambientInitialFillDone = false;
         worldLabelAge = 0;
         worldLabelStarted = false;
+        heartProgress = 0;
+        heartPulseTimer = 0;
+        heartPulseRings = [];
+        heartComplete = false;
         state.doorEnterCooldown = 0;
         applyInitialKey();
       },
@@ -1510,7 +1620,8 @@ export function start(canvas: HTMLCanvasElement): void {
     //    block the exit).
     //  - non-key doors require every enemy in the room to be dead.
     if (door.requiresKey) {
-      if (!keyHeld) return;
+      const required = door.keysRequired ?? 1;
+      if (keysHeld < required) return;
     } else {
       if (currentRoom.enemies.length === 0) return; // empty rooms — skip
       if (aliveEnemies().length > 0) return;
@@ -1554,6 +1665,12 @@ export function start(canvas: HTMLCanvasElement): void {
       !isScrambleTextDone(roomsBootThoughtAge, roomsBootThoughtSchedule)
     ) {
       roomsBootThoughtAge += dt;
+    }
+    if (
+      hubThoughtTriggered &&
+      !isScrambleTextDone(hubThoughtAge, hubThoughtSchedule)
+    ) {
+      hubThoughtAge += dt;
     }
     // Scramble world-labels (e.g. Room 1's INFECTED ZONE sign) play
     // a one-shot intro. The timer only starts once the label first
@@ -1619,6 +1736,11 @@ export function start(canvas: HTMLCanvasElement): void {
     }
     if (currentRoom.backDoor && currentRoom.backDoor.state === "open") {
       currentRoom.backDoor.pulse += dt;
+    }
+    if (currentRoom.extraExits) {
+      for (const exit of currentRoom.extraExits) {
+        if (exit.door.state === "open") exit.door.pulse += dt;
+      }
     }
 
     if (state.runState === "failed" || state.runState === "completed") {
@@ -1879,11 +2001,41 @@ export function start(canvas: HTMLCanvasElement): void {
         : false;
     const backDoor = currentRoom.backDoor;
     const backDoorOpen = backDoor?.state === "open";
+    const roomH = currentRoom.height ?? ROOM_H_PX;
+    // inBackDoorY — backDoor on the LEFT wall: player Y in door gap.
     const inBackDoorY =
-      backDoorOpen && backDoor
+      backDoorOpen && backDoor && backDoor.x < PERIMETER_T * 2
         ? player.y > backDoor.y - backDoor.h / 2 - half &&
           player.y < backDoor.y + backDoor.h / 2 + half
         : false;
+    // inBackDoorTopX — backDoor on the TOP wall: player X in door gap.
+    const inBackDoorTopX =
+      backDoorOpen && backDoor && backDoor.y < PERIMETER_T * 2
+        ? player.x > backDoor.x - backDoor.w / 2 - half &&
+          player.x < backDoor.x + backDoor.w / 2 + half
+        : false;
+    // inBackDoorBottomX — backDoor on the BOTTOM wall: player X in door gap.
+    const inBackDoorBottomX =
+      backDoorOpen && backDoor && backDoor.y > roomH - PERIMETER_T * 2
+        ? player.x > backDoor.x - backDoor.w / 2 - half &&
+          player.x < backDoor.x + backDoor.w / 2 + half
+        : false;
+    const inTopExitX =
+      currentRoom.extraExits?.some(
+        (ex) =>
+          ex.door.state === "open" &&
+          ex.door.y < PERIMETER_T * 2 &&
+          player.x > ex.door.x - ex.door.w / 2 - half &&
+          player.x < ex.door.x + ex.door.w / 2 + half,
+      ) ?? false;
+    const inBottomExitX =
+      currentRoom.extraExits?.some(
+        (ex) =>
+          ex.door.state === "open" &&
+          ex.door.y > roomH - PERIMETER_T * 2 &&
+          player.x > ex.door.x - ex.door.w / 2 - half &&
+          player.x < ex.door.x + ex.door.w / 2 + half,
+      ) ?? false;
     if (player.x < minX && !inBackDoorY) {
       player.x = minX;
       if (player.vx < 0) {
@@ -1892,7 +2044,7 @@ export function start(canvas: HTMLCanvasElement): void {
       }
       player.vx = 0;
     }
-    if (player.y < minY) {
+    if (player.y < minY && !inTopExitX && !inBackDoorTopX) {
       player.y = minY;
       if (player.vy < 0) {
         const s = triggerPlayerSmash(player, 0, 1, -player.vy);
@@ -1908,7 +2060,7 @@ export function start(canvas: HTMLCanvasElement): void {
       }
       player.vx = 0;
     }
-    if (player.y > maxY) {
+    if (player.y > maxY && !inBottomExitX && !inBackDoorBottomX) {
       player.y = maxY;
       if (player.vy > 0) {
         const s = triggerPlayerSmash(player, 0, -1, player.vy);
@@ -2027,7 +2179,7 @@ export function start(canvas: HTMLCanvasElement): void {
     }
 
     // enemies update
-    const enemyCtx = {
+    const enemyCtx: EnemyContext = {
       dt,
       // Same as `dt` while no slow-mo is active. Sentinel reads
       // `unscaledDt` for its own cinematic timers; the field stays
@@ -2076,8 +2228,83 @@ export function start(canvas: HTMLCanvasElement): void {
     for (const e of currentRoom.enemies) {
       updateEnemyAwareness(e, player.x, player.y, dt, awarenessTrigger);
     }
-    for (const e of currentRoom.enemies) e.update(enemyCtx);
+    const heartCfg = currentRoom.heartMechanic;
+    for (const e of currentRoom.enemies) {
+      // Inject pulse-ring LOS cover for Watchers in the Pulsing Heart room.
+      if (heartCfg && !heartComplete && e.type === "watcher") {
+        const wd = Math.hypot(e.x - heartCfg.x, e.y - heartCfg.y);
+        enemyCtx.forceLosBlocked = heartPulseRings.some(
+          (r) => r.r > wd - 50 && r.r < wd + 50,
+        );
+      } else {
+        enemyCtx.forceLosBlocked = undefined;
+      }
+      e.update(enemyCtx);
+      // Sleeping Chamber wake event — set noisySector flag.
+      if (e.type === "watcher" && (e as Watcher).justWoke) {
+        state.noisySector = true;
+      }
+    }
     perfEnd("upd_enemies");
+
+    // Мигание электричества — infected sector + room1.
+    // Noisy-флаг только для sleeping chamber.
+    if (HUB_ZONE.has(currentRoom.id) || currentRoom.id === "room1" || currentRoom.id === "room5") {
+      if (currentRoom.sleepingChamber) {
+        for (const e of currentRoom.enemies) {
+          if (e.type === "watcher" && e.awarenessState === "alerting" && !state.noisySector) {
+            state.noisySector = true;
+          }
+        }
+      }
+      if (chamberFlickerAge < 0) {
+        chamberFlickerTimer -= dt;
+        if (chamberFlickerTimer <= 0) {
+          chamberFlickerTimer = 3 + Math.random() * 5;
+          chamberFlickerAge = 0;
+        }
+      } else {
+        chamberFlickerAge += dt;
+        if (chamberFlickerAge >= CHAMBER_FLICKER_DURATION) chamberFlickerAge = -1;
+      }
+    } else {
+      chamberFlickerAge = -1;
+      chamberFlickerTimer = 3 + Math.random() * 4;
+    }
+
+    // Pulsing Heart — tick pulse rings + registration progress.
+    if (heartCfg && !heartComplete) {
+      heartAge += dt;
+      const cfg = heartCfg;
+      // Emit new pulse ring.
+      heartPulseTimer += dt;
+      if (heartPulseTimer >= cfg.pulseIntervalSec) {
+        heartPulseTimer -= cfg.pulseIntervalSec;
+        heartPulseRings.push({ r: 0 });
+      }
+      // Expand + expire rings. Убираем когда fade = 0, т.е. r >= maxFade.
+      // maxFade должен совпадать с константой в draw-блоке (pulseOrbitRadius * 2.4).
+      const ringMaxR = cfg.pulseOrbitRadius * 2.4;
+      for (const ring of heartPulseRings) ring.r += dt * cfg.pulseExpandSpeed;
+      heartPulseRings = heartPulseRings.filter((r) => r.r < ringMaxR);
+      // Registration progress — accumulate while player is inside zone.
+      const playerDistHeart = Math.hypot(player.x - cfg.x, player.y - cfg.y);
+      if (playerDistHeart < cfg.registrationRadius) {
+        heartProgress = Math.min(cfg.registrationGoalSec, heartProgress + dt);
+        if (heartProgress >= cfg.registrationGoalSec) {
+          heartComplete = true;
+          sectorRoomKeys.add(currentRoom.id); // помечаем как выполненное
+          // Spawn the key at the heart centre.
+          currentKey = createKey(cfg.x, cfg.y);
+          audio.play.multUp(5);
+          addFloatingText(floatingTexts, "REGISTERED", cfg.x, cfg.y - 80, {
+            size: 22,
+            color: "#00e5ff",
+            lifetime: 2.0,
+          });
+        }
+      }
+    }
 
     // Watcher 2.0 heartbeat ambient — see comment above the enemy
     // update for rationale.
@@ -2189,6 +2416,7 @@ export function start(canvas: HTMLCanvasElement): void {
       for (const e of currentRoom.enemies) {
         if (e.isDead()) continue;
         if (e === l.ownerEnemy) continue;
+        if (e.type === l.ownerEnemy.type) continue;
         if (e.hitByLaserId === l.id) continue;
         const reach = e.hitboxRadius + LASER_FRIENDLY_FIRE_HALF_WIDTH;
         const d2 = pointSegmentDistanceSq(
@@ -2409,12 +2637,12 @@ export function start(canvas: HTMLCanvasElement): void {
     if (currentKey) {
       updateKey(currentKey, dt);
       if (
-        !keyHeld &&
         !currentKey.collected &&
         checkKeyPickup(currentKey, player.x, player.y)
       ) {
         currentKey.collected = true;
-        keyHeld = true;
+        keysHeld += 1;
+        sectorRoomKeys.add(currentRoom.id);
         audio.play.pickupGrab("hp");
         addFloatingText(
           floatingTexts,
@@ -2485,6 +2713,21 @@ export function start(canvas: HTMLCanvasElement): void {
       playerOverlapsDoor(currentRoom.backDoor, player.x, player.y, half)
     ) {
       transitionToRoom(currentRoom.prevRoomId, true);
+    }
+    // Extra forward exits (hub rooms with multiple non-back doors).
+    // Each is forward navigation, not viaBack. Cooldown shared with
+    // main door + backDoor so a single doorEnterCooldown still gates
+    // all entries on a fresh transition.
+    if (
+      state.doorEnterCooldown <= 0 &&
+      currentRoom.extraExits
+    ) {
+      for (const exit of currentRoom.extraExits) {
+        if (exit.door.state !== "open") continue;
+        if (!playerOverlapsDoor(exit.door, player.x, player.y, half)) continue;
+        transitionToRoom(exit.nextRoomId);
+        break; // one transition per frame
+      }
     }
 
     // follow camera — always centred on the player. Runs even on
@@ -2586,6 +2829,9 @@ export function start(canvas: HTMLCanvasElement): void {
     drawWallOverlay(ctx, wallFx, currentRoom.walls);
     if (currentRoom.door) drawDoor(ctx, currentRoom.door);
     if (currentRoom.backDoor) drawDoor(ctx, currentRoom.backDoor);
+    if (currentRoom.extraExits) {
+      for (const exit of currentRoom.extraExits) drawDoor(ctx, exit.door);
+    }
     // World-space signage (e.g. "INFECTED ZONE") — drawn over walls
     // and the floor but under entities so the player + bullets pass
     // on top. `scramble` labels run the alien-glyphs intro + glitch
@@ -2624,6 +2870,144 @@ export function start(canvas: HTMLCanvasElement): void {
       }
     }
     perfEnd("walls");
+
+    // Pulsing Heart — drawn between floor and entities.
+    if (currentRoom.heartMechanic) {
+      const cfg = currentRoom.heartMechanic;
+      const hAge = heartAge;
+
+      // Lub-dub heartbeat rhythm ~75 BPM (period 0.8 s).
+      // Два острых пика — "lub" на 0, "dub" на 0.22 s.
+      const beatPeriod = 0.8;
+      const ph = ((hAge % beatPeriod) + beatPeriod) % beatPeriod;
+      const lub = Math.max(0, 1 - ph / 0.09);
+      const dub = Math.max(0, 1 - Math.abs(ph - 0.22) / 0.07);
+      const beat = Math.max(lub, dub);
+
+      // Углы вращения трёх слоёв.
+      const rot0 = hAge * 0.16;              // внешний — медленно по часовой
+      const rot1 = -hAge * 0.25 + Math.PI / 6; // средний — против часовой
+      const rot2 = hAge * 0.40;              // внутренний — быстрее по часовой
+
+      const alive = !heartComplete;
+      const baseA = alive ? 1 : 0.18;
+
+      // Inner radial glow — пульсирует вместе с биением.
+      ctx.save();
+      const glowR = 28 * (1 + beat * 0.18);
+      const grd = ctx.createRadialGradient(cfg.x, cfg.y, 0, cfg.x, cfg.y, glowR);
+      grd.addColorStop(0, `rgba(255, 45, 85, ${(0.75 + beat * 0.25) * baseA})`);
+      grd.addColorStop(0.5, `rgba(160, 8, 30, ${0.4 * baseA})`);
+      grd.addColorStop(1, "rgba(80, 0, 20, 0)");
+      ctx.fillStyle = grd;
+      ctx.globalAlpha = 1;
+      ctx.beginPath();
+      ctx.arc(cfg.x, cfg.y, glowR, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+
+      // Три вращающихся гексагона.
+      const drawRotHex = (
+        baseR: number,
+        rot: number,
+        color: string,
+        alpha: number,
+        lw: number,
+      ) => {
+        const r = baseR * (1 + beat * 0.07);
+        ctx.save();
+        ctx.strokeStyle = color;
+        ctx.globalAlpha = Math.min(1, (alpha + beat * 0.18) * baseA);
+        ctx.lineWidth = lw;
+        ctx.shadowColor = color;
+        ctx.shadowBlur = lw * 4;
+        ctx.beginPath();
+        for (let vi = 0; vi < 6; vi++) {
+          const a = rot + (vi * Math.PI) / 3;
+          const hx = cfg.x + Math.cos(a) * r;
+          const hy = cfg.y + Math.sin(a) * r;
+          if (vi === 0) ctx.moveTo(hx, hy);
+          else ctx.lineTo(hx, hy);
+        }
+        ctx.closePath();
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+        ctx.restore();
+      };
+
+      drawRotHex(54, rot0, "#ff2d55", 0.70, 2.8);
+      drawRotHex(38, rot1, "#ff5577", 0.55, 1.8);
+      drawRotHex(23, rot2, "#ff1744", 0.50, 1.2);
+
+      // Pulse rings — glow (широкий + прозрачный) + кромка (тонкий + яркий).
+      // shadowBlur на больших дугах = уничтожение FPS, используем два слоя
+      // с разными lineWidth/alpha вместо него.
+      {
+        const maxFade = cfg.pulseOrbitRadius * 2.4;
+        for (const ring of heartPulseRings) {
+          const fade = 1 - ring.r / maxFade;
+          if (fade <= 0.01) continue; // уже фильтруется в update, страховка
+          ctx.save();
+          ctx.strokeStyle = "#ff2d55";
+          // Широкий мягкий glow
+          ctx.globalAlpha = fade * 0.20;
+          ctx.lineWidth = 14;
+          ctx.beginPath();
+          ctx.arc(cfg.x, cfg.y, ring.r, 0, Math.PI * 2);
+          ctx.stroke();
+          // Яркая тонкая кромка — без shadowBlur
+          ctx.globalAlpha = fade * 0.70;
+          ctx.lineWidth = 1.5;
+          ctx.beginPath();
+          ctx.arc(cfg.x, cfg.y, ring.r, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.restore();
+        }
+      }
+
+      // Зона регистрации — анимированная пунктирная линия + прогресс-дуга.
+      if (alive) {
+        ctx.save();
+        // Вращающийся пунктир.
+        const dashOff = (hAge * 35) % 20;
+        ctx.strokeStyle = "#00e5ff";
+        ctx.globalAlpha = 0.28 + beat * 0.12;
+        ctx.lineWidth = 1.2;
+        ctx.setLineDash([4, 6]);
+        ctx.lineDashOffset = -dashOff;
+        ctx.beginPath();
+        ctx.arc(cfg.x, cfg.y, cfg.registrationRadius, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.lineDashOffset = 0;
+
+        // Прогресс-дуга.
+        const frac = heartProgress / cfg.registrationGoalSec;
+        if (frac > 0) {
+          const endAngle = -Math.PI / 2 + frac * Math.PI * 2;
+          ctx.strokeStyle = "#00e5ff";
+          ctx.globalAlpha = 0.9;
+          ctx.lineWidth = 3.5;
+          ctx.shadowColor = "#00e5ff";
+          ctx.shadowBlur = 12;
+          ctx.beginPath();
+          ctx.arc(cfg.x, cfg.y, cfg.registrationRadius + 8, -Math.PI / 2, endAngle);
+          ctx.stroke();
+          ctx.shadowBlur = 0;
+          // Маленькая точка на конце дуги.
+          const dotX = cfg.x + Math.cos(endAngle) * (cfg.registrationRadius + 8);
+          const dotY = cfg.y + Math.sin(endAngle) * (cfg.registrationRadius + 8);
+          ctx.fillStyle = "#00e5ff";
+          ctx.shadowColor = "#00e5ff";
+          ctx.shadowBlur = 8;
+          ctx.beginPath();
+          ctx.arc(dotX, dotY, 3.5, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.shadowBlur = 0;
+        }
+        ctx.restore();
+      }
+    }
 
     // detection rings (drawn under everything so they read as a
     // ground-level radar pulse, not an overlay on top of the enemy)
@@ -2829,6 +3213,16 @@ export function start(canvas: HTMLCanvasElement): void {
         player.y + 80,
       );
     }
+    if (hubThoughtTriggered && currentRoom.id === "infected-hub") {
+      drawScrambleText(
+        ctx,
+        HUB_THOUGHT_TEXT,
+        hubThoughtAge,
+        hubThoughtSchedule,
+        player.x,
+        player.y + 80,
+      );
+    }
 
     // Death cinematic draws in world space so it tracks the player's
     // last position even in scrolling rooms.
@@ -2841,6 +3235,87 @@ export function start(canvas: HTMLCanvasElement): void {
     editorCanvas?.draw(ctx);
 
     ctx.restore();
+
+    // Тёмный оверлей с радиусом свечения вокруг ГГ — infected sector + room1.
+    if (HUB_ZONE.has(currentRoom.id) || currentRoom.id === "room1" || currentRoom.id === "room5") {
+      const visR = currentRoom.sleepingChamber?.visibilityRadius ?? 270;
+      const px = (player.x - camera.x) * scale + offsetX;
+      const py = (player.y - camera.y) * scale + offsetY;
+      const vr = visR * scale;
+
+      // Мигание — имитация отключения электричества: серия быстрых вспышек.
+      // sin(t * π * 8) даёт 4 цикла on/off за CHAMBER_FLICKER_DURATION секунд.
+      let darkness = 0.94;
+      if (chamberFlickerAge >= 0) {
+        const ft = chamberFlickerAge / CHAMBER_FLICKER_DURATION;
+        darkness = Math.sin(ft * Math.PI * 8) > 0 ? 0.10 : 0.94;
+      }
+
+      ctx.save();
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+      // Шаг 1: сплошная тёмная заливка СНАРУЖИ мягкого радиуса.
+      // Используем even-odd с чуть меньшим радиусом (innerR), чтобы
+      // оставить место для градиентного перехода.
+      const innerR = vr * 0.52;
+      const outerR = vr * 1.10;
+      ctx.beginPath();
+      ctx.rect(0, 0, viewW, viewH);
+      ctx.arc(px, py, outerR, 0, Math.PI * 2, true);
+      ctx.fillStyle = `rgba(5, 0, 12, ${darkness})`;
+      ctx.fill("evenodd");
+
+      // Шаг 2: мягкий градиентный переход innerR → outerR.
+      const edgeGrad = ctx.createRadialGradient(px, py, innerR, px, py, outerR);
+      edgeGrad.addColorStop(0,    `rgba(5, 0, 12, 0)`);
+      edgeGrad.addColorStop(0.25, `rgba(5, 0, 12, ${darkness * 0.12})`);
+      edgeGrad.addColorStop(0.55, `rgba(5, 0, 12, ${darkness * 0.50})`);
+      edgeGrad.addColorStop(0.80, `rgba(5, 0, 12, ${darkness * 0.82})`);
+      edgeGrad.addColorStop(1,    `rgba(5, 0, 12, ${darkness})`);
+      ctx.fillStyle = edgeGrad;
+      ctx.beginPath();
+      ctx.arc(px, py, outerR, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.restore();
+
+      // Свечение босса поверх тёмного слоя — пульсирующий ореол
+      // вокруг Sentinel, цвет меняется по фазам.
+      if (currentRoom.id === "room5") {
+        const sentinel = findSentinel();
+        if (sentinel && !sentinel.isDead()) {
+          const PHASE_GLOW: Record<1 | 2 | 3, string> = {
+            1: "#ff3344",
+            2: "#ff5511",
+            3: "#ff2266",
+          };
+          const glowColor = PHASE_GLOW[sentinel.bossPhase];
+          // Позиция Sentinel в screen space.
+          const sx = (sentinel.x - camera.x) * scale + offsetX;
+          const sy = (sentinel.y - camera.y) * scale + offsetY;
+          const baseR = 130 * scale; // ≈ радиус внешнего кольца босса
+          // Пульсация: медленный sin + beat от bossPhase.
+          const t = performance.now() / 1000;
+          const pulse = 0.5 + 0.5 * Math.sin(t * 1.8 + sentinel.bossPhase * 1.1);
+          const glowR = baseR * (1.6 + pulse * 0.35);
+          ctx.save();
+          ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+          const g = ctx.createRadialGradient(sx, sy, baseR * 0.5, sx, sy, glowR);
+          // Парсим hex-цвет → rgb для rgba().
+          const rc = parseInt(glowColor.slice(1, 3), 16);
+          const gc2 = parseInt(glowColor.slice(3, 5), 16);
+          const bc = parseInt(glowColor.slice(5, 7), 16);
+          g.addColorStop(0, `rgba(${rc},${gc2},${bc},${0.18 + pulse * 0.14})`);
+          g.addColorStop(0.5, `rgba(${rc},${gc2},${bc},${0.07 + pulse * 0.06})`);
+          g.addColorStop(1, `rgba(${rc},${gc2},${bc},0)`);
+          ctx.fillStyle = g;
+          ctx.beginPath();
+          ctx.arc(sx, sy, glowR, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
+        }
+      }
+    }
 
     // room placeholder text
     if (currentRoom.message) {
@@ -3083,15 +3558,13 @@ export function start(canvas: HTMLCanvasElement): void {
     const roomNum =
       currentRoom.id === "room1"
         ? 1
-        : currentRoom.id === "room3"
+        : currentRoom.id === "infected-hub" ||
+            currentRoom.id === "infected-hub-top" ||
+            currentRoom.id === "infected-hub-bottom"
           ? 2
-          : currentRoom.id === "room2"
+          : isBoss
             ? 3
-            : currentRoom.id === "room4"
-              ? 4
-              : isBoss
-                ? 5
-                : ROOM_TOTAL;
+            : ROOM_TOTAL;
     const roomY = heartsY + 34;
     ctx.globalAlpha = 0.65;
     ctx.font = "500 13px ui-monospace, SFMono-Regular, Menlo, monospace";
@@ -3136,15 +3609,21 @@ export function start(canvas: HTMLCanvasElement): void {
     }
 
     // Key indicator (top-right). Shown only on rooms whose door
-    // requiresKey, so 1-3 stay clean.
+    // requiresKey, so rooms without locked doors stay clean. For
+    // multi-key doors (infected hub east, 2 keys), the row grows
+    // left so all slots fit under the same right anchor.
     if (currentRoom.door?.requiresKey) {
-      const kx = viewW - 40;
+      const required = currentRoom.door.keysRequired ?? 1;
+      const slotSpacing = 18;
       const ky = 26;
-      drawKeyHudIcon(ctx, kx, ky, keyHeld);
-      ctx.fillStyle = keyHeld ? "#ffd60a" : "rgba(255, 214, 10, 0.55)";
+      // Anchor: right-most slot at viewW - 40; leftmost shifts left.
+      const kx = viewW - 40 - (required - 1) * slotSpacing;
+      drawKeyHudIcon(ctx, kx, ky, keysHeld, required);
+      ctx.fillStyle =
+        keysHeld >= required ? "#ffd60a" : "rgba(255, 214, 10, 0.55)";
       ctx.font = "500 11px ui-monospace, SFMono-Regular, Menlo, monospace";
       ctx.textAlign = "right";
-      ctx.fillText(keyHeld ? "1 / 1" : "0 / 1", viewW - 20, ky + 14);
+      ctx.fillText(`${keysHeld} / ${required}`, viewW - 20, ky + 14);
     }
 
     ctx.restore();

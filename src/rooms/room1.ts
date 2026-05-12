@@ -140,7 +140,7 @@ export function buildRoom1(): Room {
       "closed",
       true, // requiresKey
     ),
-    nextRoomId: "room3",
+    nextRoomId: "infected-hub",
     spawnX: SPAWN_X,
     spawnY: DOOR_CENTER_Y,
     width: ROOM_W,
