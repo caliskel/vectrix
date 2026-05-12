@@ -93,4 +93,11 @@ export type Room = {
    *  (so the player and bullets pass on top). Used by Room 1 for the
    *  INFECTED ZONE signage. */
   worldLabels?: WorldLabel[];
+  /** Additional forward exits beyond the main `door`. Used by hub
+   *  rooms (e.g. infected sector hub) that have multiple non-back
+   *  exits — top + bottom doors leading to side-rooms. Each entry
+   *  pairs a Door with the room id it leads to. rooms-game checks
+   *  overlap against each in the same pass as `door` and `backDoor`,
+   *  transitioning forward (not viaBack) when triggered. */
+  extraExits?: Array<{ door: Door; nextRoomId: string }>;
 };

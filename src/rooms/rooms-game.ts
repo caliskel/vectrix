@@ -1623,6 +1623,11 @@ export function start(canvas: HTMLCanvasElement): void {
     if (currentRoom.backDoor && currentRoom.backDoor.state === "open") {
       currentRoom.backDoor.pulse += dt;
     }
+    if (currentRoom.extraExits) {
+      for (const exit of currentRoom.extraExits) {
+        if (exit.door.state === "open") exit.door.pulse += dt;
+      }
+    }
 
     if (state.runState === "failed" || state.runState === "completed") {
       if (state.hitVignette > 0) {
@@ -2488,6 +2493,21 @@ export function start(canvas: HTMLCanvasElement): void {
     ) {
       transitionToRoom(currentRoom.prevRoomId, true);
     }
+    // Extra forward exits (hub rooms with multiple non-back doors).
+    // Each is forward navigation, not viaBack. Cooldown shared with
+    // main door + backDoor so a single doorEnterCooldown still gates
+    // all entries on a fresh transition.
+    if (
+      state.doorEnterCooldown <= 0 &&
+      currentRoom.extraExits
+    ) {
+      for (const exit of currentRoom.extraExits) {
+        if (exit.door.state !== "open") continue;
+        if (!playerOverlapsDoor(exit.door, player.x, player.y, half)) continue;
+        transitionToRoom(exit.nextRoomId);
+        break; // one transition per frame
+      }
+    }
 
     // follow camera — always centred on the player. Runs even on
     // the failed-overlay branch since the eye still updates there
@@ -2588,6 +2608,9 @@ export function start(canvas: HTMLCanvasElement): void {
     drawWallOverlay(ctx, wallFx, currentRoom.walls);
     if (currentRoom.door) drawDoor(ctx, currentRoom.door);
     if (currentRoom.backDoor) drawDoor(ctx, currentRoom.backDoor);
+    if (currentRoom.extraExits) {
+      for (const exit of currentRoom.extraExits) drawDoor(ctx, exit.door);
+    }
     // World-space signage (e.g. "INFECTED ZONE") — drawn over walls
     // and the floor but under entities so the player + bullets pass
     // on top. `scramble` labels run the alien-glyphs intro + glitch
