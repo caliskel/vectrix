@@ -408,6 +408,18 @@ export function createEditorUI(config: EditorUIConfig): EditorUIHandle {
   divider.className = "dp-ed-tool-divider";
   toolbar.appendChild(divider);
 
+  // Room properties (width / height / spawn / id / nextRoomId) live
+  // on the Room pseudo-entity — there's no canvas target to click,
+  // so an explicit button selects it. Doesn't change the active tool
+  // so a stamp / wall workflow isn't interrupted.
+  const roomBtn = document.createElement("button");
+  roomBtn.className = "dp-ed-tool-btn";
+  roomBtn.textContent = "Room properties";
+  roomBtn.addEventListener("click", () => {
+    editor.setSelection({ kind: "room" });
+  });
+  toolbar.appendChild(roomBtn);
+
   const snapBtn = document.createElement("button");
   snapBtn.className = "dp-ed-tool-btn active";
   snapBtn.dataset.snap = "on";
