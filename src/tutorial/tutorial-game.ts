@@ -153,6 +153,7 @@ import {
   drawWallOverlay,
   drawWalls,
   findContainingWall,
+  raycastWalls,
   resolvePlayerWallCollisions,
   updateWallFx,
   type Wall,
@@ -240,66 +241,6 @@ const LASER_CHEVRON_SPACING_PX = 220; // density-based; one chevron per N px
 const LASER_CHEVRON_SPEED = 200; // px/s along the beam
 const LASER_CHEVRON_SIZE = 7;
 const LASER_IMPACT_RADIUS = 8;
-const LASER_RAYCAST_FALLBACK = 4000; // far enough to leave any plausible room
-
-// Cast a ray from (ox, oy) along `angle` and return the first wall AABB
-// intersection. Each wall contributes the standard slab-test t-interval;
-// the laser stops at the smallest positive t. Watcher always lives
-// inside the walled room so a hit is guaranteed in practice; the
-// fallback keeps the math defined if a ray ever escapes.
-function raycastWalls(
-  ox: number,
-  oy: number,
-  angle: number,
-  walls: Wall[],
-): { x: number; y: number } {
-  const cosA = Math.cos(angle);
-  const sinA = Math.sin(angle);
-  let bestT = Infinity;
-  for (const w of walls) {
-    const x1 = w.x;
-    const x2 = w.x + w.w;
-    const y1 = w.y;
-    const y2 = w.y + w.h;
-
-    let txMin: number;
-    let txMax: number;
-    if (Math.abs(cosA) < 1e-9) {
-      if (ox < x1 || ox > x2) continue;
-      txMin = -Infinity;
-      txMax = Infinity;
-    } else {
-      const tA = (x1 - ox) / cosA;
-      const tB = (x2 - ox) / cosA;
-      txMin = Math.min(tA, tB);
-      txMax = Math.max(tA, tB);
-    }
-
-    let tyMin: number;
-    let tyMax: number;
-    if (Math.abs(sinA) < 1e-9) {
-      if (oy < y1 || oy > y2) continue;
-      tyMin = -Infinity;
-      tyMax = Infinity;
-    } else {
-      const tA = (y1 - oy) / sinA;
-      const tB = (y2 - oy) / sinA;
-      tyMin = Math.min(tA, tB);
-      tyMax = Math.max(tA, tB);
-    }
-
-    const tEnter = Math.max(txMin, tyMin);
-    const tExit = Math.min(txMax, tyMax);
-    if (tEnter > tExit) continue;
-    if (tExit < 1e-6) continue;
-    // origin can be just inside a wall (Watcher near a wall); pick the
-    // exit if entry is non-positive
-    const t = tEnter > 1e-6 ? tEnter : tExit;
-    if (t < bestT) bestT = t;
-  }
-  if (!isFinite(bestT)) bestT = LASER_RAYCAST_FALLBACK;
-  return { x: ox + cosA * bestT, y: oy + sinA * bestT };
-}
 
 function refreshLaserEndpoints(lasers: Laser[], walls: Wall[]): void {
   for (const l of lasers) {

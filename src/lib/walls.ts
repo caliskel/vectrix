@@ -132,6 +132,99 @@ export function bounceBulletOffWalls(
   return false;
 }
 
+// Far enough to leave any plausible room — used by `raycastWalls` when
+// the ray escapes the room geometry (defensive; in normal play every
+// laser origin sits inside the walled arena so this never trips).
+export const LASER_RAYCAST_FALLBACK = 4000;
+
+/**
+ * Cast a ray from (ox, oy) along `angle` and return the first wall AABB
+ * intersection. Each wall contributes the standard slab-test t-interval;
+ * the ray stops at the smallest positive t. Returns the fallback point
+ * along the ray when no wall is hit (origin can sit just inside a wall;
+ * the function prefers the exit if entry is non-positive).
+ *
+ * Used by laser endpoint refresh in rooms-game / tutorial-game.
+ */
+export function raycastWalls(
+  ox: number,
+  oy: number,
+  angle: number,
+  walls: Wall[],
+): { x: number; y: number } {
+  const cosA = Math.cos(angle);
+  const sinA = Math.sin(angle);
+  let bestT = Infinity;
+  for (const w of walls) {
+    const x1 = w.x;
+    const x2 = w.x + w.w;
+    const y1 = w.y;
+    const y2 = w.y + w.h;
+
+    let txMin: number;
+    let txMax: number;
+    if (Math.abs(cosA) < 1e-9) {
+      if (ox < x1 || ox > x2) continue;
+      txMin = -Infinity;
+      txMax = Infinity;
+    } else {
+      const tA = (x1 - ox) / cosA;
+      const tB = (x2 - ox) / cosA;
+      txMin = Math.min(tA, tB);
+      txMax = Math.max(tA, tB);
+    }
+
+    let tyMin: number;
+    let tyMax: number;
+    if (Math.abs(sinA) < 1e-9) {
+      if (oy < y1 || oy > y2) continue;
+      tyMin = -Infinity;
+      tyMax = Infinity;
+    } else {
+      const tA = (y1 - oy) / sinA;
+      const tB = (y2 - oy) / sinA;
+      tyMin = Math.min(tA, tB);
+      tyMax = Math.max(tA, tB);
+    }
+
+    const tEnter = Math.max(txMin, tyMin);
+    const tExit = Math.min(txMax, tyMax);
+    if (tEnter > tExit) continue;
+    if (tExit < 1e-6) continue;
+    const t = tEnter > 1e-6 ? tEnter : tExit;
+    if (t < bestT) bestT = t;
+  }
+  if (!isFinite(bestT)) bestT = LASER_RAYCAST_FALLBACK;
+  return { x: ox + cosA * bestT, y: oy + sinA * bestT };
+}
+
+/**
+ * True if any wall lies between (ox, oy) and (tx, ty). Used for LOS
+ * checks (e.g., Watcher gaze stack — wall between Watcher's eye and
+ * the player breaks line of sight).
+ *
+ * Implementation: cast a ray along the segment angle, compare the wall
+ * hit distance with the segment length. A wall closer than the target
+ * blocks the segment. Epsilon (1 px) avoids false positives when origin
+ * sits just inside a wall (rarely happens but defends against it).
+ */
+export function isSegmentBlocked(
+  ox: number,
+  oy: number,
+  tx: number,
+  ty: number,
+  walls: Wall[],
+): boolean {
+  const dx = tx - ox;
+  const dy = ty - oy;
+  const targetDist = Math.hypot(dx, dy);
+  if (targetDist < 1) return false;
+  const angle = Math.atan2(dy, dx);
+  const hit = raycastWalls(ox, oy, angle, walls);
+  const hitDist = Math.hypot(hit.x - ox, hit.y - oy);
+  return hitDist + 1 < targetDist;
+}
+
 // True if the bullet's center sits inside any wall's AABB. Returns the
 // hit wall so callers can spawn an impact ripple at the contact point.
 export function bulletInsideWall(
