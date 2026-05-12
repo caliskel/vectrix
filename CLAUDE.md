@@ -85,17 +85,24 @@ src/
   rooms/
     main.ts           — entry; locates #app and calls start()
     rooms-game.ts     — campaign engine; locks behind the tutorial and
-                        currently runs Room 1 (corridor) + Room 2
-                        (narrow trap) + Room 3 (arena) + Room 4
-                        (long phase corridor) + Room 5 (boss
+                        runs Room 1 (corridor) → infected-hub (hub
+                        arena + 2 side-rooms) → Room 5 (boss
                         Sentinel). Build files are room1.ts /
-                        room2.ts (arena content) / room3.ts (trap
-                        content) / room4.ts / room5.ts; the
-                        campaign order chains room1 → room3 →
-                        room2 → room4 → room5. The boss-death
-                        sequence flips runState to "completed" and
-                        shows the Game Complete DOM overlay.
-    room1.ts / room2.ts / room3.ts / room4.ts / room5.ts
+                        infected-hub.ts / infected-hub-top.ts /
+                        infected-hub-bottom.ts / room5.ts. The
+                        boss-death sequence flips runState to
+                        "completed" and shows the Game Complete
+                        DOM overlay.
+    room1.ts          — infected corridor (3600×600, ambient bullets,
+                        dashable gates, single-key door → hub)
+    infected-hub.ts   — hub arena (1600×1200, 2 Watchers, ambient
+                        bullets, 3-exit: top/bottom → side-rooms,
+                        east 2-key → boss)
+    infected-hub-top.ts — Pulsing Heart (1200×800, 1 Watcher,
+                        hex structure, 5 s registration → key)
+    infected-hub-bottom.ts — Sleeping Chamber (1200×800, 2 Watchers
+                        reduced detection, dark maze, pre-placed key)
+    room5.ts          — boss Sentinel (1600×1200)
   tutorial/
     main.ts           — entry for /tutorial.html
     tutorial-game.ts  — fork of rooms-game with tutorial-specific HUD,
@@ -743,144 +750,97 @@ instead of advancing.
 
 ## Campaign rooms (`rooms.html`)
 
-The campaign now runs **Room 1 → Room 2 → Room 3 → Room 4 →
-Room 5 (boss)**. HUD shows `ROOM N / 5`; the boss room's label
-flips to `5 / 5 — BOSS` in red. The Game Complete DOM overlay
-appears after the boss-death sequence; there's no further room
-to step into. On launch the engine checks
+The campaign runs **Room 1 → Infected Hub → Room 5 (boss)**.
+HUD shows `ROOM N / 3`; the boss room's label flips to
+`3 / 3 — BOSS` in red. The Game Complete DOM overlay appears
+after the boss-death sequence. On launch the engine checks
 `localStorage["dash-proto:tutorial-completed"]` — if absent,
-it renders a "STORY MODE LOCKED" full-page overlay with a CTA
-that links straight to `/tutorial.html`, and never starts the
-game loop.
+it renders a "STORY MODE LOCKED" overlay with a CTA to
+`/tutorial.html`.
 
-### Room 1 — corridor
+**Dark atmosphere** — all campaign rooms (room1, infected-hub,
+infected-hub-top, infected-hub-bottom, room5) render a radial
+visibility overlay: soft-edged dark mask with a ~270 px glow
+radius around the player. Power-flicker effect triggers every
+3–8 s (4 rapid on/off pulses, 0.45 s total). Controlled by a
+single condition in `rooms-game.ts` — trivial to disable per
+room.
 
-Long horizontal corridor — first room that needs the follow camera.
+**Hero thoughts** — scramble-text monologue anchored under the
+player (world space). "how do i do this?" on first campaign
+entry (from tutorial). "why is it so dark here?" on first
+entry into infected-hub. Both are one-shot per run.
 
-- World is 3600×600 (3× viewport width, taller than tall enough
-  to make camera scroll the only practical view). `useCamera =
-  true`, `width / height` set so `roomBounds()` returns the right
-  clamp. Camera is centered on the player; vertical clamp folds
-  the 600-tall world into the 800-tall canonical viewport with
-  100 px of letterbox-internal padding above and below.
-- Player spawns at (200, 300). Three **Turret**s at (900, 300),
-  (1900, 300), (2900, 300) and one **Watcher** at (3300, 300).
-  Three short pillar walls (60×120) at (1100, 280), (1900, 100),
-  (2700, 360) force weaving / dashing through. The Watcher slides
-  along walls and pillars via `resolveEntityWallCollisions` (it's
-  no longer the clip-through eye it used to be).
-- The third turret has `dropsKey = true` — its kill spawns a Key
-  at the kill site. Door at (3570, 300) is `requiresKey: true`;
-  it opens the moment the player picks up the key, regardless of
-  whether the surviving turrets / Watcher are still alive (the
-  carrier kill is the gate, stragglers don't block the exit).
-  On unlock: door switches to "open" arrow, +5 mult-up sting,
-  → Room 2 (the trap, file `room3.ts`).
+### Room 1 — corridor (`room1.ts`)
 
-### Room 2 — narrow trap
+3600×600 infected corridor. Dashable gates bookend an ambient
+bullet field (up to 30 bouncing bullets). Three short pillars
+for cover. Single-key door at the east wall → infected-hub.
+`useCamera = true`. World label "INFECTED ZONE" scrambles in on
+first entry.
 
-Built in `room3.ts` (file id `"room3"`) but scheduled second in
-the campaign for difficulty pacing. 1200×800 with a Hunter that's
-hostile from the first frame and two crossfire turrets. The
-encounter teaches constant motion: the turret pair on (600, 150)
-/ (600, 650) carves the central horizontal so standing on the
-door's y-line catches both streams, and the Hunter's inertia
-punishes idle holds.
+### Infected Hub (`infected-hub.ts`)
 
-- **Turret #1** at (600, 150), **Turret #2** at (600, 650) —
-  vanilla Turrets (HP 2). Their bullets cross at the spawn line
-  (y = 400) so the player has to weave instead of strafing
-  along the centre.
-- **Hunter** at (900, 400) constructed with `{ startsAggressive:
-  true }`. The flag is a Hunter-ctor option that initialises
-  `awarenessState = "aggro"` and `prevAwarenessState = "aggro"`,
-  skipping the idle / alerting telegraph entirely so the chase
-  starts on entry. Hunter carries the key (`dropsKey = true`,
-  HP 1).
-- Door at (1185, 400) is `requiresKey: true`. Per the global
-  rule, it opens on the key alone — so a clean dash through
-  the Hunter (kill, pickup, exit) finishes the room without
-  ever firing on the turrets. Slower play kills turrets first
-  to open the centre, then deals with the Hunter.
-- `useCamera = true`, spawn at (150, 400). `nextRoomId =
-  "room2"` (the arena file).
+1600×1200, infected walls, `useCamera = true`. Three exits:
+- **Top door** (open, no key) → Pulsing Heart side-room.
+- **Bottom door** (open, no key) → Sleeping Chamber side-room.
+- **East door** (2-key gated, `keysRequired = 2`) → Room 5 boss.
 
-### Room 3 — arena with circular defence
+Two Watchers (Watcher 2.0) patrol; ambient bullet field. Three
+LOS-cover pillars. Dashable safe-box (3 walls) at the west
+spawn zone. Back door on west wall → room1.
 
-Built in `room2.ts` (file id `"room2"`) but scheduled third in
-the campaign — last real encounter before the Room 4 placeholder.
-1400×900 fully open arena. No internal cover; the player has to
-manage distance and angles instead of peeking around a column.
+**noisy variant** — if `state.noisySector = true` (set when a
+Watcher in Sleeping Chamber detects the player), hub rebuilds on
+re-entry with `startsAggressive = true` Watchers and ~30 %
+denser ambient bullets.
 
-- Four **Turret**s in the corners at (250, 250), (1150, 250),
-  (250, 650), (1150, 650). One **Watcher** in the centre at
-  (700, 450) with `dropsKey = true`. All enemies wake on their
-  own detection radii; the player can sneak up on individual
-  turrets if they take a wide path.
-- Bullets and the Watcher's laser still clip on perimeter walls
-  via the existing `bulletInsideWall` filter and the
-  `raycastWalls` AABB raycast — but with no interior obstacles
-  there's nothing in the room interior to clip on. Friendly fire
-  on the laser keeps working unchanged: any enemy on the beam's
-  segment takes a hit, including for-free turret kills when the
-  player lines the Watcher up with a corner.
-- The Watcher carries the key — its kill spawns a Key in the
-  centre. Door at (1385, 450) is `requiresKey: true` and opens
-  on the key alone (the corner turrets can stay alive — the
-  Watcher kill is the gate). `useCamera = true` (1400×900 ≥
-  1200×800 viewport letterbox). Spawn at (200, 450). `nextRoomId
-  = "room4"` (long phase corridor).
-- If the open layout reads as too punishing later, dropping one
-  or two 50×200 columns back near the centre is the cheapest
-  next step; the bullet/laser clipping was tested with columns
-  in place and works regardless.
+**Key accumulation** — `keysHeld` and `sectorRoomKeys` persist
+across all three hub-zone rooms. `sectorRoomKeys: Set<string>`
+prevents re-spawning keys already collected this run (both
+`initialKey` floor pickups and the heart mechanic key).
 
-### Room 4 — long phase corridor
+### Pulsing Heart (`infected-hub-top.ts`, id `"infected-hub-top"`)
 
-8000×700 corridor split into 6 sections (~1300 px each) by 30 px
-**dashable** dividers. Lazy spawns drop one phase-through Hunter
-into each section as the player crosses in, and the key is
-pre-placed on the floor in section 4 instead of dropping from a
-kill.
+1200×800. One aggressive Watcher. Central hex structure (three
+rotating hexagons, lub-dub heartbeat animation). Mechanic:
+stand within 65 px of center for 5 s cumulative → key spawns.
 
-- **Section dividers** sit at x = 1300, 2600, 3900, 5200, 6500
-  (full ROOM_H tall, `dashable: true`). The new
-  `Wall.dashable` flag is filtered out of the player's wall list
-  while `dashIframeTime > 0` (rooms-game's `wallsForPlayer`),
-  and `drawWalls` paints dashable walls with a cyan dashed
-  outline so the dash colour reads as "phase through" without
-  copy. Bullets, lasers, and non-phasing enemies still treat
-  dashable walls as solid — the filter is player-only.
-- **Pending hunters** live in `Room.pendingEnemies`, a new
-  field on the Room type. Each entry is `{ triggerX, spawned,
-  spawn() }`; rooms-game ticks the list every frame after the
-  awareness pass and pushes a fresh enemy into
-  `currentRoom.enemies` the moment `player.x ≥ triggerX`.
-  Room 4's six entries fire at triggers 0 / 1340 / 2640 / 3940 /
-  5240 / 6540 with hunters spawning at the section's far end
-  (1100 / 2400 / 3700 / 5000 / 6300 / 7700, all y = 350). Each
-  Hunter is constructed with `{ startsAggressive: true,
-  ignoresWalls: true }` — the new `ignoresWalls` opt skips both
-  `resolveEntityWallCollisions` calls in Hunter.update so a
-  phase-through hunter from section 1 can converge on the
-  player at the far end of the corridor.
-- **Static key** uses the new `Room.initialKey: { x, y }` field.
-  rooms-game's `applyInitialKey()` seeds `currentKey =
-  createKey(...)` on initial mount, restart, and every transition
-  into a room that carries one. Room 4 places the key at
-  (4500, 350) — middle of section 4, on the door's y-line.
-- Door at (7985, 350) is `requiresKey: true` and opens on the
-  key alone (per the global rule); leftover hunters don't block
-  the exit. `useCamera = true`, spawn at (200, 350),
-  `nextRoomId = "room5"`.
+- **Pulse rings** expand from center every 3.5 s at 160 px/s.
+  When a ring radius is within ±50 px of the Watcher's distance
+  from center, `EnemyContext.forceLosBlocked = true` is injected
+  → Watcher's gaze meter decays during that window.
+- Rings are removed when `r ≥ pulseOrbitRadius × 2.4` (visible
+  fade-out distance). **Never** let rings accumulate past the
+  fade threshold — drawing large arcs with shadowBlur destroys
+  FPS. This was a shipped bug, now fixed.
+- Progress arc (cyan, clockwise) + rotating dashed ring show
+  registration state. On completion: floating "REGISTERED" text,
+  `audio.play.multUp(5)`, key materializes.
+- World label "CHARGE THE HEART" scrambles in on entry.
+- Back door (south wall) → infected-hub.
 
-### Room 5 — Sentinel (boss)
+### Sleeping Chamber (`infected-hub-bottom.ts`, id `"infected-hub-bottom"`)
 
-1600×1200 open arena. Single enemy: a `Sentinel` at (800, 600).
-Door at (1585, 600) opens on Sentinel kill via the standard "all
-enemies dead" rule — the Game Complete overlay runs ~3 s after
-the kill, so the door rarely matters in practice. `useCamera =
-true`, spawn at (200, 600), `nextRoomId = null`.
+1200×800. Two Watchers with reduced detection radius (270 px
+instead of 700) — they can't see the player from afar in the
+dark. Maze of 7 infected walls creates two lanes toward the key
+at (1050, 650). Pre-placed key; no kill required.
+
+Dark overlay has full radial visibility effect (`visibilityRadius
+= 240 px`). If either Watcher enters alerting state → sets
+`state.noisySector = true`. Back door (north wall) → infected-hub.
+
+### Room 5 — Sentinel (boss, `room5.ts`)
+
+1600×1200 open arena. Single enemy: `Sentinel` at (800, 600).
+Door opens on kill; Game Complete overlay follows ~3 s later.
+`useCamera = true`, spawn at (200, 600), `nextRoomId = null`.
+
+**Boss glow** — after the dark overlay renders, a pulsing
+radial gradient is drawn around the Sentinel in screen space.
+Color tracks `bossPhase`: phase 1 = `#ff3344`, phase 2 =
+`#ff5511`, phase 3 = `#ff2266`. Disappears on death.
 
 The Sentinel owns its own state machine —
 `SentinelState = "intro" | "idle" | "attacking" | "dying" |
@@ -1428,58 +1388,55 @@ closed the door visual swaps the red X for a golden lock with
 a keyhole. The HUD key indicator shows `0 / 1` (dim silhouette)
 until pickup, then flips to `1 / 1` (filled gold).
 
-### Watcher (`lib/enemies/watcher.ts`)
+### Watcher 2.0 (`lib/enemies/watcher.ts`)
 
-Slow chasing eye that telegraphs a laser shot on a long beat.
-Fragile (HP 2) but dangerous at distance.
+Slow chasing eye. **Watcher 2.0** redesign: HP 5, gaze stack,
+mark-execute pierce, tracking aim, `canDeaggro = false`.
 
-- 60 px diameter — outer white ring + translucent red iris
-  (PALETTE.bullet @ 0.85α) + dark pupil + tiny highlight. Pupil
-  tracks the player smoothly during idle / cooldown and snaps to
-  the captured target during aiming / firing.
-- Movement: chases the player at 220 px/s (≈0.5× default
-  player.maxSpeed). Stops once within
-  WATCHER_RADIUS + playerHalf + 20 so it doesn't shove the player.
-  No wall collision yet — it can clip into walls (TODO).
-- State machine: idle 1.5 s → aiming 1.2 s → firing 0.25 s →
-  cooldown 0.8 s → idle. Audio cue (`audio.play.bulletBreak()`)
-  plays on aiming → firing.
-- Laser is spawned into the room's shared `lasers` array on
-  idle → aiming with `endX/endY` captured at that instant; the
-  beam doesn't follow the player. The laser self-expires after
-  chargingDuration + firingDuration.
-- **Idle behavior** — while `awarenessState === "idle"` the body
-  drifts in a slow figure-eight around `idleHomeX/Y` (sin
-  amplitudes 30 px X / 8 px Y, Y phase × 0.7 so the axes desync,
-  drift period ≈ 7.8 s) and the pupil runs an idle-look pass:
-  every 1–2 s pick a new offset (60 % near, 30 % mid, 10 % far,
-  with a 15 % chance of dead-center "looking forward") and lerp
-  toward it at `WATCHER_IDLE_PUPIL_LERP = 0.08`. On the
-  idle → alerting transition the current position is latched as
-  the new home so a future de-aggro returns to the alert spot,
-  not the spawn. During alerting the body freezes and the pupil
-  snaps to the player so the "I see you" read aligns with the
-  "!" telegraph. Drift respects walls via
-  `resolveEntityWallCollisions` (constants live in `config.ts`
-  under `WATCHER_IDLE_*`).
-- HP 2; only damage path is dash-through during the dash i-frame
-  (one damage per dash session via `dashIdAlreadyDamaged`). Outside
-  the dash i-frame, contact deals normal player damage.
-- Death: +800 score, double ring (red outer + white inner), 12
-  particles split between PALETTE.bullet and white,
-  `bulletBreak` cue. `console.log("Watcher destroyed")` for tracing.
-- **Friendly fire** — every Watcher beam carries a unique `Laser.id`
-  and the room loop checks each living non-owner enemy against the
-  beam segment during the firing window. A hit (within
-  `enemy.hitboxRadius + 8 px`) is deduped per laser via the
-  enemy's `hitByLaserId` so a single firing only credits one hit
-  per target. On a non-fatal hit the standard MEDIUM impact runs
-  (white flash, knockback along the beam, ring + particles +
-  shake + `audio.play.hitMedium()`). On a fatal hit the kill burst
-  fires (`emitEnemyKill` + score from `destroyEnemy`) and the
-  player gets a flat `FRIENDLY_FIRE_BONUS = 200` on top with a
-  "FRIENDLY FIRE" floating text — luring an enemy onto the beam
-  is intentional play, not a glitch.
+- **HP 5** (was 2). Only damage path: dash-through during i-frames
+  (1 HP per dash, deduped by dashId). Contact outside i-frames
+  deals 1 HP to the player.
+- **Gaze stack** (`gazeAtPlayer` 0..1) — fills while LOS to the
+  player is clear (wall raycast via `isSegmentBlocked`), decays
+  when broken. Fill time `WATCHER_GAZE_FILL_TIME_SEC = 2.0 s`,
+  decay `WATCHER_GAZE_DECAY_TIME_SEC = 1.0 s`. Drives "marked"
+  audio/visual intensity. External code can inject
+  `EnemyContext.forceLosBlocked = true` to force decay even with
+  clear LOS (used by Pulsing Heart pulse rings).
+- **Mark-execute pierce** — at the `aiming → firing` transition,
+  if `gazeAtPlayer >= 1.0`, `Laser.piercesIframes = true`. The
+  beam then damages the player even during dash i-frames (still
+  respects hit i-frames). Gaze resets on a successful pierce hit.
+- **Tracking aim** — during the aiming phase, the laser's
+  `aimAngle` tracks the live player position at up to
+  `WATCHER_AIM_TRACKING_RAD_PER_SEC = 1.5 rad/s`. A perpendicular
+  dash outpaces the cap and breaks the lock.
+- **`canDeaggro = false`** — once aggro'd, stays aggro forever.
+- **`startsAggressive` opt** — constructor `opts.startsAggressive`
+  skips idle/alerting, starts in aggro directly (used by the
+  noisy hub variant and the Pulsing Heart room).
+- **`startsAsleep` opt** — `opts.startsAsleep = true` sets
+  `isSleeping = true` and `detectionRadius = 0`. While sleeping:
+  the body draws as a closed-eye slit (outer ring at dim alpha,
+  dark interior, glowing eyelid slit that widens with
+  `wakeProgress`). A `disturbanceRadius` replaces standard
+  detection — player speed inside it fills `wakeProgress`
+  (dash: fills in ~0.2 s; run: ~1.5 s; walk ≤ walk-speed: safe).
+  On `wakeProgress ≥ 1` the Watcher restores full `detectionRadius`
+  and sets `justWoke = true` (rooms-game reads this to set
+  `state.noisySector`). Not currently used in Sleeping Chamber
+  (which uses reduced-detection regular Watchers instead), but
+  the infrastructure is in place.
+- **Gaze line** — `drawWatcherGazeLine()` renders a thin red thread
+  from the Watcher's pupil to the player when aggro + LOS clear.
+  Width and alpha scale with `gazeAtPlayer`; full meter flickers
+  at 8 Hz as a "marked/imminent" tell.
+- **Friendly fire** — Watcher lasers can hit other non-Watcher
+  enemies. Same-type enemies (Watcher → Watcher) are explicitly
+  skipped to prevent self-inflicted sector chaos.
+- State machine: idle 1.0 s → aiming 0.8 s → firing 0.3 s →
+  cooldown 0.5 s → idle. Audio: `watcherCharge()` on idle→aiming,
+  `watcherFire()` on aiming→firing.
 
 ### Wall collisions for moving enemies
 
