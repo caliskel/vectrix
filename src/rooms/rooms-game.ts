@@ -3278,6 +3278,43 @@ export function start(canvas: HTMLCanvasElement): void {
       ctx.fill();
 
       ctx.restore();
+
+      // Свечение босса поверх тёмного слоя — пульсирующий ореол
+      // вокруг Sentinel, цвет меняется по фазам.
+      if (currentRoom.id === "room5") {
+        const sentinel = findSentinel();
+        if (sentinel && !sentinel.isDead()) {
+          const PHASE_GLOW: Record<1 | 2 | 3, string> = {
+            1: "#ff3344",
+            2: "#ff5511",
+            3: "#ff2266",
+          };
+          const glowColor = PHASE_GLOW[sentinel.bossPhase];
+          // Позиция Sentinel в screen space.
+          const sx = (sentinel.x - camera.x) * scale + offsetX;
+          const sy = (sentinel.y - camera.y) * scale + offsetY;
+          const baseR = 130 * scale; // ≈ радиус внешнего кольца босса
+          // Пульсация: медленный sin + beat от bossPhase.
+          const t = performance.now() / 1000;
+          const pulse = 0.5 + 0.5 * Math.sin(t * 1.8 + sentinel.bossPhase * 1.1);
+          const glowR = baseR * (1.6 + pulse * 0.35);
+          ctx.save();
+          ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+          const g = ctx.createRadialGradient(sx, sy, baseR * 0.5, sx, sy, glowR);
+          // Парсим hex-цвет → rgb для rgba().
+          const rc = parseInt(glowColor.slice(1, 3), 16);
+          const gc2 = parseInt(glowColor.slice(3, 5), 16);
+          const bc = parseInt(glowColor.slice(5, 7), 16);
+          g.addColorStop(0, `rgba(${rc},${gc2},${bc},${0.18 + pulse * 0.14})`);
+          g.addColorStop(0.5, `rgba(${rc},${gc2},${bc},${0.07 + pulse * 0.06})`);
+          g.addColorStop(1, `rgba(${rc},${gc2},${bc},0)`);
+          ctx.fillStyle = g;
+          ctx.beginPath();
+          ctx.arc(sx, sy, glowR, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
+        }
+      }
     }
 
     // room placeholder text
