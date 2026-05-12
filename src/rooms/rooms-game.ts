@@ -516,12 +516,23 @@ export function start(canvas: HTMLCanvasElement): void {
   // Per-run key state. Camera is created once and snapped to each
   // room's bounds on entry. currentKey lives at the kill site of the
   // enemy flagged dropsKey; keysHeld increments when the player
-  // walks over it. Both reset per room transition. Multi-key doors
-  // (e.g. infected hub's east main) compare keysHeld against
-  // `door.keysRequired ?? 1`.
+  // walks over it. keysHeld persists across transitions WITHIN the
+  // hub zone so side-room keys accumulate at the hub's east door.
+  // Multi-key doors (e.g. infected hub's east main) compare keysHeld
+  // against `door.keysRequired ?? 1`.
   const camera: Camera = createCamera();
   let currentKey: Key | null = null;
   let keysHeld = 0;
+
+  // Rooms that share a key-accumulation context. Transitioning
+  // between any two rooms in this set does NOT reset keysHeld so
+  // the player can collect keys from both side-rooms before the hub
+  // east door opens. Transitions into or out of this set always reset.
+  const HUB_ZONE = new Set([
+    "infected-hub",
+    "infected-hub-top",
+    "infected-hub-bottom",
+  ]);
 
   // Ambient bullet field — Room 1 fills its right half with sandbox-
   // style bouncing bullets via `Room.ambientBullets`. Initial fill
@@ -861,13 +872,20 @@ export function start(canvas: HTMLCanvasElement): void {
     }
     const next = rooms.get(id);
     if (!next) return;
+    // Capture before currentRoom is overwritten — needed for hub-zone check.
+    const prevRoomId = currentRoom.id;
     currentRoom = next;
     bullets = [];
     rings = [];
     floatingTexts = [];
     lasers = [];
     currentKey = null;
-    keysHeld = 0;
+    // Preserve keysHeld when staying within the hub zone so keys from
+    // both side-rooms accumulate at the east door. Reset for any
+    // transition that enters or exits the zone.
+    if (!(HUB_ZONE.has(prevRoomId) && HUB_ZONE.has(id))) {
+      keysHeld = 0;
+    }
     ambientSpawnTimer = 0;
     ambientInitialFillDone = false;
     worldLabelAge = 0;
@@ -1925,6 +1943,23 @@ export function start(canvas: HTMLCanvasElement): void {
         ? player.y > backDoor.y - backDoor.h / 2 - half &&
           player.y < backDoor.y + backDoor.h / 2 + half
         : false;
+    const roomH = currentRoom.height ?? ROOM_H_PX;
+    const inTopExitX =
+      currentRoom.extraExits?.some(
+        (ex) =>
+          ex.door.state === "open" &&
+          ex.door.y < PERIMETER_T * 2 &&
+          player.x > ex.door.x - ex.door.w / 2 - half &&
+          player.x < ex.door.x + ex.door.w / 2 + half,
+      ) ?? false;
+    const inBottomExitX =
+      currentRoom.extraExits?.some(
+        (ex) =>
+          ex.door.state === "open" &&
+          ex.door.y > roomH - PERIMETER_T * 2 &&
+          player.x > ex.door.x - ex.door.w / 2 - half &&
+          player.x < ex.door.x + ex.door.w / 2 + half,
+      ) ?? false;
     if (player.x < minX && !inBackDoorY) {
       player.x = minX;
       if (player.vx < 0) {
@@ -1933,7 +1968,7 @@ export function start(canvas: HTMLCanvasElement): void {
       }
       player.vx = 0;
     }
-    if (player.y < minY) {
+    if (player.y < minY && !inTopExitX) {
       player.y = minY;
       if (player.vy < 0) {
         const s = triggerPlayerSmash(player, 0, 1, -player.vy);
@@ -1949,7 +1984,7 @@ export function start(canvas: HTMLCanvasElement): void {
       }
       player.vx = 0;
     }
-    if (player.y > maxY) {
+    if (player.y > maxY && !inBottomExitX) {
       player.y = maxY;
       if (player.vy > 0) {
         const s = triggerPlayerSmash(player, 0, -1, player.vy);
@@ -2230,6 +2265,7 @@ export function start(canvas: HTMLCanvasElement): void {
       for (const e of currentRoom.enemies) {
         if (e.isDead()) continue;
         if (e === l.ownerEnemy) continue;
+        if (e.type === l.ownerEnemy.type) continue;
         if (e.hitByLaserId === l.id) continue;
         const reach = e.hitboxRadius + LASER_FRIENDLY_FIRE_HALF_WIDTH;
         const d2 = pointSegmentDistanceSq(

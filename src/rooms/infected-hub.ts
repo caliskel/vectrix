@@ -113,15 +113,18 @@ export function buildInfectedHub(opts: { noisy: boolean }): Room {
     false,
   );
 
-  // Two Watchers — patrol positions chosen so their idle drift home
-  // sits a safe margin from pillars (no walking-into-pillar lockup).
-  // In noisy mode they skip idle drift and start chasing immediately.
+  // Two Watchers — patrol positions chosen so idle-drift home is:
+  //  a) > 700 px from player spawn (150, 600) so they read as
+  //     "peaceful" for ~2 s before detection, and
+  //  b) clear of all pillars (no walking-into-pillar lockup).
+  // Watcher 1 at (900, 350): spawn dist ≈ 790 px. Clear of all three pillars.
+  // Watcher 2 at (1100, 850): spawn dist ≈ 990 px. Below pillar-2's bbox.
   const watcher1 = opts.noisy
-    ? new Watcher(800, 450, { startsAggressive: true })
-    : new Watcher(800, 450);
+    ? new Watcher(900, 350, { startsAggressive: true })
+    : new Watcher(900, 350);
   const watcher2 = opts.noisy
-    ? new Watcher(1000, 800, { startsAggressive: true })
-    : new Watcher(1000, 800);
+    ? new Watcher(1100, 850, { startsAggressive: true })
+    : new Watcher(1100, 850);
 
   return {
     id: "infected-hub",
