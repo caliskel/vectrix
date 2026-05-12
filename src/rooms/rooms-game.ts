@@ -1172,6 +1172,21 @@ export function start(canvas: HTMLCanvasElement): void {
 
     if (menu.isOpen()) return;
 
+    // When focus is inside any text input (editor properties panel,
+    // etc.), don't preventDefault on bound movement keys — that's
+    // the only reason "A" / "S" / "D" / "W" / " " / "X" / arrows
+    // couldn't be typed into the room id / number fields.
+    const target = e.target as HTMLElement | null;
+    if (
+      target &&
+      (target.tagName === "INPUT" ||
+        target.tagName === "SELECT" ||
+        target.tagName === "TEXTAREA" ||
+        target.isContentEditable)
+    ) {
+      return;
+    }
+
     if (state.runState === "failed") {
       if (code === "Enter") {
         e.preventDefault();
