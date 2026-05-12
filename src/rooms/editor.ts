@@ -105,6 +105,14 @@ export type EditorConfig = {
    *  in test-play would press Play again with hp=0 and runState
    *  stuck on "failed". */
   resetRunStateForPlay(): void;
+  /** Resets per-room transient state when currentRoom swaps —
+   *  currentKey, keyHeld, ambient bullet timers, worldLabel timers,
+   *  doorEnterCooldown — and reseeds initialKey via applyInitialKey.
+   *  Mirrors the transitionToRoom reset block. Editor calls this on
+   *  every currentRoom swap (open / exit / play / restart / close)
+   *  so a previously-live key from the campaign room doesn't ghost
+   *  into the editor's tempRoom and back. */
+  triggerEnterRoomReset(): void;
   /** Optional: editor pings this whenever a mutation lands so U8 can
    *  schedule a debounced save. Pre-U8 this can be undefined. */
   onDraftDirty?(): void;
@@ -235,6 +243,7 @@ export function createEditor(config: EditorConfig): EditorHandle {
     config.setCurrentRoom(temp);
     clearPools();
     config.triggerSyncRoomFx();
+    config.triggerEnterRoomReset();
     config.triggerSpawnPlayerInCurrentRoom();
     setCameraMode(config.getCamera(), "edit");
     config.triggerSnapCamera();
@@ -251,6 +260,7 @@ export function createEditor(config: EditorConfig): EditorHandle {
       campaignRoomSnapshot = null;
       clearPools();
       config.triggerSyncRoomFx();
+      config.triggerEnterRoomReset();
       config.triggerSpawnPlayerInCurrentRoom();
       config.triggerSnapCamera();
     }
@@ -275,6 +285,7 @@ export function createEditor(config: EditorConfig): EditorHandle {
     config.setCurrentRoom(temp);
     clearPools();
     config.triggerSyncRoomFx();
+    config.triggerEnterRoomReset();
     config.triggerSpawnPlayerInCurrentRoom();
     setCameraMode(config.getCamera(), "edit");
     config.triggerSnapCamera();

@@ -1061,6 +1061,20 @@ export function start(canvas: HTMLCanvasElement): void {
         state.deathFx = null;
         resetEyeState(player);
       },
+      triggerEnterRoomReset: () => {
+        // Mirrors the transitionToRoom reset block — clears any
+        // currentKey / ambient state from the room we just swapped
+        // away from so it doesn't ghost into the editor's tempRoom.
+        // Then seeds initialKey if the new room declares one.
+        currentKey = null;
+        keyHeld = false;
+        ambientSpawnTimer = 0;
+        ambientInitialFillDone = false;
+        worldLabelAge = 0;
+        worldLabelStarted = false;
+        state.doorEnterCooldown = 0;
+        applyInitialKey();
+      },
       initialDraft: persistedDraft?.json,
       onDraftDirty: () => {
         if (!editor) return;
