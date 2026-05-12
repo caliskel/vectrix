@@ -2755,6 +2755,21 @@ export function start(canvas: HTMLCanvasElement): void {
     const heartsY = 16;
     const heartSpacing = 22;
 
+    // SCORE (top-left). Label small + value in a larger monospace
+    // below, so dash-through "+100" and near-miss "+50" pops update
+    // a visibly running total.
+    ctx.textAlign = "left";
+    ctx.globalAlpha = 0.65;
+    ctx.font = "500 11px ui-monospace, SFMono-Regular, Menlo, monospace";
+    ctx.fillStyle = "#94a3b8";
+    ctx.fillText("SCORE", 16, heartsY);
+    ctx.globalAlpha = 0.95;
+    ctx.font = "600 22px ui-monospace, SFMono-Regular, Menlo, monospace";
+    ctx.fillStyle = "#ffffff";
+    ctx.fillText(state.score.toLocaleString("en-US"), 16, heartsY + 16);
+    ctx.textAlign = "center";
+    ctx.globalAlpha = 0.85;
+
     // HP — three hearts, centered.
     ctx.globalAlpha = 0.85;
     ctx.font = "600 22px system-ui, -apple-system, sans-serif";
