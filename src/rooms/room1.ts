@@ -27,16 +27,16 @@ const DASH_WALL_W = 30;
 export function buildRoom1(): Room {
   const gapTop = DOOR_CENTER_Y - DOOR_H / 2;
   const gapBottom = DOOR_CENTER_Y + DOOR_H / 2;
-  const infectedStart = ENTRY_DASH_WALL_X + DASH_WALL_W;
-  // Bullet-spawn boundary — bouncing bullets live left of the exit
-  // gate.
+  // Perimeter tint boundaries — the cyan→red transition lands at the
+  // horizontal centre of each dashable wall, so the gate visually
+  // splits the safe ↔ infected panels in half. Bullet-spawn bounds
+  // are independent and sit just outside the dashable walls so
+  // bullets never spawn inside a solid.
+  const infectedTopBottomStart = ENTRY_DASH_WALL_X + DASH_WALL_W / 2;
+  const infectedTopBottomEnd = EXIT_DASH_WALL_X + DASH_WALL_W / 2;
+  const infectedFieldStart = ENTRY_DASH_WALL_X + DASH_WALL_W;
   const infectedFieldEnd = EXIT_DASH_WALL_X;
-  // Perimeter tint boundary — the infected top/bottom strips run all
-  // the way over the exit dashable wall (mirroring how the entry
-  // dashable wall is sealed under the safe-left strip), so there's no
-  // gap on the ceiling/floor at the exit.
-  const infectedTopBottomEnd = EXIT_DASH_WALL_X + DASH_WALL_W;
-  const safeRightStart = EXIT_DASH_WALL_X + DASH_WALL_W;
+  const safeRightStart = infectedTopBottomEnd;
 
   const walls: Wall[] = [
     // perimeter top — three segments (safe / infected / safe). The
@@ -46,14 +46,14 @@ export function buildRoom1(): Room {
     {
       x: 0,
       y: 0,
-      w: infectedStart,
+      w: infectedTopBottomStart,
       h: WALL_T,
       mergeRight: true,
     },
     {
-      x: infectedStart,
+      x: infectedTopBottomStart,
       y: 0,
-      w: infectedTopBottomEnd - infectedStart,
+      w: infectedTopBottomEnd - infectedTopBottomStart,
       h: WALL_T,
       infected: true,
       mergeLeft: true,
@@ -70,14 +70,14 @@ export function buildRoom1(): Room {
     {
       x: 0,
       y: ROOM_H - WALL_T,
-      w: infectedStart,
+      w: infectedTopBottomStart,
       h: WALL_T,
       mergeRight: true,
     },
     {
-      x: infectedStart,
+      x: infectedTopBottomStart,
       y: ROOM_H - WALL_T,
-      w: infectedTopBottomEnd - infectedStart,
+      w: infectedTopBottomEnd - infectedTopBottomStart,
       h: WALL_T,
       infected: true,
       mergeLeft: true,
@@ -145,9 +145,9 @@ export function buildRoom1(): Room {
     initialKey: { x: KEY_X, y: DOOR_CENTER_Y },
     ambientBullets: {
       spawnArea: {
-        x: infectedStart,
+        x: infectedFieldStart,
         y: WALL_T,
-        w: infectedFieldEnd - infectedStart,
+        w: infectedFieldEnd - infectedFieldStart,
         h: ROOM_H - WALL_T * 2,
       },
       maxBullets: 30,
@@ -156,7 +156,7 @@ export function buildRoom1(): Room {
     },
     worldLabels: [
       {
-        x: (infectedStart + infectedFieldEnd) / 2,
+        x: (infectedFieldStart + infectedFieldEnd) / 2,
         y: WALL_T + 36,
         text: "INFECTED ZONE",
         size: 56,
