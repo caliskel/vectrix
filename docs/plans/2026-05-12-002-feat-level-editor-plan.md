@@ -2,7 +2,7 @@
 date: 2026-05-12
 type: feat
 origin: docs/brainstorms/level-editor-requirements.md
-status: active
+status: completed
 ---
 
 # feat: In-game level editor (ideation tool, greenfield-only)
