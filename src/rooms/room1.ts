@@ -11,8 +11,12 @@ const DOOR_H = 120;
 const SPAWN_X = 200;
 const KEY_X = 300;
 const ENTRY_DASH_WALL_X = 600;
-const EXIT_DASH_WALL_X = 3400;
 const DASH_WALL_W = 30;
+// Exit dashable wall is placed so the vestibule on its right mirrors
+// the safe-left zone in width: ROOM_W (3600) − safeLeftWidth (615) =
+// 2985 for the tint-seam centre, which puts the wall itself at
+// 2985 − DASH_WALL_W/2 = 2970.
+const EXIT_DASH_WALL_X = 2970;
 
 // Long horizontal corridor — first encounter. Three zones:
 //
