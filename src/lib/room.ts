@@ -13,6 +13,21 @@ export type PendingEnemy = {
   spawn: () => Enemy;
 };
 
+/** Decorative world-space text label drawn over the room's floor —
+ *  signage like "INFECTED ZONE" hanging above a hazardous section.
+ *  No physics, no collision; pure rendering. */
+export type WorldLabel = {
+  /** Centered horizontally on this x. */
+  x: number;
+  /** Vertical center / baseline of the label. */
+  y: number;
+  text: string;
+  /** Font size in world px. Defaults to 32. */
+  size?: number;
+  /** Hex or CSS color. Defaults to neon red ("#ff2d55"). */
+  color?: string;
+};
+
 /** Sandbox-style ambient bullet field confined to a rectangle. Bullets
  *  spawn from a random edge of the rectangle, aim inward with ±60°
  *  spread, and ALL bounce off walls inside the room (perimeter +
@@ -69,4 +84,8 @@ export type Room = {
    *  Mutually independent of enemy fire; the spawn loop runs in
    *  rooms-game whenever this is set. */
   ambientBullets?: AmbientBulletField;
+  /** Decorative world-space labels — drawn between walls and entities
+   *  (so the player and bullets pass on top). Used by Room 1 for the
+   *  INFECTED ZONE signage. */
+  worldLabels?: WorldLabel[];
 };

@@ -11,6 +11,10 @@ export type Wall = {
    *  it as solid. Tagged on Tutorial Room 0's dash gate and the Room
    *  4 corridor's section dividers. */
   dashable?: boolean;
+  /** Cosmetic tint — wall renders with the red/quarantine palette
+   *  instead of the default cyan. Physics behaviour is unchanged.
+   *  Used in Room 1's infected zone. */
+  infected?: boolean;
 };
 
 /** Anything we resolve walls against. Player and the moving enemies
@@ -153,11 +157,40 @@ const WALL_STROKE = "#7dd3fc";
 const WALL_STROKE_ALPHA = 0.6;
 const WALL_GLOW_BLUR = 12;
 const DASHABLE_GLOW_BLUR = 14;
+// Infected ("quarantine") palette — same wall geometry, red treatment.
+const INFECTED_WALL_FILL = "rgba(60, 14, 28, 0.85)";
+const INFECTED_WALL_STROKE = "#ff2d55";
+const INFECTED_WALL_STROKE_ALPHA = 0.75;
+const INFECTED_WALL_GLOW_BLUR = 16;
+const INFECTED_HATCH_ALPHA = 0.09;
+
+type WallStyle = {
+  fill: string;
+  stroke: string;
+  strokeAlpha: number;
+  glowBlur: number;
+  hatchAlpha: number;
+};
+
+const NORMAL_WALL_STYLE: WallStyle = {
+  fill: WALL_FILL,
+  stroke: WALL_STROKE,
+  strokeAlpha: WALL_STROKE_ALPHA,
+  glowBlur: WALL_GLOW_BLUR,
+  hatchAlpha: 0.05,
+};
+
+const INFECTED_WALL_STYLE: WallStyle = {
+  fill: INFECTED_WALL_FILL,
+  stroke: INFECTED_WALL_STROKE,
+  strokeAlpha: INFECTED_WALL_STROKE_ALPHA,
+  glowBlur: INFECTED_WALL_GLOW_BLUR,
+  hatchAlpha: INFECTED_HATCH_ALPHA,
+};
 const BRACKET_LEN_PX = 14;
 const BRACKET_INSET_PX = 2;
 const BRACKET_LINE_WIDTH = 2.5;
 const HATCH_SPACING_PX = 8;
-const HATCH_ALPHA = 0.05;
 const MARCHING_DASH_INSET_PX = 4;
 const MARCHING_DASH_PATTERN = [10, 14] as const;
 const MARCHING_DASH_SPEED = 28; // px/s lineDashOffset drift
@@ -722,21 +755,31 @@ export function addWallImpact(fx: WallFx, x: number, y: number): void {
   fx.ripples.push({ x, y, age: 0 });
 }
 
-function paintWalls(ctx: CanvasRenderingContext2D, walls: Wall[]): void {
-  // 1. Solid fill — one batched pass.
+// Solid-wall pass: fill + diagonal hatch + outer stroke + corner
+// brackets, all parameterized so the normal (cyan) and infected (red)
+// groups share the same draw path. shadowBlur is set once per pass to
+// keep the per-wall cost low.
+function paintSolidGroup(
+  ctx: CanvasRenderingContext2D,
+  walls: Wall[],
+  style: WallStyle,
+): void {
+  if (walls.length === 0) return;
+
+  // 1. Solid fill.
   ctx.save();
-  ctx.fillStyle = WALL_FILL;
+  ctx.fillStyle = style.fill;
   ctx.shadowBlur = 0;
   for (const w of walls) {
     ctx.fillRect(w.x, w.y, w.w, w.h);
   }
   ctx.restore();
 
-  // 2. Inner diagonal hatching — adds texture without adding visual
-  // weight. Clipped to each wall so the lines stop at the boundary.
+  // 2. Inner diagonal hatching — clipped per wall so the lines stop
+  // at the boundary.
   ctx.save();
-  ctx.strokeStyle = WALL_STROKE;
-  ctx.globalAlpha = HATCH_ALPHA;
+  ctx.strokeStyle = style.stroke;
+  ctx.globalAlpha = style.hatchAlpha;
   ctx.lineWidth = 1;
   ctx.shadowBlur = 0;
   for (const w of walls) {
@@ -756,29 +799,65 @@ function paintWalls(ctx: CanvasRenderingContext2D, walls: Wall[]): void {
   }
   ctx.restore();
 
-  // 3. Outer stroke — grouped by style so shadowBlur fires once per
-  // group instead of per wall.
-  const solidWalls: Wall[] = [];
+  // 3. Outer stroke — one batched path with glow.
+  ctx.save();
+  ctx.globalAlpha = style.strokeAlpha;
+  ctx.strokeStyle = style.stroke;
+  ctx.shadowColor = style.stroke;
+  ctx.shadowBlur = style.glowBlur;
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  for (const w of walls) {
+    ctx.rect(w.x + 0.5, w.y + 0.5, w.w - 1, w.h - 1);
+  }
+  ctx.stroke();
+  ctx.restore();
+
+  // 4. Corner brackets — brighter, thicker strokes at each corner so
+  // the wall reads as a technical panel rather than a flat box.
+  ctx.save();
+  ctx.strokeStyle = style.stroke;
+  ctx.shadowColor = style.stroke;
+  ctx.shadowBlur = style.glowBlur;
+  ctx.globalAlpha = 0.95;
+  ctx.lineWidth = BRACKET_LINE_WIDTH;
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  for (const w of walls) {
+    const len = Math.min(BRACKET_LEN_PX, Math.min(w.w, w.h) * 0.3);
+    const x1 = w.x + BRACKET_INSET_PX;
+    const y1 = w.y + BRACKET_INSET_PX;
+    const x2 = w.x + w.w - BRACKET_INSET_PX;
+    const y2 = w.y + w.h - BRACKET_INSET_PX;
+    // top-left
+    ctx.moveTo(x1, y1 + len); ctx.lineTo(x1, y1); ctx.lineTo(x1 + len, y1);
+    // top-right
+    ctx.moveTo(x2 - len, y1); ctx.lineTo(x2, y1); ctx.lineTo(x2, y1 + len);
+    // bottom-right
+    ctx.moveTo(x2, y2 - len); ctx.lineTo(x2, y2); ctx.lineTo(x2 - len, y2);
+    // bottom-left
+    ctx.moveTo(x1 + len, y2); ctx.lineTo(x1, y2); ctx.lineTo(x1, y2 - len);
+  }
+  ctx.stroke();
+  ctx.restore();
+}
+
+function paintWalls(ctx: CanvasRenderingContext2D, walls: Wall[]): void {
+  // Split into three render groups: normal solid (cyan), infected
+  // solid (red quarantine), dashable (cyan dashed outline only). Each
+  // group runs through its own style so shadowBlur fires once per
+  // group instead of once per wall.
+  const normalSolid: Wall[] = [];
+  const infectedSolid: Wall[] = [];
   const dashableWalls: Wall[] = [];
   for (const w of walls) {
     if (w.dashable) dashableWalls.push(w);
-    else solidWalls.push(w);
+    else if (w.infected) infectedSolid.push(w);
+    else normalSolid.push(w);
   }
 
-  if (solidWalls.length > 0) {
-    ctx.save();
-    ctx.globalAlpha = WALL_STROKE_ALPHA;
-    ctx.strokeStyle = WALL_STROKE;
-    ctx.shadowColor = WALL_STROKE;
-    ctx.shadowBlur = WALL_GLOW_BLUR;
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    for (const w of solidWalls) {
-      ctx.rect(w.x + 0.5, w.y + 0.5, w.w - 1, w.h - 1);
-    }
-    ctx.stroke();
-    ctx.restore();
-  }
+  paintSolidGroup(ctx, normalSolid, NORMAL_WALL_STYLE);
+  paintSolidGroup(ctx, infectedSolid, INFECTED_WALL_STYLE);
 
   if (dashableWalls.length > 0) {
     ctx.save();
@@ -790,38 +869,6 @@ function paintWalls(ctx: CanvasRenderingContext2D, walls: Wall[]): void {
     ctx.beginPath();
     for (const w of dashableWalls) {
       ctx.rect(w.x + 0.5, w.y + 0.5, w.w - 1, w.h - 1);
-    }
-    ctx.stroke();
-    ctx.restore();
-  }
-
-  // 4. Corner brackets — sit on top of the outline. Brighter, thicker
-  // strokes at each corner make the wall read as a "technical" panel
-  // rather than a flat box. Skipped for dashable walls so their
-  // signature dashed silhouette stays unambiguous.
-  if (solidWalls.length > 0) {
-    ctx.save();
-    ctx.strokeStyle = WALL_STROKE;
-    ctx.shadowColor = WALL_STROKE;
-    ctx.shadowBlur = WALL_GLOW_BLUR;
-    ctx.globalAlpha = 0.95;
-    ctx.lineWidth = BRACKET_LINE_WIDTH;
-    ctx.lineCap = "round";
-    ctx.beginPath();
-    for (const w of solidWalls) {
-      const len = Math.min(BRACKET_LEN_PX, Math.min(w.w, w.h) * 0.3);
-      const x1 = w.x + BRACKET_INSET_PX;
-      const y1 = w.y + BRACKET_INSET_PX;
-      const x2 = w.x + w.w - BRACKET_INSET_PX;
-      const y2 = w.y + w.h - BRACKET_INSET_PX;
-      // top-left
-      ctx.moveTo(x1, y1 + len); ctx.lineTo(x1, y1); ctx.lineTo(x1 + len, y1);
-      // top-right
-      ctx.moveTo(x2 - len, y1); ctx.lineTo(x2, y1); ctx.lineTo(x2, y1 + len);
-      // bottom-right
-      ctx.moveTo(x2, y2 - len); ctx.lineTo(x2, y2); ctx.lineTo(x2 - len, y2);
-      // bottom-left
-      ctx.moveTo(x1 + len, y2); ctx.lineTo(x1, y2); ctx.lineTo(x1, y2 - len);
     }
     ctx.stroke();
     ctx.restore();

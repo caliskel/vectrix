@@ -2299,6 +2299,25 @@ export function start(canvas: HTMLCanvasElement): void {
     drawWallOverlay(ctx, wallFx, currentRoom.walls);
     if (currentRoom.door) drawDoor(ctx, currentRoom.door);
     if (currentRoom.backDoor) drawDoor(ctx, currentRoom.backDoor);
+    // World-space signage (e.g. "INFECTED ZONE") — drawn over walls
+    // and the floor but under entities so the player + bullets pass
+    // on top.
+    if (currentRoom.worldLabels) {
+      for (const l of currentRoom.worldLabels) {
+        const color = l.color ?? "#ff2d55";
+        const size = l.size ?? 32;
+        ctx.save();
+        ctx.fillStyle = color;
+        ctx.font = `${size}px 'Space Mono', 'Courier New', monospace`;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.shadowColor = color;
+        ctx.shadowBlur = 12;
+        ctx.globalAlpha = 0.7;
+        ctx.fillText(l.text, l.x, l.y);
+        ctx.restore();
+      }
+    }
     perfEnd("walls");
 
     // detection rings (drawn under everything so they read as a
