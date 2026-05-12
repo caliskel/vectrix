@@ -1,6 +1,4 @@
 import { makeDoor } from "../lib/door";
-import { Turret } from "../lib/enemies/turret";
-import { Watcher } from "../lib/enemies/watcher";
 import type { Wall } from "../lib/walls";
 import type { Room } from "../lib/room";
 
@@ -10,11 +8,13 @@ const WALL_T = 30;
 const DOOR_CENTER_Y = 300;
 const DOOR_W = 30;
 const DOOR_H = 120;
+const SPAWN_X = 200;
+const KEY_X = 300;
 
-// Long horizontal corridor — 3x wider than the viewport, so it needs
-// the follow camera. Player walks the room left-to-right past three
-// turrets and a Watcher; the third turret drops a key, Door at the
-// far right requires the key + all enemies dead.
+// Long horizontal corridor — empty intro. Player spawns at the left,
+// the key sits a few steps ahead on the floor, and the door at the
+// far right opens on key pickup. No enemies — this room teaches the
+// "see key → grab → walk to door" loop before combat starts.
 export function buildRoom1(): Room {
   const gapTop = DOOR_CENTER_Y - DOOR_H / 2;
   const gapBottom = DOOR_CENTER_Y + DOOR_H / 2;
@@ -30,25 +30,16 @@ export function buildRoom1(): Room {
       w: WALL_T,
       h: ROOM_H - gapBottom,
     },
-    // interior obstacles — short pillars the player has to weave
-    // around. Enemies don't collide with these (simplification noted
-    // in the spec); they only constrain the player.
+    // interior obstacles — short pillars that shape the corridor.
     { x: 1100, y: 280, w: 60, h: 120 },
     { x: 1900, y: 100, w: 60, h: 120 },
     { x: 2700, y: 360, w: 60, h: 120 },
   ];
 
-  const turret1 = new Turret(900, 300);
-  const turret2 = new Turret(1900, 300);
-  const turret3 = new Turret(2900, 300);
-  // Third turret holds the key — its kill spawns the pickup.
-  turret3.dropsKey = true;
-  const watcher = new Watcher(3300, 300);
-
   return {
     id: "room1",
     walls,
-    enemies: [turret1, turret2, turret3, watcher],
+    enemies: [],
     door: makeDoor(
       ROOM_W - WALL_T / 2,
       DOOR_CENTER_Y,
@@ -58,10 +49,11 @@ export function buildRoom1(): Room {
       true, // requiresKey
     ),
     nextRoomId: "room3",
-    spawnX: 200,
+    spawnX: SPAWN_X,
     spawnY: DOOR_CENTER_Y,
     width: ROOM_W,
     height: ROOM_H,
     useCamera: true,
+    initialKey: { x: KEY_X, y: DOOR_CENTER_Y },
   };
 }
