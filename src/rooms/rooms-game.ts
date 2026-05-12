@@ -189,6 +189,8 @@ import { buildRoom2 } from "./room2";
 import { buildRoom3 } from "./room3";
 import { buildRoom4 } from "./room4";
 import { buildRoom5 } from "./room5";
+import { buildRoomFromJson } from "./build-room-from-json";
+import type { RoomJson } from "./room-json-types";
 import type { AmbientBulletField, Room } from "../lib/room";
 
 // Canonical letterbox viewport (constant across all rooms; camera-
@@ -564,12 +566,43 @@ export function start(canvas: HTMLCanvasElement): void {
   let ambientSpawnTimer = 0;
   let ambientInitialFillDone = false;
 
+  // Vite collects every src/rooms/*.json at build time; the eager
+  // import gives us { './foo.json': { default: RoomJson } } so we
+  // don't pay a fetch round-trip. New JSON written via the editor's
+  // Vite plugin (U3) is picked up by HMR — next restartRun rebuilds
+  // it through registerJsonRooms below. TS-authored rooms always
+  // win on id collisions because they register first.
+  const jsonRoomModules = import.meta.glob<{ default: RoomJson }>(
+    "./*.json",
+    { eager: true },
+  );
+  function registerJsonRooms(target: Map<string, Room>): void {
+    for (const [pathKey, mod] of Object.entries(jsonRoomModules)) {
+      const json = mod.default;
+      if (target.has(json.id)) {
+        console.error(
+          `[rooms] JSON room id collision: ${json.id} (from ${pathKey}) already registered, skipping`,
+        );
+        continue;
+      }
+      try {
+        target.set(json.id, buildRoomFromJson(json, json.id));
+      } catch (e) {
+        console.error(
+          `[rooms] failed to build JSON room from ${pathKey}:`,
+          (e as Error).message,
+        );
+      }
+    }
+  }
+
   const rooms = new Map<string, Room>();
   rooms.set("room1", buildRoom1());
   rooms.set("room2", buildRoom2());
   rooms.set("room3", buildRoom3());
   rooms.set("room4", buildRoom4());
   rooms.set("room5", buildRoom5());
+  registerJsonRooms(rooms);
 
   const state: GameState = {
     runState: "playing",
@@ -792,6 +825,7 @@ export function start(canvas: HTMLCanvasElement): void {
     rooms.set("room3", buildRoom3());
     rooms.set("room4", buildRoom4());
     rooms.set("room5", buildRoom5());
+    registerJsonRooms(rooms);
   }
 
   function restartRun() {
