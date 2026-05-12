@@ -190,6 +190,8 @@ import { buildRoom3 } from "./room3";
 import { buildRoom4 } from "./room4";
 import { buildRoom5 } from "./room5";
 import { buildRoomFromJson } from "./build-room-from-json";
+import { createEditor } from "./editor";
+import type { EditorHandle } from "./editor";
 import type { RoomJson } from "./room-json-types";
 import type { AmbientBulletField, Room } from "../lib/room";
 
@@ -1006,6 +1008,49 @@ export function start(canvas: HTMLCanvasElement): void {
     ],
   });
 
+  // In-game level editor (U4). Wrapped in DEV guard so the prod
+  // bundle drops the entire editor module — the `editor` binding
+  // is `null` at runtime, F3 / frame-loop gate / failRun guard
+  // all use optional chaining to fall through cleanly.
+  let editor: EditorHandle | null = null;
+  if (import.meta.env.DEV) {
+    editor = createEditor({
+      getCurrentRoom: () => currentRoom,
+      setCurrentRoom: (r) => {
+        currentRoom = r;
+      },
+      getCamera: () => camera,
+      getPools: () => ({ bullets, particles, rings, floatingTexts, lasers }),
+      triggerSyncRoomFx: () => {
+        syncRoomFx();
+      },
+      triggerSnapCamera: () => {
+        snapCameraToRoom();
+      },
+      triggerSpawnPlayerInCurrentRoom: () => {
+        spawnPlayerInCurrentRoom();
+      },
+      resetLastTime: () => {
+        lastTime = performance.now();
+      },
+      resetRunStateForPlay: () => {
+        // Fresh-play reset: same fields restartRun() resets that
+        // would otherwise leak between Play sessions. We deliberately
+        // skip clearedRoomIds / score so the run feels like a fresh
+        // start but the editor state stays in the user's hands.
+        state.runState = "playing";
+        state.hp = 3;
+        state.hitIframe = 0;
+        state.hitVignette = 0;
+        state.dashId = 0;
+        state.deathFx = null;
+        resetEyeState(player);
+      },
+    });
+    // Expose for console-driven smoke-testing before U5 lands the UI.
+    (window as unknown as { __editor: EditorHandle | null }).__editor = editor;
+  }
+
   window.addEventListener("keydown", (e) => {
     audio.init();
     pickInitialMusic();
@@ -1015,6 +1060,17 @@ export function start(canvas: HTMLCanvasElement): void {
     // game-side keydown while it's open so Esc doesn't also pop the
     // pause overlay underneath, etc.
     if (devMenu.isOpen()) return;
+
+    // F3 — editor toggle (DEV builds only; `editor` is null in prod).
+    // Sits above the F2 perf overlay + pause-menu checks so the
+    // editor stays togglable even while paused / failed, matching the
+    // F2 hotkey's global feel.
+    if (editor && code === "F3") {
+      e.preventDefault();
+      editor.toggle();
+      keys.clear();
+      return;
+    }
 
     // F2 — toggle frame-time breakdown overlay. Independent of the
     // dev menu so we can profile while the menu is closed.
@@ -1215,6 +1271,16 @@ export function start(canvas: HTMLCanvasElement): void {
 
   function failRun() {
     if (state.runState === "failed") return;
+    // Test-play deaths must not flip the run into the failed flow —
+    // that would write a "best score" for the editor sandbox and
+    // replace the failed-overlay over the editor's eventual inline
+    // prompt (U5). Editor.exitToEditing() restores the snapshotted
+    // currentRoom + clears pools, so dropping out of play here is
+    // a clean reset to the editor's pre-Play state.
+    if (editor?.isPlaying()) {
+      editor.exitToEditing();
+      return;
+    }
     state.runState = "failed";
     eyeStartClosing(player);
     audio.play.runEnd();
@@ -1428,7 +1494,11 @@ export function start(canvas: HTMLCanvasElement): void {
     lastTime = now;
     if (dt > 0.05) dt = 0.05;
 
-    if (menu.isOpen() || devMenu.isOpen()) {
+    if (
+      menu.isOpen() ||
+      devMenu.isOpen() ||
+      (editor?.isPaused() ?? false)
+    ) {
       render();
       requestAnimationFrame(frame);
       return;
