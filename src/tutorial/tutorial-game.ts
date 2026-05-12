@@ -63,6 +63,7 @@ import {
   updateEnemyAwareness,
 } from "../lib/enemies/awareness";
 import type { Enemy, Laser } from "../lib/enemies/types";
+import { Watcher } from "../lib/enemies/watcher";
 import {
   emitBulletHit,
   emitEnemyDamage,
@@ -1857,6 +1858,20 @@ export function start(canvas: HTMLCanvasElement): void {
           l.endY,
         );
         if (d2 >= halfPlus2) continue;
+        // Hit i-frame is always respected — pierce only bypasses
+        // dash i-frame, not the post-damage grace window.
+        if (state.hitIframe > 0) continue;
+        if (l.piercesIframes) {
+          // Marked execution — Watcher's gaze stack was full at fire
+          // commitment. Bypasses dash i-frame; resets the owner
+          // Watcher's gaze meter on hit.
+          triggerShake(SCREEN_SHAKE_PX, SCREEN_SHAKE_DURATION_SEC);
+          takeHit();
+          if (l.ownerEnemy.type === "watcher") {
+            (l.ownerEnemy as Watcher).gazeAtPlayer = 0;
+          }
+          break;
+        }
         if (player.dashIframeTime > 0) {
           // dashed through the beam — credit a one-time dodge bonus per
           // laser, no damage
@@ -1875,8 +1890,6 @@ export function start(canvas: HTMLCanvasElement): void {
               },
             );
           }
-        } else if (state.hitIframe > 0) {
-          // already in post-hit i-frame, ignore
         } else {
           triggerShake(SCREEN_SHAKE_PX, SCREEN_SHAKE_DURATION_SEC);
           takeHit();

@@ -11,6 +11,8 @@ import {
   WATCHER_COOLDOWN_SEC,
   WATCHER_DECEL_FACTOR,
   WATCHER_FIRING_SEC,
+  WATCHER_GAZE_DECAY_TIME_SEC,
+  WATCHER_GAZE_FILL_TIME_SEC,
   WATCHER_HP_MAX,
   WATCHER_IDLE_DRIFT_AMPLITUDE_X,
   WATCHER_IDLE_DRIFT_AMPLITUDE_Y,
@@ -22,6 +24,7 @@ import {
   WATCHER_IDLE_SEC,
   WATCHER_SPEED_FACTOR,
 } from "../config";
+import { isSegmentBlocked } from "../walls";
 import { resolveEntityWallCollisions } from "../walls";
 import { applyAwarenessJitter, initAwareness } from "./awareness";
 import { applyEnemyKnockback, drawEnemyHitFlash } from "./fx";
@@ -124,6 +127,12 @@ export class Watcher implements Enemy {
   // Used by tracking-aim update so we mutate `aimAngle` on the live
   // laser without having to look it up in `ctx.lasers` each frame.
   private currentAimingLaser: Laser | null = null;
+  // Continuous-threat meter — 0..1. Fills while LOS to the player is
+  // clear (raycast doesn't hit a wall first), decays asymmetrically
+  // faster when LOS is broken. Snapshot into `Laser.piercesIframes`
+  // at the aim → firing transition; reset on a successful pierce hit
+  // (rooms-game / tutorial-game collision path).
+  gazeAtPlayer = 0;
   vx = 0;
   vy = 0;
   private pupilOffsetX = 0;
@@ -247,7 +256,30 @@ export class Watcher implements Enemy {
       }
       // Post-agro idle (defensive, unreachable with canDeaggro = false):
       // body and pupil hold their last position.
+      this.gazeAtPlayer = 0;
       return;
+    }
+
+    // Gaze stack — fills while LOS to player is clear, decays faster
+    // when broken. Drives the "marked" mechanic + visual/audio
+    // intensity downstream. Cheap: one raycast per Watcher per frame.
+    const losClear = !isSegmentBlocked(
+      this.x,
+      this.y,
+      player.x,
+      player.y,
+      ctxRoom.walls,
+    );
+    if (losClear) {
+      this.gazeAtPlayer = Math.min(
+        1,
+        this.gazeAtPlayer + dt / WATCHER_GAZE_FILL_TIME_SEC,
+      );
+    } else {
+      this.gazeAtPlayer = Math.max(
+        0,
+        this.gazeAtPlayer - dt / WATCHER_GAZE_DECAY_TIME_SEC,
+      );
     }
 
     // Movement model per phase:
@@ -402,6 +434,15 @@ export class Watcher implements Enemy {
         // commitment. Sharp downsweep "vweep" — cuts through the
         // charge tail.
         audio.play.watcherFire();
+        // Snapshot gaze stack into the firing laser. A full meter at
+        // the moment of commitment means this beam will pierce dash
+        // i-frames. Captured once at commitment, so LOS broken during
+        // the brief firing window doesn't take the punch back — but
+        // also doesn't add it (a beam committed without a full stack
+        // stays normal).
+        if (this.currentAimingLaser) {
+          this.currentAimingLaser.piercesIframes = this.gazeAtPlayer >= 1.0;
+        }
         this.phase = "firing";
         this.phaseTimer += PHASE_FIRING_SEC;
         break;

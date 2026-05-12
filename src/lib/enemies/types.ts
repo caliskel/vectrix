@@ -43,6 +43,11 @@ export type Laser = {
   /** Once a dashing player crosses a firing laser this is set so the
    *  +50 dodge bonus only credits once per dash. */
   dodgedByDashId?: number;
+  /** Set at the moment of `aiming → firing` (Watcher 2.0) if the
+   *  firing Watcher had a full gaze stack on the player. Damages the
+   *  player even during dash i-frames; the hit i-frame is still
+   *  respected. Resets the firing Watcher's gaze meter on hit. */
+  piercesIframes?: boolean;
 };
 
 // Context handed to Enemy.update so each enemy can spawn bullets,
