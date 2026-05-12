@@ -49,6 +49,22 @@ export type MutationKind =
   | "key"
   | "pending";
 
+/** What the user currently has selected in the canvas. Owned by the
+ *  editor handle so both the DOM UI (properties panel) and the
+ *  canvas layer (selection ring) read from one source of truth. */
+export type Selection =
+  | null
+  | { kind: "room" }
+  | { kind: "wall"; index: number }
+  | { kind: "turret"; index: number }
+  | { kind: "watcher"; index: number }
+  | { kind: "hunter"; index: number }
+  | { kind: "door" }
+  | { kind: "backDoor" }
+  | { kind: "key" }
+  | { kind: "spawn" }
+  | { kind: "pending"; index: number };
+
 /** Live references the editor needs from `rooms-game.ts`. Read-only
  *  fields are exposed via getters so the caller can keep `let`
  *  bindings and rebind freely; mutable collections (pools) and
@@ -124,6 +140,16 @@ export type EditorHandle = {
     kind: MutationKind,
     opts?: { pendingIndex?: number },
   ): void;
+  /** Subscribe to mode transitions. Fires after the state machine
+   *  has settled (the side-effects for the new mode have all run).
+   *  Returns an unsubscribe function. */
+  onModeChange(cb: (next: EditorMode, prev: EditorMode) => void): () => void;
+  /** Current selection — null when nothing is highlighted. */
+  getSelection(): Selection;
+  /** Set selection. Pass `null` to clear. Fires `onSelectionChange`
+   *  to anyone subscribed. */
+  setSelection(sel: Selection): void;
+  onSelectionChange(cb: (sel: Selection) => void): () => void;
   destroy(): void;
 };
 
@@ -148,6 +174,22 @@ export function createEditor(config: EditorConfig): EditorHandle {
   let mode: EditorMode = "closed";
   let savedRoomBeforePlay: Room | null = null;
   let draft: RoomJson = cloneDraft(config.initialDraft ?? DEFAULT_DRAFT);
+  let selection: Selection = null;
+  const modeListeners = new Set<(n: EditorMode, p: EditorMode) => void>();
+  const selectionListeners = new Set<(s: Selection) => void>();
+
+  function setMode(next: EditorMode): void {
+    const prev = mode;
+    if (prev === next) return;
+    mode = next;
+    for (const cb of modeListeners) {
+      try {
+        cb(next, prev);
+      } catch (e) {
+        console.error("[editor] onModeChange listener threw:", e);
+      }
+    }
+  }
 
   function clearPools(): void {
     const p = config.getPools();
@@ -169,21 +211,21 @@ export function createEditor(config: EditorConfig): EditorHandle {
 
   function openEditing(): void {
     if (mode === "editing") return;
-    mode = "editing";
     setCameraMode(config.getCamera(), "edit");
     // No pool clear on open — the live frame is intentionally
     // preserved so the user sees the world they were just in
     // (bullets in flight, etc.) and can decide what to keep.
+    setMode("editing");
   }
 
   function closeEditor(): void {
     if (mode === "closed") return;
     if (mode === "playing") exitToEditing();
-    mode = "closed";
     setCameraMode(config.getCamera(), "follow");
     // dt would otherwise include the editor session — reset so the
     // next frame's dt is just the rAF interval.
     config.resetLastTime();
+    setMode("closed");
   }
 
   function exitToEditing(): void {
@@ -196,8 +238,8 @@ export function createEditor(config: EditorConfig): EditorHandle {
     config.triggerSyncRoomFx();
     config.triggerSnapCamera();
     setCameraMode(config.getCamera(), "edit");
-    mode = "editing";
     config.resetLastTime();
+    setMode("editing");
   }
 
   function buildTempRoomFromDraft(): Room {
@@ -223,8 +265,8 @@ export function createEditor(config: EditorConfig): EditorHandle {
     config.triggerSpawnPlayerInCurrentRoom();
     setCameraMode(config.getCamera(), "follow");
     config.triggerSnapCamera();
-    mode = "playing";
     config.resetLastTime();
+    setMode("playing");
   }
 
   function restartFromSpawn(): void {
@@ -295,6 +337,27 @@ export function createEditor(config: EditorConfig): EditorHandle {
     exitToEditing,
     restartFromSpawn,
     commitRoomMutation,
+    onModeChange: (cb) => {
+      modeListeners.add(cb);
+      return () => modeListeners.delete(cb);
+    },
+    getSelection: () => selection,
+    setSelection: (sel) => {
+      // Reference-equal selections still fire — callers may want to
+      // re-render properties after an external mutation. Cheap.
+      selection = sel;
+      for (const cb of selectionListeners) {
+        try {
+          cb(sel);
+        } catch (e) {
+          console.error("[editor] onSelectionChange listener threw:", e);
+        }
+      }
+    },
+    onSelectionChange: (cb) => {
+      selectionListeners.add(cb);
+      return () => selectionListeners.delete(cb);
+    },
     destroy,
   };
 }

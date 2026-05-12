@@ -192,6 +192,8 @@ import { buildRoom5 } from "./room5";
 import { buildRoomFromJson } from "./build-room-from-json";
 import { createEditor } from "./editor";
 import type { EditorHandle } from "./editor";
+import { createEditorUI } from "./editor-ui";
+import type { EditorUIHandle } from "./editor-ui";
 import { createDebouncedDraftSaver, loadDraft } from "./editor-drafts";
 import type { DebouncedDraftSaver } from "./editor-drafts";
 import type { RoomJson } from "./room-json-types";
@@ -1076,8 +1078,22 @@ export function start(canvas: HTMLCanvasElement): void {
     // Best-effort flush on page hide so a quick window close doesn't
     // drop the last 250 ms of edits.
     window.addEventListener("pagehide", () => draftSaver.flush());
-    // Expose for console-driven smoke-testing before U5 lands the UI.
-    (window as unknown as { __editor: EditorHandle | null }).__editor = editor;
+
+    // DOM overlay UI (U5). U6 will inject the canvas interaction
+    // layer alongside this — both call into the same editor handle.
+    const editorUI: EditorUIHandle = createEditorUI({
+      editor,
+      getCurrentRoom: () => currentRoom,
+    });
+    // Expose for console-driven smoke-testing.
+    (window as unknown as {
+      __editor: EditorHandle | null;
+      __editorUI: EditorUIHandle | null;
+    }).__editor = editor;
+    (window as unknown as {
+      __editor: EditorHandle | null;
+      __editorUI: EditorUIHandle | null;
+    }).__editorUI = editorUI;
   }
 
   window.addEventListener("keydown", (e) => {
