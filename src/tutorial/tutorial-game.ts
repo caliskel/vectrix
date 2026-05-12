@@ -2866,7 +2866,7 @@ export function start(canvas: HTMLCanvasElement): void {
     if (currentRoom.door?.requiresKey) {
       const kx = viewW - 40;
       const ky = 26;
-      drawKeyHudIcon(ctx, kx, ky, keyHeld);
+      drawKeyHudIcon(ctx, kx, ky, keyHeld ? 1 : 0);
       ctx.fillStyle = keyHeld ? "#ffd60a" : "rgba(255, 214, 10, 0.55)";
       ctx.font = "500 11px ui-monospace, SFMono-Regular, Menlo, monospace";
       ctx.textAlign = "right";

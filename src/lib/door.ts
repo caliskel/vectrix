@@ -17,6 +17,10 @@ export type Door = {
    *  Used by back doors on the left wall of a room — same visual
    *  language as the forward door, just mirrored. */
   flipped?: boolean;
+  /** How many keys the player must hold to open the door. Defaults to
+   *  1 when `requiresKey` is true. Used by multi-key gating like the
+   *  infected hub's east main door (requires both side-room keys). */
+  keysRequired?: number;
 };
 
 export function makeDoor(
@@ -27,8 +31,19 @@ export function makeDoor(
   initial: DoorState = "closed",
   requiresKey = false,
   flipped = false,
+  keysRequired = 1,
 ): Door {
-  return { x, y, w, h, state: initial, pulse: 0, requiresKey, flipped };
+  return {
+    x,
+    y,
+    w,
+    h,
+    state: initial,
+    pulse: 0,
+    requiresKey,
+    flipped,
+    keysRequired,
+  };
 }
 
 export function playerOverlapsDoor(
@@ -58,32 +73,40 @@ export function drawDoor(ctx: CanvasRenderingContext2D, door: Door): void {
     ctx.lineWidth = 2;
     ctx.strokeRect(left + 1, top + 1, door.w - 2, door.h - 2);
     if (door.requiresKey) {
-      // golden lock — visually says "key required" without copy
-      const cx = door.x;
+      // golden lock — visually says "key required" without copy.
+      // Multi-key doors (keysRequired > 1) render one lock per
+      // required key in a horizontal row, so a 2-key door reads as
+      // "two separate locks" rather than a single lock with copy.
+      const required = door.keysRequired ?? 1;
       const cy = door.y;
-      drawNeon(
-        ctx,
-        () => {
-          ctx.strokeStyle = "#ffd60a";
-          ctx.lineWidth = 3;
-          // shackle (open arc on top)
-          ctx.beginPath();
-          ctx.arc(cx, cy - 6, 8, Math.PI, 0);
-          ctx.stroke();
-          // body
-          ctx.fillStyle = "#ffd60a";
-          ctx.fillRect(cx - 11, cy - 2, 22, 18);
-          // keyhole
-          ctx.fillStyle = "#0a0e1a";
-          ctx.beginPath();
-          ctx.arc(cx, cy + 5, 2.5, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.fillRect(cx - 1.2, cy + 5, 2.4, 6);
-        },
-        "#ffd60a",
-        16,
-        5,
-      );
+      const lockSpacing = 28;
+      const startX = door.x - ((required - 1) * lockSpacing) / 2;
+      for (let i = 0; i < required; i++) {
+        const cx = startX + i * lockSpacing;
+        drawNeon(
+          ctx,
+          () => {
+            ctx.strokeStyle = "#ffd60a";
+            ctx.lineWidth = 3;
+            // shackle (open arc on top)
+            ctx.beginPath();
+            ctx.arc(cx, cy - 6, 8, Math.PI, 0);
+            ctx.stroke();
+            // body
+            ctx.fillStyle = "#ffd60a";
+            ctx.fillRect(cx - 11, cy - 2, 22, 18);
+            // keyhole
+            ctx.fillStyle = "#0a0e1a";
+            ctx.beginPath();
+            ctx.arc(cx, cy + 5, 2.5, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillRect(cx - 1.2, cy + 5, 2.4, 6);
+          },
+          "#ffd60a",
+          16,
+          5,
+        );
+      }
     } else {
       drawNeon(
         ctx,

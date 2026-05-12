@@ -120,17 +120,34 @@ export function drawKey(ctx: CanvasRenderingContext2D, key: Key): void {
   ctx.restore();
 }
 
-/** HUD slot — golden silhouette outline if not yet collected, solid
- *  filled key icon when held. (x, y) is the icon center in screen px. */
+/** HUD slot(s) — golden silhouette outline when not yet collected,
+ *  solid filled key icon when held. For `required > 1`, renders
+ *  `required` slots in a horizontal row; first `held` slots are
+ *  filled gold, the rest are dim silhouettes. (x, y) is the
+ *  left-most icon's center in screen px. */
 export function drawKeyHudIcon(
   ctx: CanvasRenderingContext2D,
   x: number,
   y: number,
-  collected: boolean,
+  held: number,
+  required = 1,
+): void {
+  const slotSpacing = 18;
+  for (let i = 0; i < required; i++) {
+    const slotX = x + i * slotSpacing;
+    drawSingleKeyHudSlot(ctx, slotX, y, i < held);
+  }
+}
+
+function drawSingleKeyHudSlot(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  filled: boolean,
 ): void {
   ctx.save();
   ctx.translate(x, y);
-  ctx.globalAlpha = collected ? 1 : 0.4;
+  ctx.globalAlpha = filled ? 1 : 0.4;
   const r = 6;
   ctx.beginPath();
   ctx.moveTo(0, -r);
@@ -138,14 +155,14 @@ export function drawKeyHudIcon(
   ctx.lineTo(0, r);
   ctx.lineTo(-r, 0);
   ctx.closePath();
-  if (collected) {
+  if (filled) {
     ctx.fillStyle = KEY_COLOR;
     ctx.fill();
   }
   ctx.strokeStyle = KEY_COLOR;
   ctx.lineWidth = 1.5;
   ctx.stroke();
-  if (collected) {
+  if (filled) {
     ctx.fillStyle = KEY_COLOR;
     ctx.fillRect(-1.5, 0, 3, 8);
     ctx.fillRect(1.5, 6, 3, 2);

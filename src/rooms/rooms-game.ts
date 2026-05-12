@@ -504,11 +504,13 @@ export function start(canvas: HTMLCanvasElement): void {
   let lasers: Laser[] = [];
   // Per-run key state. Camera is created once and snapped to each
   // room's bounds on entry. currentKey lives at the kill site of the
-  // enemy flagged dropsKey; keyHeld flips when the player walks over
-  // it. Both reset per room transition.
+  // enemy flagged dropsKey; keysHeld increments when the player
+  // walks over it. Both reset per room transition. Multi-key doors
+  // (e.g. infected hub's east main) compare keysHeld against
+  // `door.keysRequired ?? 1`.
   const camera: Camera = createCamera();
   let currentKey: Key | null = null;
-  let keyHeld = false;
+  let keysHeld = 0;
 
   // Ambient bullet field — Room 1 fills its right half with sandbox-
   // style bouncing bullets via `Room.ambientBullets`. Initial fill
@@ -810,7 +812,7 @@ export function start(canvas: HTMLCanvasElement): void {
     floatingTexts = [];
     lasers = [];
     currentKey = null;
-    keyHeld = false;
+    keysHeld = 0;
     ambientSpawnTimer = 0;
     ambientInitialFillDone = false;
     worldLabelAge = 0;
@@ -832,7 +834,7 @@ export function start(canvas: HTMLCanvasElement): void {
     floatingTexts = [];
     lasers = [];
     currentKey = null;
-    keyHeld = false;
+    keysHeld = 0;
     ambientSpawnTimer = 0;
     ambientInitialFillDone = false;
     worldLabelAge = 0;
@@ -1010,7 +1012,7 @@ export function start(canvas: HTMLCanvasElement): void {
         // away from so it doesn't ghost into the editor's tempRoom.
         // Then seeds initialKey if the new room declares one.
         currentKey = null;
-        keyHeld = false;
+        keysHeld = 0;
         ambientSpawnTimer = 0;
         ambientInitialFillDone = false;
         worldLabelAge = 0;
@@ -1510,7 +1512,8 @@ export function start(canvas: HTMLCanvasElement): void {
     //    block the exit).
     //  - non-key doors require every enemy in the room to be dead.
     if (door.requiresKey) {
-      if (!keyHeld) return;
+      const required = door.keysRequired ?? 1;
+      if (keysHeld < required) return;
     } else {
       if (currentRoom.enemies.length === 0) return; // empty rooms — skip
       if (aliveEnemies().length > 0) return;
@@ -2409,12 +2412,11 @@ export function start(canvas: HTMLCanvasElement): void {
     if (currentKey) {
       updateKey(currentKey, dt);
       if (
-        !keyHeld &&
         !currentKey.collected &&
         checkKeyPickup(currentKey, player.x, player.y)
       ) {
         currentKey.collected = true;
-        keyHeld = true;
+        keysHeld += 1;
         audio.play.pickupGrab("hp");
         addFloatingText(
           floatingTexts,
@@ -3136,15 +3138,21 @@ export function start(canvas: HTMLCanvasElement): void {
     }
 
     // Key indicator (top-right). Shown only on rooms whose door
-    // requiresKey, so 1-3 stay clean.
+    // requiresKey, so rooms without locked doors stay clean. For
+    // multi-key doors (infected hub east, 2 keys), the row grows
+    // left so all slots fit under the same right anchor.
     if (currentRoom.door?.requiresKey) {
-      const kx = viewW - 40;
+      const required = currentRoom.door.keysRequired ?? 1;
+      const slotSpacing = 18;
       const ky = 26;
-      drawKeyHudIcon(ctx, kx, ky, keyHeld);
-      ctx.fillStyle = keyHeld ? "#ffd60a" : "rgba(255, 214, 10, 0.55)";
+      // Anchor: right-most slot at viewW - 40; leftmost shifts left.
+      const kx = viewW - 40 - (required - 1) * slotSpacing;
+      drawKeyHudIcon(ctx, kx, ky, keysHeld, required);
+      ctx.fillStyle =
+        keysHeld >= required ? "#ffd60a" : "rgba(255, 214, 10, 0.55)";
       ctx.font = "500 11px ui-monospace, SFMono-Regular, Menlo, monospace";
       ctx.textAlign = "right";
-      ctx.fillText(keyHeld ? "1 / 1" : "0 / 1", viewW - 20, ky + 14);
+      ctx.fillText(`${keysHeld} / ${required}`, viewW - 20, ky + 14);
     }
 
     ctx.restore();
