@@ -192,6 +192,9 @@ import { buildRoom2 } from "./room2";
 import { buildRoom3 } from "./room3";
 import { buildRoom4 } from "./room4";
 import { buildRoom5 } from "./room5";
+import { buildInfectedHub } from "./infected-hub";
+import { buildInfectedHubTop } from "./infected-hub-top";
+import { buildInfectedHubBottom } from "./infected-hub-bottom";
 import { buildRoomFromJson } from "./build-room-from-json";
 import { createEditor } from "./editor";
 import type { EditorHandle } from "./editor";
@@ -563,6 +566,9 @@ export function start(canvas: HTMLCanvasElement): void {
   rooms.set("room3", buildRoom3());
   rooms.set("room4", buildRoom4());
   rooms.set("room5", buildRoom5());
+  rooms.set("infected-hub", buildInfectedHub({ noisy: false }));
+  rooms.set("infected-hub-top", buildInfectedHubTop());
+  rooms.set("infected-hub-bottom", buildInfectedHubBottom());
   registerJsonRooms(rooms);
 
   const state: GameState = {
@@ -787,6 +793,14 @@ export function start(canvas: HTMLCanvasElement): void {
     rooms.set("room3", buildRoom3());
     rooms.set("room4", buildRoom4());
     rooms.set("room5", buildRoom5());
+    // Infected sector — hub rebuilt with noisy=false (fresh run).
+    // transitionToRoom rebuilds hub on each entry against live
+    // state.noisySector, so this initial-build value only matters
+    // if the player spawns directly into the hub (test-mode), which
+    // never happens in the current campaign chain.
+    rooms.set("infected-hub", buildInfectedHub({ noisy: false }));
+    rooms.set("infected-hub-top", buildInfectedHubTop());
+    rooms.set("infected-hub-bottom", buildInfectedHubBottom());
     registerJsonRooms(rooms);
   }
 
@@ -836,6 +850,15 @@ export function start(canvas: HTMLCanvasElement): void {
   }
 
   function transitionToRoom(id: string, viaBack = false) {
+    // Hub rebuild on entry — the hub has two variants (calm vs noisy)
+    // gated on state.noisySector, which Sprint 3 will flip when the
+    // player wakes a sleeping watcher. Building fresh on each entry
+    // keeps the variant correct without baking the flag into the
+    // initial registration. Sprint 1 always sees noisy=false but the
+    // wiring is in place.
+    if (id === "infected-hub") {
+      rooms.set("infected-hub", buildInfectedHub({ noisy: state.noisySector }));
+    }
     const next = rooms.get(id);
     if (!next) return;
     currentRoom = next;
