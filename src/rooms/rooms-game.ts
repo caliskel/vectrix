@@ -2065,6 +2065,12 @@ export function start(canvas: HTMLCanvasElement): void {
     // freshly-promoted aggro state immediately. Trigger ctx lets the
     // awareness module spawn the alert ring + particle burst directly
     // into the per-room lists.
+    // Heartbeat ambient — derive max gaze + any-aggro-watcher signal
+    // from the just-updated Watcher set, drive the audio loop. Runs
+    // before render so a Watcher death this frame snaps the heartbeat
+    // off immediately. Game tick is paused/blocked when no Watcher is
+    // present (most rooms), and per-frame cost is one Math.max over
+    // 0–3 watchers — well under 1 μs.
     perfBegin("upd_enemies");
     const awarenessTrigger = { particles, rings };
     for (const e of currentRoom.enemies) {
@@ -2072,6 +2078,26 @@ export function start(canvas: HTMLCanvasElement): void {
     }
     for (const e of currentRoom.enemies) e.update(enemyCtx);
     perfEnd("upd_enemies");
+
+    // Watcher 2.0 heartbeat ambient — see comment above the enemy
+    // update for rationale.
+    {
+      let anyAggro = false;
+      let maxGaze = 0;
+      for (const e of currentRoom.enemies) {
+        if (e.type !== "watcher" || e.isDead()) continue;
+        if (e.awarenessState !== "aggro") continue;
+        anyAggro = true;
+        const g = (e as Watcher).gazeAtPlayer;
+        if (g > maxGaze) maxGaze = g;
+      }
+      if (!anyAggro) {
+        audio.play.setHeartbeat(0, 0.5);
+      } else {
+        // 0.15 → 0.35 gain, 0.5 → 1.5 Hz beat as gaze fills.
+        audio.play.setHeartbeat(0.15 + maxGaze * 0.2, 0.5 + maxGaze * 1.0);
+      }
+    }
 
     // Sentinel transitions (combat → dying → defeated) drive score
     // and the Game Complete overlay; pendingShake* gets drained.

@@ -1831,6 +1831,26 @@ export function start(canvas: HTMLCanvasElement): void {
     }
     for (const e of currentRoom.enemies) e.update(enemyCtx);
 
+    // Watcher 2.0 heartbeat ambient — see rooms-game.ts equivalent
+    // for rationale. Tutorial Room 2 is the only Watcher encounter
+    // here, so most frames this loop is a single comparison.
+    {
+      let anyAggro = false;
+      let maxGaze = 0;
+      for (const e of currentRoom.enemies) {
+        if (e.type !== "watcher" || e.isDead()) continue;
+        if (e.awarenessState !== "aggro") continue;
+        anyAggro = true;
+        const g = (e as Watcher).gazeAtPlayer;
+        if (g > maxGaze) maxGaze = g;
+      }
+      if (!anyAggro) {
+        audio.play.setHeartbeat(0, 0.5);
+      } else {
+        audio.play.setHeartbeat(0.15 + maxGaze * 0.2, 0.5 + maxGaze * 1.0);
+      }
+    }
+
     // age + cull lasers (self-expire by total duration)
     for (const l of lasers) l.age += dt;
     lasers = lasers.filter(

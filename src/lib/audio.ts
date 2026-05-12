@@ -89,6 +89,17 @@ class AudioEngine {
   private watcherChargeFilter?: Filter;
   private watcherFireMembrane?: MembraneSynth; // tight sub-thump
   private watcherFireNoise?: NoiseSynth;       // metallic crack
+  // Watcher 2.0 ambient — low-frequency heartbeat loop while any
+  // Watcher is in aggro. Gain + beat rate scale with the maximum
+  // gaze stack across alive watchers, so the player feels the
+  // tension rise as marked-state approaches.
+  private heartbeatSynth?: MembraneSynth;
+  private heartbeatGain?: Gain;
+  private heartbeatFilter?: Filter;
+  private heartbeatLastLevel = 0;
+  private heartbeatLastHz = 0.5;
+  private heartbeatNextBeatAt = 0;
+  private heartbeatActive = false;
   private hunterSnarlSynth?: Synth;     // contact-damage angry burst
   private hunterSnarlFilter?: Filter;
 
@@ -244,6 +255,7 @@ class AudioEngine {
     this.setupAlert();
     this.setupWatcherCharge();
     this.setupWatcherFire();
+    this.setupHeartbeat();
     this.setupHunterSnarl();
     this.setupBossPhase();
     this.setupBossMineSpawn();
@@ -557,6 +569,25 @@ class AudioEngine {
       noise: { type: "pink" },
       envelope: { attack: 0.001, decay: 0.1, sustain: 0, release: 0.04 },
     }).connect(bandpass);
+  }
+
+  // Watcher 2.0 heartbeat ambient: low sub-thump fired on an interval
+  // driven by setHeartbeat(level, hz). Sub-bass MembraneSynth through
+  // a dedicated gain so we can fade in/out independently of other
+  // SFX, lowpass to keep it muffled (atmosphere, not punch).
+  private setupHeartbeat(): void {
+    this.heartbeatGain = new Gain(0).connect(this.sfx!);
+    this.heartbeatFilter = new Filter({
+      type: "lowpass",
+      frequency: 220,
+      Q: 0.8,
+    }).connect(this.heartbeatGain);
+    this.heartbeatSynth = new MembraneSynth({
+      pitchDecay: 0.05,
+      octaves: 4,
+      oscillator: { type: "sine" },
+      envelope: { attack: 0.01, decay: 0.22, sustain: 0, release: 0.08 },
+    }).connect(this.heartbeatFilter);
   }
 
   // Hunter snarl: short angry burst on contact damage. Sub-saw low,
@@ -897,6 +928,11 @@ class AudioEngine {
     alert: (): void => this.playAlert(),
     watcherCharge: (): void => this.playWatcherCharge(),
     watcherFire: (): void => this.playWatcherFire(),
+    /** Continuous ambient pulse — pulse rate `hz` and gain `level`
+     *  driven externally per frame (game tick). `level = 0` releases
+     *  and quiesces the loop. See setHeartbeat for details. */
+    setHeartbeat: (level: number, hz: number): void =>
+      this.setHeartbeat(level, hz),
     hunterSnarl: (): void => this.playHunterSnarl(),
     bossPhase: (): void => this.playBossPhase(),
     bossMineSpawn: (): void => this.playBossMineSpawn(),
@@ -1070,6 +1106,56 @@ class AudioEngine {
       // melodic sweep.
       this.watcherFireMembrane.triggerAttackRelease(70, 0.18, t, 0.85);
       this.watcherFireNoise.triggerAttackRelease(0.1, t, 0.6);
+    } catch {}
+  }
+
+  // Heartbeat ambient — called per frame from rooms-game / tutorial-game
+  // with the desired level (0..1) and beat rate (Hz). When level = 0
+  // the loop quiesces. Beat schedule is driven off toneNow() so we
+  // don't need a separate Tone.Loop or Transport hook.
+  private setHeartbeat(level: number, hz: number): void {
+    if (!this.heartbeatGain || !this.heartbeatSynth) return;
+    try {
+      const t = toneNow();
+      // Off-state — fade gain to 0 and stop scheduling beats. We do
+      // NOT triggerRelease the synth itself; the short decay envelope
+      // already drops samples to silence quickly, and the gain fade
+      // covers any tail.
+      if (level <= 0) {
+        if (this.heartbeatActive) {
+          this.heartbeatGain.gain.cancelScheduledValues(t);
+          this.heartbeatGain.gain.linearRampToValueAtTime(0, t + 0.5);
+          this.heartbeatActive = false;
+        }
+        this.heartbeatLastLevel = 0;
+        return;
+      }
+      // First-frame active — wake up: schedule next beat soon (200 ms
+      // ahead so the first audible pulse arrives quickly without
+      // overlapping anything in flight).
+      if (!this.heartbeatActive) {
+        this.heartbeatNextBeatAt = t + 0.2;
+        this.heartbeatActive = true;
+      }
+      // Smooth gain + rate changes. rampTo with 100 ms window so a
+      // shooting gaze meter doesn't strobe the level.
+      if (Math.abs(level - this.heartbeatLastLevel) > 0.01) {
+        this.heartbeatGain.gain.cancelScheduledValues(t);
+        this.heartbeatGain.gain.linearRampToValueAtTime(level, t + 0.1);
+        this.heartbeatLastLevel = level;
+      }
+      if (Math.abs(hz - this.heartbeatLastHz) > 0.01) {
+        this.heartbeatLastHz = hz;
+      }
+      // Fire pulses on schedule. Beat rate is derived from the cached
+      // hz; recomputed each fire so live rate changes apply.
+      if (t >= this.heartbeatNextBeatAt) {
+        // 50 Hz fundamental — sub-region, below the watcherFire 70 Hz
+        // so the heartbeat sits beneath combat hits.
+        this.heartbeatSynth.triggerAttackRelease(50, 0.18, t, 1.0);
+        const interval = 1 / Math.max(0.1, this.heartbeatLastHz);
+        this.heartbeatNextBeatAt = t + interval;
+      }
     } catch {}
   }
 
