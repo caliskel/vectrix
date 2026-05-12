@@ -160,11 +160,12 @@ export function buildRoom1(): Room {
     },
     worldLabels: [
       {
-        // Hanging above the top wall, outside the playable arena.
-        // Scrambles in on room entry → reads "INFECTED ZONE" → glitches
-        // back into garble as it fades. One-shot per visit.
+        // Centred inside the infected band — horizontal midpoint of
+        // the bullet field, vertical midpoint of the arena. Renders
+        // under bullets/player, over walls, so the sign reads as a
+        // hazard label painted on the floor that fire passes over.
         x: (infectedFieldStart + infectedFieldEnd) / 2,
-        y: -50,
+        y: ROOM_H / 2,
         text: "INFECTED ZONE",
         size: 56,
         color: "#ff2d55",
