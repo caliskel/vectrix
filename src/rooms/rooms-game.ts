@@ -134,6 +134,7 @@ import {
   type Particle,
   type Ring,
   addFloatingText,
+  addRing,
   compactFloatingTexts,
   compactParticles,
   compactRings,
@@ -2085,10 +2086,10 @@ export function start(canvas: HTMLCanvasElement): void {
       }
     }
 
-    // dash-through bullets — LIGHT-tier impact feedback only (no
-    // scoring in rooms; the satisfaction is the cue itself). Dedup
-    // per dash via dashedThroughId so a single bullet can't fire the
-    // tic twice as it crosses the player.
+    // dash-through bullets — LIGHT-tier impact feedback + flat +100
+    // score per bullet crossed (sandbox port; doubling/multiplier
+    // intentionally stripped). Dedup per dash via dashedThroughId so
+    // a single bullet can't fire twice as it crosses the player.
     if (player.dashIframeTime > 0) {
       const ph = PLAYER_SIZE / 2;
       const bh = settings.bullets.size / 2;
@@ -2100,6 +2101,50 @@ export function start(canvas: HTMLCanvasElement): void {
         ) {
           b.dashedThroughId = state.dashId;
           emitBulletHit(makeImpactCtx(), b.x, b.y, settings.bullets.color);
+          state.score += 100;
+          addFloatingText(floatingTexts, "+100", b.x, b.y - 10, {
+            size: 18,
+            color: "#ffffff",
+            lifetime: 0.6,
+          });
+        }
+      }
+    }
+
+    // near-miss — bullet passes within `PLAYER_SIZE + 20` of the
+    // player while moving > 50 px/s and not in dash i-frame, without
+    // an AABB hit. Each bullet flagged once via `b.nearMissed`.
+    // Mirrors sandbox-game.ts:1368 minus the multiplier scaling.
+    if (player.dashIframeTime <= 0) {
+      const playerSpeed = Math.hypot(player.vx, player.vy);
+      if (playerSpeed > 50) {
+        const ph = PLAYER_SIZE / 2;
+        const bh = settings.bullets.size / 2;
+        const nearRadius = PLAYER_SIZE + 20;
+        const nearRadiusSq = nearRadius * nearRadius;
+        for (const b of bullets) {
+          if (b.nearMissed) continue;
+          const aabbHit =
+            Math.abs(b.x - player.x) < ph + bh &&
+            Math.abs(b.y - player.y) < ph + bh;
+          if (aabbHit) continue;
+          const dx = b.x - player.x;
+          const dy = b.y - player.y;
+          if (dx * dx + dy * dy < nearRadiusSq) {
+            b.nearMissed = true;
+            state.score += 50;
+            addFloatingText(floatingTexts, "+50", b.x, b.y - 10, {
+              size: 16,
+              color: "#facc15",
+              lifetime: 0.45,
+            });
+            addRing(rings, player.x, player.y, {
+              startR: PLAYER_SIZE / 2 + 6,
+              endR: PLAYER_SIZE / 2 + 28,
+              color: "#facc15",
+              lifetime: 0.1,
+            });
+          }
         }
       }
     }
