@@ -172,7 +172,12 @@ function cloneDraft(json: RoomJson): RoomJson {
 
 export function createEditor(config: EditorConfig): EditorHandle {
   let mode: EditorMode = "closed";
-  let savedRoomBeforePlay: Room | null = null;
+  /** Snapshot of whatever campaign room was current when the editor
+   *  first opened. Restored on close so the live game world isn't
+   *  collaterally mutated by editor mutations — F3 from inside any
+   *  campaign room (room1..room5) now swaps to a draft tempRoom
+   *  instead of letting the user paint on top of the live room. */
+  let campaignRoomSnapshot: Room | null = null;
   let draft: RoomJson = cloneDraft(config.initialDraft ?? DEFAULT_DRAFT);
   let selection: Selection = null;
   const modeListeners = new Set<(n: EditorMode, p: EditorMode) => void>();
@@ -211,16 +216,40 @@ export function createEditor(config: EditorConfig): EditorHandle {
 
   function openEditing(): void {
     if (mode === "editing") return;
+    // Swap to a fresh draft tempRoom so mutations land in the
+    // editor's working copy, never the live campaign room the user
+    // happened to be in. The campaign room is snapshotted for
+    // restore on close.
+    let temp: Room;
+    try {
+      temp = buildTempRoomFromDraft();
+    } catch (e) {
+      console.error("[editor] cannot open — draft invalid:", e);
+      return;
+    }
+    campaignRoomSnapshot = config.getCurrentRoom();
+    config.setCurrentRoom(temp);
+    clearPools();
+    config.triggerSyncRoomFx();
+    config.triggerSpawnPlayerInCurrentRoom();
     setCameraMode(config.getCamera(), "edit");
-    // No pool clear on open — the live frame is intentionally
-    // preserved so the user sees the world they were just in
-    // (bullets in flight, etc.) and can decide what to keep.
+    config.triggerSnapCamera();
     setMode("editing");
   }
 
   function closeEditor(): void {
     if (mode === "closed") return;
     if (mode === "playing") exitToEditing();
+    // Restore the live campaign room so any in-memory mutations to
+    // the tempRoom drop here, not on room1..room5.
+    if (campaignRoomSnapshot) {
+      config.setCurrentRoom(campaignRoomSnapshot);
+      campaignRoomSnapshot = null;
+      clearPools();
+      config.triggerSyncRoomFx();
+      config.triggerSpawnPlayerInCurrentRoom();
+      config.triggerSnapCamera();
+    }
     setCameraMode(config.getCamera(), "follow");
     // dt would otherwise include the editor session — reset so the
     // next frame's dt is just the rAF interval.
@@ -230,14 +259,21 @@ export function createEditor(config: EditorConfig): EditorHandle {
 
   function exitToEditing(): void {
     if (mode !== "playing") return;
-    if (savedRoomBeforePlay) {
-      config.setCurrentRoom(savedRoomBeforePlay);
-      savedRoomBeforePlay = null;
+    // Rebuild tempRoom fresh from the current draft so test-play
+    // mutations (enemy positions, HP, awareness) reset cleanly.
+    let temp: Room;
+    try {
+      temp = buildTempRoomFromDraft();
+    } catch (e) {
+      console.error("[editor] cannot exit to editing — draft invalid:", e);
+      return;
     }
+    config.setCurrentRoom(temp);
     clearPools();
     config.triggerSyncRoomFx();
-    config.triggerSnapCamera();
+    config.triggerSpawnPlayerInCurrentRoom();
     setCameraMode(config.getCamera(), "edit");
+    config.triggerSnapCamera();
     config.resetLastTime();
     setMode("editing");
   }
@@ -248,8 +284,9 @@ export function createEditor(config: EditorConfig): EditorHandle {
 
   function startPlay(): void {
     if (mode === "playing") return;
-    // Allow start from `closed` too — covers a future "Play current
-    // draft" hotkey use. Today the UI only exposes it from editing.
+    // Rebuild tempRoom fresh from draft so each Play press starts
+    // with pristine enemy state (HP, awareness, pendingEnemies.spawned).
+    // campaignRoomSnapshot stays — close-from-playing still needs it.
     let temp: Room;
     try {
       temp = buildTempRoomFromDraft();
@@ -257,7 +294,6 @@ export function createEditor(config: EditorConfig): EditorHandle {
       console.error("[editor] cannot start play — draft invalid:", e);
       return;
     }
-    savedRoomBeforePlay = config.getCurrentRoom();
     config.setCurrentRoom(temp);
     clearPools();
     config.resetRunStateForPlay();

@@ -115,6 +115,9 @@ export function createEditorCanvas(
   let dragRect: DragRect | null = null;
   let panning: PanState | null = null;
   let entityDrag: EntityDrag | null = null;
+  /** Spacebar held → left-drag pans instead of placing. Trackpad
+   *  fallback for users without a middle-mouse button. */
+  let spaceHeld = false;
 
   // ------- screen ↔ world -------
 
@@ -349,8 +352,9 @@ export function createEditorCanvas(
 
   function onMouseDown(e: MouseEvent): void {
     if (!shouldHandle()) return;
-    // Middle-mouse pan starts regardless of tool.
-    if (e.button === 1) {
+    // Middle-mouse pan starts regardless of tool, OR Space-held
+    // left-click for trackpad users without a middle button.
+    if (e.button === 1 || (e.button === 0 && spaceHeld)) {
       e.preventDefault();
       panning = { lastClientX: e.clientX, lastClientY: e.clientY };
       return;
@@ -458,9 +462,11 @@ export function createEditorCanvas(
 
   function onMouseUp(e: MouseEvent): void {
     if (!shouldHandle()) return;
-    if (e.button === 1 && panning) {
+    if (panning && (e.button === 1 || e.button === 0)) {
       panning = null;
-      return;
+      if (e.button === 1) return;
+      // Space+left-pan: don't fall through to wall / stamp commit.
+      if (spaceHeld) return;
     }
     if (e.button !== 0) return;
 
@@ -518,6 +524,18 @@ export function createEditorCanvas(
     if (e.code === "Delete" || e.code === "Backspace") {
       e.preventDefault();
       deleteSelection();
+      return;
+    }
+    if (e.code === "Space" && !spaceHeld) {
+      e.preventDefault();
+      spaceHeld = true;
+      canvas.style.cursor = "grab";
+    }
+  }
+  function onKeyUp(e: KeyboardEvent): void {
+    if (e.code === "Space" && spaceHeld) {
+      spaceHeld = false;
+      canvas.style.cursor = "";
     }
   }
 
@@ -681,6 +699,7 @@ export function createEditorCanvas(
   window.addEventListener("mouseup", onMouseUp);
   canvas.addEventListener("wheel", onWheel, { passive: false });
   window.addEventListener("keydown", onKeyDown);
+  window.addEventListener("keyup", onKeyUp);
   canvas.addEventListener("contextmenu", (e) => {
     if (editor.isPaused()) e.preventDefault();
   });
@@ -691,6 +710,7 @@ export function createEditorCanvas(
     window.removeEventListener("mouseup", onMouseUp);
     canvas.removeEventListener("wheel", onWheel);
     window.removeEventListener("keydown", onKeyDown);
+    window.removeEventListener("keyup", onKeyUp);
   }
 
   return { draw, destroy };
