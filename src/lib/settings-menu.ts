@@ -16,19 +16,34 @@ const STYLE = `
   position: fixed; inset: 0;
   background: rgba(0,0,0,0.85);
   display: none;
-  z-index: 100;
+  z-index: 250;
   overflow: auto;
   font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   color: #fff;
 }
 .dp-menu-root.open { display: flex; align-items: flex-start; justify-content: center; padding: 36px 16px; }
 .dp-panel {
+  position: relative;
   width: 100%; max-width: 640px;
   background: rgba(20,20,22,0.94);
   border: 1px solid rgba(255,255,255,0.10);
   border-radius: 12px;
   padding: 22px 26px 26px;
   box-shadow: 0 30px 60px rgba(0,0,0,0.55);
+}
+.dp-close {
+  position: absolute;
+  top: 10px; right: 14px;
+  background: transparent; border: none;
+  color: #94a3b8; font-size: 22px; line-height: 1;
+  cursor: pointer; padding: 4px 8px;
+  border-radius: 4px;
+  transition: background 0.15s, color 0.15s;
+}
+.dp-close:hover, .dp-close:focus-visible {
+  background: rgba(255,255,255,0.08);
+  color: #00e5ff;
+  outline: none;
 }
 .dp-title {
   font-size: 22px; font-weight: 600; margin: 0 0 4px;
@@ -85,10 +100,18 @@ export type MenuHandle = {
   toggle(): void;
 };
 
+export type CreateMenuOpts = {
+  /** Optional close callback. Fires after the X button or Esc closes
+   *  the overlay. Sandbox uses this to restore the pause-menu layer
+   *  underneath; the landing-page entry leaves it undefined. */
+  onClose?: () => void;
+};
+
 export function createMenu(
   settings: Settings,
   save: () => void,
-  restartRun: () => void,
+  restartRun?: () => void,
+  opts: CreateMenuOpts = {},
 ): MenuHandle {
   injectStyle();
 
@@ -101,6 +124,16 @@ export function createMenu(
     root.innerHTML = "";
     const panel = document.createElement("div");
     panel.className = "dp-panel";
+    const closeBtn = document.createElement("button");
+    closeBtn.className = "dp-close";
+    closeBtn.type = "button";
+    closeBtn.textContent = "×";
+    closeBtn.setAttribute("aria-label", "close");
+    closeBtn.addEventListener("click", () => {
+      setOpen(false);
+      opts.onClose?.();
+    });
+    panel.appendChild(closeBtn);
     panel.appendChild(makeHeader());
     panel.appendChild(makeRun());
     panel.appendChild(makeBullets());
@@ -358,24 +391,43 @@ export function createMenu(
       b.type = "button";
       b.textContent = name;
       b.addEventListener("click", () => {
-        // reset to defaults first, then overlay preset, so configId reliably
-        // matches the preset (custom field carryovers would break that)
-        deepAssign(settings, DEFAULT_SETTINGS);
-        deepAssign(settings, PRESETS[name]);
+        // Only reset the sections the preset actually specifies (today:
+        // bullets). Audio, run length, pickups, etc. stay as the player
+        // tuned them so a difficulty change doesn't yank their volume
+        // back to default.
+        const preset = PRESETS[name];
+        for (const key of Object.keys(preset) as (keyof Settings)[]) {
+          const def = (DEFAULT_SETTINGS as Record<string, unknown>)[key];
+          (settings as Record<string, unknown>)[key] = JSON.parse(
+            JSON.stringify(def),
+          );
+          deepAssign(
+            (settings as Record<string, unknown>)[key],
+            (preset as Record<string, unknown>)[key],
+          );
+        }
         save();
         rebuild();
+        // Re-apply audio in case some other knob the preset touched
+        // indirectly affected playback (defensive — no current preset
+        // does, but cheap).
+        audio.setMasterVolume(settings.audio.master);
+        audio.setSfxVolume(settings.audio.sfx);
+        audio.setMusicVolume(settings.audio.music);
       });
       row.appendChild(b);
     }
-    const restart = document.createElement("button");
-    restart.className = "dp-btn";
-    restart.type = "button";
-    restart.textContent = "Restart run";
-    restart.style.marginLeft = "auto";
-    restart.addEventListener("click", () => {
-      restartRun();
-    });
-    row.appendChild(restart);
+    if (restartRun) {
+      const restart = document.createElement("button");
+      restart.className = "dp-btn";
+      restart.type = "button";
+      restart.textContent = "Restart run";
+      restart.style.marginLeft = "auto";
+      restart.addEventListener("click", () => {
+        restartRun();
+      });
+      row.appendChild(restart);
+    }
 
     const reset = document.createElement("button");
     reset.className = "dp-btn danger";
@@ -383,6 +435,9 @@ export function createMenu(
     reset.textContent = "Reset to defaults";
     reset.addEventListener("click", () => {
       deepAssign(settings, DEFAULT_SETTINGS);
+      audio.setMasterVolume(settings.audio.master);
+      audio.setSfxVolume(settings.audio.sfx);
+      audio.setMusicVolume(settings.audio.music);
       save();
       rebuild();
     });

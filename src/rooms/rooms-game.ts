@@ -755,34 +755,63 @@ export function start(canvas: HTMLCanvasElement): void {
   // inward with ±60° spread (mirrors sandbox-game.ts:572 `spawnBullet`
   // verbatim except the bounds are the rectangle's edges instead of
   // the viewport's, and `bounces` is forced true).
+  //
+  // Rooms-only constraint: a fresh-entered room should never have an
+  // ambient bullet materialize on top of the player. We re-roll the
+  // edge-pick up to AMBIENT_SAFE_RETRIES times if the rolled spawn
+  // point lands within AMBIENT_SAFE_RADIUS_PX of the player; if every
+  // retry fails (rare, only happens in tight rooms with the player
+  // near the centre), we skip this tick — the next interval will get
+  // its own shot. Sandbox doesn't need this because the player is
+  // always in the centre of the same arena.
+  const AMBIENT_SAFE_RADIUS_PX = 180;
+  const AMBIENT_SAFE_RETRIES = 6;
   function spawnAmbientBullet(cfg: AmbientBulletField): void {
     const sz = settings.bullets.size;
     const h = sz / 2;
     const a = cfg.spawnArea;
-    const edge = Math.floor(Math.random() * 4);
     const xRange = Math.max(0, a.w - 2 * h);
     const yRange = Math.max(0, a.h - 2 * h);
+    const safeR2 = AMBIENT_SAFE_RADIUS_PX * AMBIENT_SAFE_RADIUS_PX;
     let x = 0;
     let y = 0;
     let nx = 0;
     let ny = 0;
-    if (edge === 0) {
-      x = a.x + h + Math.random() * xRange;
-      y = a.y + h;
-      ny = 1;
-    } else if (edge === 1) {
-      x = a.x + a.w - h;
-      y = a.y + h + Math.random() * yRange;
-      nx = -1;
-    } else if (edge === 2) {
-      x = a.x + h + Math.random() * xRange;
-      y = a.y + a.h - h;
-      ny = -1;
-    } else {
-      x = a.x + h;
-      y = a.y + h + Math.random() * yRange;
-      nx = 1;
+    let safe = false;
+    for (let attempt = 0; attempt < AMBIENT_SAFE_RETRIES; attempt++) {
+      const edge = Math.floor(Math.random() * 4);
+      if (edge === 0) {
+        x = a.x + h + Math.random() * xRange;
+        y = a.y + h;
+        nx = 0;
+        ny = 1;
+      } else if (edge === 1) {
+        x = a.x + a.w - h;
+        y = a.y + h + Math.random() * yRange;
+        nx = -1;
+        ny = 0;
+      } else if (edge === 2) {
+        x = a.x + h + Math.random() * xRange;
+        y = a.y + a.h - h;
+        nx = 0;
+        ny = -1;
+      } else {
+        x = a.x + h;
+        y = a.y + h + Math.random() * yRange;
+        nx = 1;
+        ny = 0;
+      }
+      const dx = x - player.x;
+      const dy = y - player.y;
+      if (dx * dx + dy * dy >= safeR2) {
+        safe = true;
+        break;
+      }
     }
+    // All retries landed in the safe zone — drop this spawn so the
+    // player isn't pelted on entry. The ambient field tops itself up
+    // again on the next spawn interval.
+    if (!safe) return;
     const baseAngle = Math.atan2(ny, nx);
     const offset = (Math.random() * 2 - 1) * (Math.PI / 3);
     const angle = baseAngle + offset;
@@ -864,6 +893,7 @@ export function start(canvas: HTMLCanvasElement): void {
     rings = [];
     floatingTexts = [];
     lasers = [];
+    audio.play.stopWatcherCues();
     currentKey = null;
     keysHeld = 0;
     sectorRoomKeys.clear();
@@ -903,6 +933,10 @@ export function start(canvas: HTMLCanvasElement): void {
     rings = [];
     floatingTexts = [];
     lasers = [];
+    // Stop any in-flight watcher charge/fire envelopes from the room
+    // we just left — without this, the rising drone keeps swelling
+    // (or the fire crack lands) after the door has closed.
+    audio.play.stopWatcherCues();
     currentKey = null;
     // Preserve keysHeld when staying within the hub zone so keys from
     // both side-rooms accumulate at the east door. Reset for any
@@ -1458,6 +1492,16 @@ export function start(canvas: HTMLCanvasElement): void {
   }
 
   function destroyEnemy(enemy: Enemy) {
+    // Cancel any lasers this enemy owned — if a Watcher dies mid-
+    // aiming or mid-firing its beam shouldn't keep flashing on the
+    // ground / re-applying damage. Also release the charge / fire
+    // audio envelopes so a long charge tail doesn't bleed past the
+    // kill flash.
+    if (lasers.length > 0) {
+      const before = lasers.length;
+      lasers = lasers.filter((l) => l.ownerEnemy !== enemy);
+      if (lasers.length !== before) audio.play.stopWatcherCues();
+    }
     // FX (rings, particles, sound, screen shake, screen flash) live in
     // emitEnemyKill — this function only credits score and floats the
     // "+N" tag.

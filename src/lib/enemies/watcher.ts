@@ -462,8 +462,11 @@ export class Watcher implements Enemy {
       case "aiming":
         // Visual transition (charging → firing) happens inside the laser
         // based on age; the audio cue fires here, at the moment of beam
-        // commitment. Sharp downsweep "vweep" — cuts through the
-        // charge tail.
+        // commitment. Release the charge envelope first so its tail
+        // doesn't bleed into the fire transient — the fire impact is
+        // what should land on-screen, and overlapping the two adds CPU
+        // pressure (and audible "drift" on lower-end machines).
+        audio.play.stopWatcherCues();
         audio.play.watcherFire();
         // Snapshot gaze stack into the firing laser. A full meter at
         // the moment of commitment means this beam will pierce dash

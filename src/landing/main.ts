@@ -1,4 +1,6 @@
 import { audio } from "../lib/audio";
+import { loadSettings, saveSettings } from "../lib/config";
+import { createMenu } from "../lib/settings-menu";
 import {
   DEFAULT_PLAYER_PROFILE,
   type PlayerProfile,
@@ -97,6 +99,23 @@ startMenuBg(bgCanvas, {
   // real CRT artifact, not just a styled effect.
   onBigGlitch: () => audio.play.uiStatic(),
 });
+
+// === Settings menu (Gameplay + Audio) ===
+//
+// Reuses the in-sandbox settings overlay so a player can tune master
+// volume / bullet difficulty before ever entering a mode. No
+// "restart run" affordance here — the landing page has no run.
+const landingSettings = loadSettings();
+const settingsMenu = createMenu(
+  landingSettings,
+  () => saveSettings(landingSettings),
+);
+// Apply the freshly-loaded mix to the audio engine on landing so the
+// menu music sits at the user's chosen master / music volume from the
+// first second (otherwise it plays at 80 % until they touch a slider).
+audio.setMasterVolume(landingSettings.audio.master);
+audio.setSfxVolume(landingSettings.audio.sfx);
+audio.setMusicVolume(landingSettings.audio.music);
 
 // === Menu music — same flow as before, eager start + gesture fallback ===
 audio.setMusicTrack(
@@ -257,6 +276,12 @@ const buttonEls = Array.from(
 buttonEls.forEach((btn, i) => {
   btn.style.animationDelay = `${1100 + i * 100}ms`;
   btn.classList.add("entered");
+  // Make each button focusable via keyboard nav. <a> elements are
+  // tabbable by default; <button> too — but we use tabindex to also
+  // gate locked buttons out of the tab order.
+  if (btn.classList.contains("locked")) {
+    btn.setAttribute("tabindex", "-1");
+  }
 
   btn.addEventListener("mouseenter", () => {
     if (btn.classList.contains("locked")) return;
@@ -290,6 +315,55 @@ buttonEls.forEach((btn, i) => {
       }
     }
   });
+});
+
+// SETTINGS button — opens the gameplay/audio overlay. Uses the same
+// in-sandbox menu module so the slider set + persistence layer match.
+document
+  .getElementById("btn-settings")
+  ?.addEventListener("click", () => settingsMenu.setOpen(true));
+
+// === Arrow-key navigation across the menu buttons ===
+//
+// ArrowUp/ArrowDown (and Left/Right as aliases) move focus between
+// the .menu-btn entries; Enter / Space trigger a click on the focused
+// one. Skipped while any overlay or settings menu is open so the
+// nested controls inside those modals (sliders, color pickers, etc.)
+// keep their native arrow handling.
+function activeMenuButtons(): HTMLElement[] {
+  return buttonEls.filter((b) => !b.classList.contains("locked"));
+}
+function focusedMenuIndex(active: HTMLElement[]): number {
+  return active.indexOf(document.activeElement as HTMLElement);
+}
+function moveMenuFocus(delta: number): void {
+  const active = activeMenuButtons();
+  if (active.length === 0) return;
+  const cur = focusedMenuIndex(active);
+  const next =
+    cur < 0
+      ? delta > 0
+        ? 0
+        : active.length - 1
+      : (cur + delta + active.length) % active.length;
+  active[next].focus();
+}
+window.addEventListener("keydown", (e) => {
+  if (activeOverlay) return;
+  if (settingsMenu.isOpen()) return;
+  if (e.key === "ArrowDown" || e.key === "ArrowRight") {
+    e.preventDefault();
+    moveMenuFocus(1);
+  } else if (e.key === "ArrowUp" || e.key === "ArrowLeft") {
+    e.preventDefault();
+    moveMenuFocus(-1);
+  } else if (e.key === "Enter" || e.key === " ") {
+    const active = document.activeElement as HTMLElement | null;
+    if (active && buttonEls.includes(active)) {
+      e.preventDefault();
+      active.click();
+    }
+  }
 });
 
 // === Eye preview that tracks the cursor ===
@@ -403,6 +477,15 @@ document.querySelectorAll<HTMLElement>("[data-close]").forEach((el) => {
 });
 
 window.addEventListener("keydown", (e) => {
+  // Settings menu owns its own layer (z-index 250) so it sits above
+  // the Player / Controls / About overlays. Esc closes it first.
+  if (settingsMenu.isOpen()) {
+    if (e.key === "Escape" || e.key === "Tab") {
+      e.preventDefault();
+      settingsMenu.setOpen(false);
+    }
+    return;
+  }
   if (!activeOverlay) return;
   if (e.key === "Escape") {
     e.preventDefault();

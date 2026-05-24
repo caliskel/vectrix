@@ -3,6 +3,7 @@ import {
   Distortion,
   Filter,
   Gain,
+  Limiter,
   MembraneSynth,
   NoiseSynth,
   Player,
@@ -29,6 +30,12 @@ class AudioEngine {
   private master?: Gain;
   private sfx?: Gain;
   private music?: Gain;
+  // Output limiter sits between master and the destination. Prevents
+  // clipping when many cues overlap (watcher charge tail + watcher
+  // fire + ambient hits + pickup grabs all happen on the same frame
+  // in busy rooms) — clipping is the root cause of the audible
+  // "crackling" most players hear.
+  private limiter?: Limiter;
 
   // Looping music — keyed multi-track with crossfade. Caller registers
   // any number of tracks (e.g. "rooms" / "boss-1" / "boss-2" / "boss-3")
@@ -239,7 +246,10 @@ class AudioEngine {
   }
 
   private setupChain(): void {
-    this.master = new Gain(this.masterVol).toDestination();
+    // Brick-wall limiter at -1 dBFS catches stacked-cue clipping that
+    // shows up as crackle / pops on Chrome's audio worklet under load.
+    this.limiter = new Limiter(-1).toDestination();
+    this.master = new Gain(this.masterVol).connect(this.limiter);
     this.sfx = new Gain(this.sfxVol).connect(this.master);
     this.music = new Gain(this.musicVol).connect(this.master);
 
@@ -898,6 +908,21 @@ class AudioEngine {
     } catch {}
   }
 
+  /**
+   * Release any in-flight watcher charge / fire envelopes. Called on
+   * room transitions and on watcher death so a fading drone from a
+   * just-left room or just-killed enemy doesn't bleed into the next
+   * frame. Reverb tails decay naturally.
+   */
+  stopWatcherCues(): void {
+    if (!this.initialized) return;
+    try {
+      this.watcherChargeSynth?.triggerRelease();
+      this.watcherFireMembrane?.triggerRelease();
+      this.watcherFireNoise?.triggerRelease();
+    } catch {}
+  }
+
   setMasterVolume(v: number): void {
     this.masterVol = clamp01(v);
     if (this.master) this.master.gain.rampTo(this.masterVol, 0.05);
@@ -928,6 +953,7 @@ class AudioEngine {
     alert: (): void => this.playAlert(),
     watcherCharge: (): void => this.playWatcherCharge(),
     watcherFire: (): void => this.playWatcherFire(),
+    stopWatcherCues: (): void => this.stopWatcherCues(),
     /** Continuous ambient pulse — pulse rate `hz` and gain `level`
      *  driven externally per frame (game tick). `level = 0` releases
      *  and quiesces the loop. See setHeartbeat for details. */

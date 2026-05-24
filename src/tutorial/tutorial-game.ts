@@ -1021,6 +1021,7 @@ export function start(canvas: HTMLCanvasElement): void {
     rings = [];
     floatingTexts = [];
     lasers = [];
+    audio.play.stopWatcherCues();
     currentKey = null;
     keyHeld = false;
     markerIndex = 0;
@@ -1040,6 +1041,7 @@ export function start(canvas: HTMLCanvasElement): void {
     rings = [];
     floatingTexts = [];
     lasers = [];
+    audio.play.stopWatcherCues();
     currentKey = null;
     keyHeld = false;
     markerIndex = 0;
@@ -1367,6 +1369,14 @@ export function start(canvas: HTMLCanvasElement): void {
   }
 
   function destroyEnemy(enemy: Enemy) {
+    // Cancel any lasers this enemy owned (same fix as rooms-game) —
+    // dying Watchers shouldn't keep firing or leave their charge
+    // drone playing past the kill burst.
+    if (lasers.length > 0) {
+      const before = lasers.length;
+      lasers = lasers.filter((l) => l.ownerEnemy !== enemy);
+      if (lasers.length !== before) audio.play.stopWatcherCues();
+    }
     // FX (rings, particles, sound, screen shake, screen flash) live in
     // emitEnemyKill — this function only credits score and floats the
     // "+N" tag.
@@ -2785,6 +2795,44 @@ export function start(canvas: HTMLCanvasElement): void {
         restartRun();
       });
     document.body.appendChild(root);
+    // Keyboard navigation parity — auto-focus the primary CTA so
+    // arrow keys / Enter pick from a known origin, and wire the
+    // arrows to cycle through every action button regardless of
+    // whether it's an <a> or <button>.
+    const actionButtons = Array.from(
+      root.querySelectorAll<HTMLElement>(".tc-btn"),
+    );
+    actionButtons.forEach((b) => {
+      if (!(b instanceof HTMLAnchorElement)) return;
+      // Make anchors keyboard-activatable as buttons too — without
+      // this an <a> won't fire its click on Space.
+      b.setAttribute("tabindex", "0");
+    });
+    actionButtons[0]?.focus();
+    root.addEventListener(
+      "keydown",
+      (e) => {
+        if (actionButtons.length === 0) return;
+        const cur = actionButtons.indexOf(document.activeElement as HTMLElement);
+        if (e.key === "ArrowDown" || e.key === "ArrowRight") {
+          e.preventDefault();
+          actionButtons[cur < 0 ? 0 : (cur + 1) % actionButtons.length].focus();
+        } else if (e.key === "ArrowUp" || e.key === "ArrowLeft") {
+          e.preventDefault();
+          actionButtons[
+            cur < 0
+              ? actionButtons.length - 1
+              : (cur - 1 + actionButtons.length) % actionButtons.length
+          ].focus();
+        } else if (e.key === "Enter" || e.key === " ") {
+          if (cur >= 0) {
+            e.preventDefault();
+            actionButtons[cur].click();
+          }
+        }
+      },
+      true,
+    );
   }
 
   function hideTutorialCompleteOverlay(): void {

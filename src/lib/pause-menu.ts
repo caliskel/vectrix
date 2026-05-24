@@ -145,6 +145,58 @@ function injectStyle() {
   document.head.appendChild(tag);
 }
 
+/**
+ * Wire up ArrowUp/Down/Left/Right cycling + Enter/Space activation
+ * across `.rp-btn` elements inside the given overlay root. Browser
+ * Tab navigation still works; this just adds arrow-key parity so a
+ * keyboard player never needs the mouse.
+ *
+ * Listener attaches in the capture phase on the root so it beats the
+ * game-side keydown that would otherwise swallow Enter / Space.
+ */
+function attachArrowNav(root: HTMLElement) {
+  const buttons = (): HTMLElement[] =>
+    Array.from(root.querySelectorAll<HTMLElement>(".rp-btn"));
+  root.addEventListener(
+    "keydown",
+    (e) => {
+      const btns = buttons();
+      if (btns.length === 0) return;
+      const key = e.key;
+      if (
+        key !== "ArrowUp" &&
+        key !== "ArrowDown" &&
+        key !== "ArrowLeft" &&
+        key !== "ArrowRight" &&
+        key !== "Enter" &&
+        key !== " "
+      ) {
+        return;
+      }
+      const cur = btns.indexOf(document.activeElement as HTMLElement);
+      if (key === "ArrowDown" || key === "ArrowRight") {
+        e.preventDefault();
+        e.stopPropagation();
+        const next = cur < 0 ? 0 : (cur + 1) % btns.length;
+        btns[next].focus();
+      } else if (key === "ArrowUp" || key === "ArrowLeft") {
+        e.preventDefault();
+        e.stopPropagation();
+        const next =
+          cur < 0 ? btns.length - 1 : (cur - 1 + btns.length) % btns.length;
+        btns[next].focus();
+      } else if (key === "Enter" || key === " ") {
+        if (cur >= 0) {
+          e.preventDefault();
+          e.stopPropagation();
+          btns[cur].click();
+        }
+      }
+    },
+    true,
+  );
+}
+
 export type PauseMenuHandle = {
   isOpen(): boolean;
   setOpen(value: boolean): void;
@@ -204,6 +256,7 @@ export function createPauseMenu(opts: {
       opts.onQuit();
     },
   );
+  attachArrowNav(root);
 
   document.body.appendChild(root);
 
@@ -278,6 +331,7 @@ export function createSandboxPauseMenu(opts: {
       opts.onQuit();
     },
   );
+  attachArrowNav(root);
 
   document.body.appendChild(root);
 
@@ -350,6 +404,7 @@ export function createGameCompleteMenu(opts: {
     ?.addEventListener("click", () => {
       opts.onQuit();
     });
+  attachArrowNav(root);
 
   document.body.appendChild(root);
 
