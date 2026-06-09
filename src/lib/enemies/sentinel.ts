@@ -2302,15 +2302,18 @@ export class Sentinel implements Enemy {
     if (this.bossFlashTimer > 0) {
       this.bossFlashTimer = Math.max(0, this.bossFlashTimer - dt);
     }
-    for (const s of this.streamers) {
-      s.x += s.vx * dt;
-      s.y += s.vy * dt;
-      s.age += dt;
-    }
-    if (this.streamers.length > 0) {
-      this.streamers = this.streamers.filter(
-        (s) => s.age < BURST_STREAMER_LIFETIME_SEC,
-      );
+    // In-place compaction — tickEnergyBurst крутится каждый кадр боя,
+    // .filter() аллоцировал массив на каждый кадр с живыми стримерами.
+    {
+      let w = 0;
+      for (let i = 0; i < this.streamers.length; i++) {
+        const s = this.streamers[i];
+        s.x += s.vx * dt;
+        s.y += s.vy * dt;
+        s.age += dt;
+        if (s.age < BURST_STREAMER_LIFETIME_SEC) this.streamers[w++] = s;
+      }
+      this.streamers.length = w;
     }
   }
 

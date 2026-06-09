@@ -13,7 +13,7 @@ import {
   ENEMY_DEAGGRO_COOLDOWN_MS,
   ENEMY_DEAGGRO_RADIUS_MULTIPLIER,
 } from "../config";
-import { addRing, type Particle, type Ring } from "../particles";
+import { addRing, pushParticle, type Particle, type Ring } from "../particles";
 import type { Enemy } from "./types";
 
 const ALERT_DURATION_SEC = ALERT_DURATION_MS / 1000;
@@ -150,19 +150,19 @@ function emitAlertBurst(ctx: AwarenessTriggerCtx, enemy: Enemy): void {
       ALERT_BURST_PARTICLE_SPEED_MIN +
       Math.random() *
         (ALERT_BURST_PARTICLE_SPEED_MAX - ALERT_BURST_PARTICLE_SPEED_MIN);
-    ctx.particles.push({
-      x: enemy.x,
-      y: enemy.y,
-      vx: Math.cos(angle) * speed,
-      vy: Math.sin(angle) * speed,
-      initialSize: 3,
-      color: enemy.color,
-      age: 0,
-      lifetime: ALERT_BURST_PARTICLE_LIFETIME_SEC,
-      glowStrong: 10,
-      glowSoft: 4,
-      drag: 0.94,
-    });
+    pushParticle(
+      ctx.particles,
+      enemy.x,
+      enemy.y,
+      Math.cos(angle) * speed,
+      Math.sin(angle) * speed,
+      3,
+      enemy.color,
+      ALERT_BURST_PARTICLE_LIFETIME_SEC,
+      10,
+      4,
+      0.94,
+    );
   }
 }
 

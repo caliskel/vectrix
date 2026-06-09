@@ -135,6 +135,7 @@ import { BackgroundFx } from "../lib/bg-fx";
 import { drawFpsOverlay, recordFrame } from "../lib/fps-meter";
 import { createPauseMenu } from "../lib/pause-menu";
 import { PostProcessor, DEFAULT_POST } from "../lib/postprocess";
+import { drawCornerVignette, drawHitVignette } from "../lib/vignette";
 import { type Bounds, hitBounds } from "../lib/types";
 import {
   createEnergyBackground,
@@ -443,6 +444,8 @@ export function start(canvas: HTMLCanvasElement): void {
   let rings: Ring[] = [];
   let floatingTexts: FloatingText[] = [];
   let lasers: Laser[] = [];
+  // Переиспользуемый scratch для фильтра стен во время дэша (см. ниже).
+  const dashWallScratch: Wall[] = [];
   // Per-run key state. Camera is created once and snapped to each
   // room's bounds on entry. currentKey lives at the kill site of the
   // enemy flagged dropsKey; keyHeld flips when the player walks over
@@ -472,6 +475,12 @@ export function start(canvas: HTMLCanvasElement): void {
   type HintState = "idle" | "showing" | "visible" | "hiding";
   let hintText: string | null = null;
   let hintState: HintState = "idle";
+  // Кэш drawTutorialHint — токены и ширины пересчитываются только при
+  // смене текста подсказки (см. drawTutorialHint).
+  let hintTokensCache: HintToken[] = [];
+  const hintWidthsCache: number[] = [];
+  let hintContentWidth = 0;
+  let hintMeasuredFor: string | null = null;
   let hintAge = 0;
   let hintPendingText: string | null = null;
   const HINT_FADE_IN_SEC = 0.3;
@@ -689,7 +698,6 @@ export function start(canvas: HTMLCanvasElement): void {
       slideY = -t * 8;
     }
 
-    const tokens = parseHintTokens(hintText);
     const fontSize = 28;
     const padX = 18;
     const padY = 10;
@@ -703,26 +711,36 @@ export function start(canvas: HTMLCanvasElement): void {
     ctx.textBaseline = "middle";
     ctx.textAlign = "left";
 
-    const widths: number[] = [];
-    let totalContent = 0;
-    for (const tk of tokens) {
-      if (tk.kind === "text") {
-        const w = ctx.measureText(tk.value).width;
-        widths.push(w);
-        totalContent += w;
-      } else {
-        // Keycap width grows for multi-char labels (`SPACE`,
-        // `L SHIFT`) — measure with the keycap font and pad either
-        // side, never below `keyMinW` so single letters stay
-        // square.
-        ctx.font = keyFont;
-        const measured = ctx.measureText(tk.value).width;
-        ctx.font = `700 ${fontSize}px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif`;
-        const w = Math.max(keyMinW, measured + keyTextPad);
-        widths.push(w);
-        totalContent += w + keyGap;
+    // Парсинг + measureText кэшируются по тексту подсказки — раньше
+    // regex-токенизация и измерение шрифтов гоняли каждый кадр, пока
+    // подсказка видна (т.е. практически весь туториал).
+    if (hintMeasuredFor !== hintText) {
+      hintTokensCache = parseHintTokens(hintText);
+      hintWidthsCache.length = 0;
+      hintContentWidth = 0;
+      for (const tk of hintTokensCache) {
+        if (tk.kind === "text") {
+          const w = ctx.measureText(tk.value).width;
+          hintWidthsCache.push(w);
+          hintContentWidth += w;
+        } else {
+          // Keycap width grows for multi-char labels (`SPACE`,
+          // `L SHIFT`) — measure with the keycap font and pad either
+          // side, never below `keyMinW` so single letters stay
+          // square.
+          ctx.font = keyFont;
+          const measured = ctx.measureText(tk.value).width;
+          ctx.font = `700 ${fontSize}px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif`;
+          const w = Math.max(keyMinW, measured + keyTextPad);
+          hintWidthsCache.push(w);
+          hintContentWidth += w + keyGap;
+        }
       }
+      hintMeasuredFor = hintText;
     }
+    const tokens = hintTokensCache;
+    const widths = hintWidthsCache;
+    const totalContent = hintContentWidth;
     const totalW = totalContent + padX * 2;
     const totalH = fontSize + padY * 2;
     const cx = viewW / 2;
@@ -1415,8 +1433,10 @@ export function start(canvas: HTMLCanvasElement): void {
     }
   }
 
-  function aliveEnemies(): Enemy[] {
-    return currentRoom.enemies.filter((e) => !e.isDead());
+  // Каждый кадр из checkRoomCleared — без аллокации массива.
+  function hasAliveEnemies(): boolean {
+    for (const e of currentRoom.enemies) if (!e.isDead()) return true;
+    return false;
   }
 
   function checkRoomCleared() {
@@ -1434,7 +1454,7 @@ export function start(canvas: HTMLCanvasElement): void {
       const markers = currentRoom.markers;
       const hasMarkers = (markers?.length ?? 0) > 0;
       if (!hasEnemies && !hasMarkers) return; // empty rooms — skip
-      if (hasEnemies && aliveEnemies().length > 0) return;
+      if (hasEnemies && hasAliveEnemies()) return;
       if (hasMarkers && markers && markerIndex < markers.length) return;
     }
     state.clearedRoomIds.add(currentRoom.id);
@@ -1712,10 +1732,16 @@ export function start(canvas: HTMLCanvasElement): void {
     // filtered out of the player wall list while dashIframeTime > 0
     // so a clean dash phases through. Same mechanism as Room 4's
     // section dividers.
-    const wallsForCollision =
-      player.dashIframeTime > 0
-        ? currentRoom.walls.filter((w) => !w.dashable)
-        : currentRoom.walls;
+    // Scratch-массив переиспользуется между кадрами, чтобы не
+    // аллоцировать во время дэша.
+    let wallsForCollision = currentRoom.walls;
+    if (player.dashIframeTime > 0) {
+      dashWallScratch.length = 0;
+      for (const w of currentRoom.walls) {
+        if (!w.dashable) dashWallScratch.push(w);
+      }
+      wallsForCollision = dashWallScratch;
+    }
     const collisionResult = resolvePlayerWallCollisions(
       player,
       wallsForCollision,
@@ -1861,11 +1887,17 @@ export function start(canvas: HTMLCanvasElement): void {
       }
     }
 
-    // age + cull lasers (self-expire by total duration)
-    for (const l of lasers) l.age += dt;
-    lasers = lasers.filter(
-      (l) => l.age < l.chargingDuration + l.firingDuration,
-    );
+    // age + cull lasers (self-expire by total duration) — in-place
+    // compaction вместо .filter(), чтобы не аллоцировать массив каждый кадр
+    {
+      let w = 0;
+      for (let i = 0; i < lasers.length; i++) {
+        const l = lasers[i];
+        l.age += dt;
+        if (l.age < l.chargingDuration + l.firingDuration) lasers[w++] = l;
+      }
+      lasers.length = w;
+    }
 
     // recompute laser endpoints from current owner position + fixed
     // aimAngle, hitting the first wall along the ray. Has to run after
@@ -2642,40 +2674,11 @@ export function start(canvas: HTMLCanvasElement): void {
 
     // hit vignette
     if (state.hitVignette > 0) {
-      const t = state.hitVignette / HIT_VIGNETTE;
-      const grad = ctx.createRadialGradient(
-        viewW / 2,
-        viewH / 2,
-        Math.min(viewW, viewH) * 0.25,
-        viewW / 2,
-        viewH / 2,
-        Math.max(viewW, viewH) * 0.65,
-      );
-      grad.addColorStop(0, "rgba(0,0,0,0)");
-      grad.addColorStop(1, `rgba(60,0,0,${0.7 * t})`);
-      ctx.save();
-      ctx.fillStyle = grad;
-      ctx.fillRect(0, 0, viewW, viewH);
-      ctx.restore();
+      drawHitVignette(ctx, viewW, viewH, state.hitVignette / HIT_VIGNETTE);
     }
 
     // ambient corner vignette
-    {
-      const grad = ctx.createRadialGradient(
-        viewW / 2,
-        viewH / 2,
-        Math.min(viewW, viewH) * 0.3,
-        viewW / 2,
-        viewH / 2,
-        Math.max(viewW, viewH) * 0.7,
-      );
-      grad.addColorStop(0, "rgba(0,0,0,0)");
-      grad.addColorStop(1, "rgba(0,0,0,0.4)");
-      ctx.save();
-      ctx.fillStyle = grad;
-      ctx.fillRect(0, 0, viewW, viewH);
-      ctx.restore();
-    }
+    drawCornerVignette(ctx, viewW, viewH);
 
     // room-cleared flash
     if (state.clearFlash > 0) {

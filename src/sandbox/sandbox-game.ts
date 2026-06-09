@@ -77,8 +77,11 @@ import {
   compactRings,
   drawFloatingTexts,
   pushFloatingText,
+  pushParticle,
+  pushRing,
 } from "../lib/particles";
 import { PostProcessor, DEFAULT_POST } from "../lib/postprocess";
+import { drawCornerVignette, drawHitVignette } from "../lib/vignette";
 import { createMenu } from "../lib/settings-menu";
 import {
   PICKUP_COLORS,
@@ -654,15 +657,18 @@ function addRing(
     lifetime?: number;
   } = {},
 ) {
-  rings.push({
+  pushRing(
+    rings,
     x,
     y,
-    age: 0,
-    lifetime: opts.lifetime ?? 0.1,
-    startR: opts.startR ?? PLAYER_SIZE / 2 + 4,
-    endR: opts.endR ?? PLAYER_SIZE / 2 + 30,
-    color: opts.color ?? "#facc15",
-  });
+    opts.lifetime ?? 0.1,
+    opts.startR ?? PLAYER_SIZE / 2 + 4,
+    opts.endR ?? PLAYER_SIZE / 2 + 30,
+    opts.color ?? "#facc15",
+    undefined,
+    undefined,
+    undefined,
+  );
 }
 
 function bumpMultiplier() {
@@ -754,19 +760,19 @@ function awardBulletBreak(b: Bullet) {
   for (let i = 0; i < cfg.particleCount; i++) {
     const angle = Math.random() * Math.PI * 2;
     const speed = 200 + Math.random() * 200;
-    particles.push({
-      x: b.x,
-      y: b.y,
-      vx: Math.cos(angle) * speed,
-      vy: Math.sin(angle) * speed,
-      initialSize: 3,
-      color: settings.bullets.color,
-      age: 0,
-      lifetime: 0.4,
-      glowStrong: 10,
-      glowSoft: 4,
-      drag: 1.0,
-    });
+    pushParticle(
+      particles,
+      b.x,
+      b.y,
+      Math.cos(angle) * speed,
+      Math.sin(angle) * speed,
+      3,
+      settings.bullets.color,
+      0.4,
+      10,
+      4,
+      1.0,
+    );
   }
   // broken bullets do NOT drop pickups (intentional — would create a feedback loop)
 }
@@ -809,19 +815,21 @@ function spawnTrailParticles(speed: number, isDash: boolean) {
     const sizeFactor =
       PARTICLE_SIZE_MIN_FACTOR +
       Math.random() * (PARTICLE_SIZE_MAX_FACTOR - PARTICLE_SIZE_MIN_FACTOR);
-    particles.push({
-      x: player.x,
-      y: player.y,
+    // Через пул — этот спавн крутится каждый кадр при движении, литеральные
+    // объекты тут давали постоянный GC-шум.
+    pushParticle(
+      particles,
+      player.x,
+      player.y,
       vx,
       vy,
-      initialSize: PLAYER_SIZE * sizeFactor,
+      PLAYER_SIZE * sizeFactor,
       color,
-      age: 0,
       lifetime,
-      glowStrong: isDash ? 15 : 8,
-      glowSoft: isDash ? 6 : 3,
-      drag: PARTICLE_DRAG,
-    });
+      isDash ? 15 : 8,
+      isDash ? 6 : 3,
+      PARTICLE_DRAG,
+    );
   }
 }
 
@@ -1606,40 +1614,11 @@ function render() {
   drawFloatingTexts(ctx, floatingTexts);
 
   // ambient corner vignette — focuses attention toward the play field
-  {
-    const grad = ctx.createRadialGradient(
-      viewW / 2,
-      viewH / 2,
-      Math.min(viewW, viewH) * 0.3,
-      viewW / 2,
-      viewH / 2,
-      Math.max(viewW, viewH) * 0.7,
-    );
-    grad.addColorStop(0, "rgba(0,0,0,0)");
-    grad.addColorStop(1, "rgba(0,0,0,0.4)");
-    ctx.save();
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, viewW, viewH);
-    ctx.restore();
-  }
+  drawCornerVignette(ctx, viewW, viewH);
 
   // hit vignette
   if (state.hitVignetteTime > 0) {
-    const t = state.hitVignetteTime / HIT_VIGNETTE;
-    const grad = ctx.createRadialGradient(
-      viewW / 2,
-      viewH / 2,
-      Math.min(viewW, viewH) * 0.25,
-      viewW / 2,
-      viewH / 2,
-      Math.max(viewW, viewH) * 0.65,
-    );
-    grad.addColorStop(0, "rgba(0,0,0,0)");
-    grad.addColorStop(1, `rgba(60,0,0,${0.7 * t})`);
-    ctx.save();
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, viewW, viewH);
-    ctx.restore();
+    drawHitVignette(ctx, viewW, viewH, state.hitVignetteTime / HIT_VIGNETTE);
   }
 
   post.apply(ctx, DEFAULT_POST);

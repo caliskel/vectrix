@@ -173,6 +173,7 @@ import {
   type BackgroundTextState,
 } from "../lib/background-text";
 import { PostProcessor, DEFAULT_POST } from "../lib/postprocess";
+import { drawCornerVignette, drawHitVignette } from "../lib/vignette";
 import { type Bounds, hitBounds } from "../lib/types";
 import {
   addWallImpact,
@@ -235,6 +236,64 @@ const SCREEN_SHAKE_PX = 4;
 // HUD displays them as 1 / 2 since rooms 1–3 moved to the tutorial.
 const ROOM_TOTAL = 3;
 const TUTORIAL_COMPLETED_KEY = "dash-proto:tutorial-completed";
+
+// === Baked overlay sprites ===
+// Радиальные градиенты пересоздавались каждый кадр: edge-переход тёмного
+// слоя — в каждой комнате кампании, ореол босса — в room5. Создание
+// CanvasGradient на кадр дёшево в Chrome, но заметно дорого в Safari /
+// Firefox. Запекаем спрайт один раз и рисуем drawImage с globalAlpha.
+const DARK_EDGE_SPRITE_R = 256;
+let darkEdgeSprite: HTMLCanvasElement | null = null;
+function getDarkEdgeSprite(): HTMLCanvasElement {
+  if (darkEdgeSprite) return darkEdgeSprite;
+  const R = DARK_EDGE_SPRITE_R;
+  const c = document.createElement("canvas");
+  c.width = R * 2;
+  c.height = R * 2;
+  darkEdgeSprite = c;
+  const g = c.getContext("2d");
+  if (!g) return c;
+  // innerR/outerR = 0.52/1.10 из draw-кода ниже; стопы 1-в-1.
+  const grad = g.createRadialGradient(R, R, R * (0.52 / 1.1), R, R, R);
+  grad.addColorStop(0, "rgba(5, 0, 12, 0)");
+  grad.addColorStop(0.25, "rgba(5, 0, 12, 0.12)");
+  grad.addColorStop(0.55, "rgba(5, 0, 12, 0.50)");
+  grad.addColorStop(0.8, "rgba(5, 0, 12, 0.82)");
+  grad.addColorStop(1, "rgba(5, 0, 12, 1)");
+  g.fillStyle = grad;
+  g.beginPath();
+  g.arc(R, R, R, 0, Math.PI * 2);
+  g.fill();
+  return c;
+}
+
+const BOSS_GLOW_SPRITE_R = 192;
+const bossGlowSprites = new Map<string, HTMLCanvasElement>();
+function getBossGlowSprite(color: string): HTMLCanvasElement {
+  let sprite = bossGlowSprites.get(color);
+  if (sprite) return sprite;
+  const R = BOSS_GLOW_SPRITE_R;
+  sprite = document.createElement("canvas");
+  sprite.width = R * 2;
+  sprite.height = R * 2;
+  bossGlowSprites.set(color, sprite);
+  const g = sprite.getContext("2d");
+  if (!g) return sprite;
+  const rc = parseInt(color.slice(1, 3), 16);
+  const gc = parseInt(color.slice(3, 5), 16);
+  const bc = parseInt(color.slice(5, 7), 16);
+  // Внутренний радиус = baseR*0.5 относительно среднего glowR
+  // (baseR * 1.775); альфы запечены на полную, пульс — через globalAlpha.
+  const grad = g.createRadialGradient(R, R, R * (0.5 / 1.775), R, R, R);
+  grad.addColorStop(0, `rgba(${rc},${gc},${bc},1)`);
+  grad.addColorStop(0.5, `rgba(${rc},${gc},${bc},0.4)`);
+  grad.addColorStop(1, `rgba(${rc},${gc},${bc},0)`);
+  g.fillStyle = grad;
+  g.beginPath();
+  g.arc(R, R, R, 0, Math.PI * 2);
+  g.fill();
+  return sprite;
+}
 const ROOM_CLEAR_FLASH = 0.2;
 const ROOMS_BEST_KEY = "dash-proto:rooms-best";
 
@@ -510,6 +569,8 @@ export function start(canvas: HTMLCanvasElement): void {
   let rings: Ring[] = [];
   let floatingTexts: FloatingText[] = [];
   let lasers: Laser[] = [];
+  // Переиспользуемый scratch для фильтра стен во время дэша (см. ниже).
+  const dashWallScratch: Wall[] = [];
   // Per-run key state. Camera is created once and snapped to each
   // room's bounds on entry. currentKey lives at the kill site of the
   // enemy flagged dropsKey; keysHeld increments when the player
@@ -1546,8 +1607,10 @@ export function start(canvas: HTMLCanvasElement): void {
     }
   }
 
-  function aliveEnemies(): Enemy[] {
-    return currentRoom.enemies.filter((e) => !e.isDead());
+  // Каждый кадр из checkRoomCleared — без аллокации массива.
+  function hasAliveEnemies(): boolean {
+    for (const e of currentRoom.enemies) if (!e.isDead()) return true;
+    return false;
   }
 
   function findSentinel(): Sentinel | null {
@@ -1668,7 +1731,7 @@ export function start(canvas: HTMLCanvasElement): void {
       if (keysHeld < required) return;
     } else {
       if (currentRoom.enemies.length === 0) return; // empty rooms — skip
-      if (aliveEnemies().length > 0) return;
+      if (hasAliveEnemies()) return;
     }
     state.clearedRoomIds.add(currentRoom.id);
     state.clearFlash = ROOM_CLEAR_FLASH;
@@ -1722,26 +1785,26 @@ export function start(canvas: HTMLCanvasElement): void {
     // enough for the camera to bring the label into frame. After
     // that the intro runs through and the timer stops at the
     // schedule's end; the next room entry resets both flags.
-    const scrambleLabels = currentRoom.worldLabels?.filter((l) => l.scramble);
-    if (scrambleLabels && scrambleLabels.length > 0) {
-      if (!worldLabelStarted) {
-        const viewLeft = camera.x;
-        const viewRight = camera.x + ROOM_W_PX;
-        const viewTop = camera.y;
-        const viewBottom = camera.y + ROOM_H_PX;
-        for (const l of scrambleLabels) {
-          if (
-            l.x >= viewLeft &&
-            l.x <= viewRight &&
-            l.y >= viewTop &&
-            l.y <= viewBottom
-          ) {
-            worldLabelStarted = true;
-            break;
-          }
+    // Итерируем worldLabels напрямую — без .filter()-аллокации на кадр.
+    const worldLabels = currentRoom.worldLabels;
+    if (worldLabels) {
+      let anyScramble = false;
+      for (const l of worldLabels) {
+        if (!l.scramble) continue;
+        anyScramble = true;
+        if (worldLabelStarted) break;
+        if (
+          l.x >= camera.x &&
+          l.x <= camera.x + ROOM_W_PX &&
+          l.y >= camera.y &&
+          l.y <= camera.y + ROOM_H_PX
+        ) {
+          worldLabelStarted = true;
+          break;
         }
       }
       if (
+        anyScramble &&
         worldLabelStarted &&
         !isScrambleTextDone(worldLabelAge, WORLD_LABEL_SCRAMBLE_SCHEDULE)
       ) {
@@ -2121,11 +2184,16 @@ export function start(canvas: HTMLCanvasElement): void {
     const preVy = player.vy;
     // Walls flagged `dashable` (Room 4 section dividers) phase the
     // player through during dash i-frames so the only way past them
-    // is a clean dash.
-    const wallsForPlayer =
-      player.dashIframeTime > 0
-        ? currentRoom.walls.filter((w) => !w.dashable)
-        : currentRoom.walls;
+    // is a clean dash. Scratch-массив переиспользуется между кадрами,
+    // чтобы не аллоцировать во время дэша.
+    let wallsForPlayer = currentRoom.walls;
+    if (player.dashIframeTime > 0) {
+      dashWallScratch.length = 0;
+      for (const w of currentRoom.walls) {
+        if (!w.dashable) dashWallScratch.push(w);
+      }
+      wallsForPlayer = dashWallScratch;
+    }
     const collisionResult = resolvePlayerWallCollisions(
       player,
       wallsForPlayer,
@@ -2329,8 +2397,15 @@ export function start(canvas: HTMLCanvasElement): void {
       // Expand + expire rings. Убираем когда fade = 0, т.е. r >= maxFade.
       // maxFade должен совпадать с константой в draw-блоке (pulseOrbitRadius * 2.4).
       const ringMaxR = cfg.pulseOrbitRadius * 2.4;
-      for (const ring of heartPulseRings) ring.r += dt * cfg.pulseExpandSpeed;
-      heartPulseRings = heartPulseRings.filter((r) => r.r < ringMaxR);
+      {
+        let w = 0;
+        for (let i = 0; i < heartPulseRings.length; i++) {
+          const ring = heartPulseRings[i];
+          ring.r += dt * cfg.pulseExpandSpeed;
+          if (ring.r < ringMaxR) heartPulseRings[w++] = ring;
+        }
+        heartPulseRings.length = w;
+      }
       // Registration progress — accumulate while player is inside zone.
       const playerDistHeart = Math.hypot(player.x - cfg.x, player.y - cfg.y);
       if (playerDistHeart < cfg.registrationRadius) {
@@ -2381,11 +2456,17 @@ export function start(canvas: HTMLCanvasElement): void {
       }
     }
 
-    // age + cull lasers (self-expire by total duration)
-    for (const l of lasers) l.age += dt;
-    lasers = lasers.filter(
-      (l) => l.age < l.chargingDuration + l.firingDuration,
-    );
+    // age + cull lasers (self-expire by total duration) — in-place
+    // compaction вместо .filter(), чтобы не аллоцировать массив каждый кадр
+    {
+      let w = 0;
+      for (let i = 0; i < lasers.length; i++) {
+        const l = lasers[i];
+        l.age += dt;
+        if (l.age < l.chargingDuration + l.firingDuration) lasers[w++] = l;
+      }
+      lasers.length = w;
+    }
 
     // recompute laser endpoints from current owner position + fixed
     // aimAngle, hitting the first wall along the ray. Has to run after
@@ -2951,6 +3032,9 @@ export function start(canvas: HTMLCanvasElement): void {
       ctx.restore();
 
       // Три вращающихся гексагона.
+      // Без shadowBlur: широкий тусклый стрейк + яркий основной — тот же
+      // двухслойный fake-glow, что и у pulse rings ниже (per-frame
+      // shadowBlur на штрихах — главный убийца FPS в Safari).
       const drawRotHex = (
         baseR: number,
         rot: number,
@@ -2959,12 +3043,9 @@ export function start(canvas: HTMLCanvasElement): void {
         lw: number,
       ) => {
         const r = baseR * (1 + beat * 0.07);
+        const a0 = Math.min(1, (alpha + beat * 0.18) * baseA);
         ctx.save();
         ctx.strokeStyle = color;
-        ctx.globalAlpha = Math.min(1, (alpha + beat * 0.18) * baseA);
-        ctx.lineWidth = lw;
-        ctx.shadowColor = color;
-        ctx.shadowBlur = lw * 4;
         ctx.beginPath();
         for (let vi = 0; vi < 6; vi++) {
           const a = rot + (vi * Math.PI) / 3;
@@ -2974,8 +3055,14 @@ export function start(canvas: HTMLCanvasElement): void {
           else ctx.lineTo(hx, hy);
         }
         ctx.closePath();
+        // Широкий мягкий glow-проход.
+        ctx.globalAlpha = a0 * 0.28;
+        ctx.lineWidth = lw * 3.5;
         ctx.stroke();
-        ctx.shadowBlur = 0;
+        // Яркая основная кромка.
+        ctx.globalAlpha = a0;
+        ctx.lineWidth = lw;
+        ctx.stroke();
         ctx.restore();
       };
 
@@ -3030,24 +3117,29 @@ export function start(canvas: HTMLCanvasElement): void {
         if (frac > 0) {
           const endAngle = -Math.PI / 2 + frac * Math.PI * 2;
           ctx.strokeStyle = "#00e5ff";
-          ctx.globalAlpha = 0.9;
-          ctx.lineWidth = 3.5;
-          ctx.shadowColor = "#00e5ff";
-          ctx.shadowBlur = 12;
+          // Glow-проход без shadowBlur: широкий тусклый + яркий основной.
+          ctx.globalAlpha = 0.25;
+          ctx.lineWidth = 9;
           ctx.beginPath();
           ctx.arc(cfg.x, cfg.y, cfg.registrationRadius + 8, -Math.PI / 2, endAngle);
           ctx.stroke();
-          ctx.shadowBlur = 0;
-          // Маленькая точка на конце дуги.
+          ctx.globalAlpha = 0.9;
+          ctx.lineWidth = 3.5;
+          ctx.beginPath();
+          ctx.arc(cfg.x, cfg.y, cfg.registrationRadius + 8, -Math.PI / 2, endAngle);
+          ctx.stroke();
+          // Маленькая точка на конце дуги — мягкий ореол вместо shadowBlur.
           const dotX = cfg.x + Math.cos(endAngle) * (cfg.registrationRadius + 8);
           const dotY = cfg.y + Math.sin(endAngle) * (cfg.registrationRadius + 8);
           ctx.fillStyle = "#00e5ff";
-          ctx.shadowColor = "#00e5ff";
-          ctx.shadowBlur = 8;
+          ctx.globalAlpha = 0.3;
+          ctx.beginPath();
+          ctx.arc(dotX, dotY, 7, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.globalAlpha = 0.95;
           ctx.beginPath();
           ctx.arc(dotX, dotY, 3.5, 0, Math.PI * 2);
           ctx.fill();
-          ctx.shadowBlur = 0;
         }
         ctx.restore();
       }
@@ -3301,7 +3393,6 @@ export function start(canvas: HTMLCanvasElement): void {
       // Шаг 1: сплошная тёмная заливка СНАРУЖИ мягкого радиуса.
       // Используем even-odd с чуть меньшим радиусом (innerR), чтобы
       // оставить место для градиентного перехода.
-      const innerR = vr * 0.52;
       const outerR = vr * 1.10;
       ctx.beginPath();
       ctx.rect(0, 0, viewW, viewH);
@@ -3309,17 +3400,19 @@ export function start(canvas: HTMLCanvasElement): void {
       ctx.fillStyle = `rgba(5, 0, 12, ${darkness})`;
       ctx.fill("evenodd");
 
-      // Шаг 2: мягкий градиентный переход innerR → outerR.
-      const edgeGrad = ctx.createRadialGradient(px, py, innerR, px, py, outerR);
-      edgeGrad.addColorStop(0,    `rgba(5, 0, 12, 0)`);
-      edgeGrad.addColorStop(0.25, `rgba(5, 0, 12, ${darkness * 0.12})`);
-      edgeGrad.addColorStop(0.55, `rgba(5, 0, 12, ${darkness * 0.50})`);
-      edgeGrad.addColorStop(0.80, `rgba(5, 0, 12, ${darkness * 0.82})`);
-      edgeGrad.addColorStop(1,    `rgba(5, 0, 12, ${darkness})`);
-      ctx.fillStyle = edgeGrad;
-      ctx.beginPath();
-      ctx.arc(px, py, outerR, 0, Math.PI * 2);
-      ctx.fill();
+      // Шаг 2: мягкий градиентный переход innerR → outerR — запечённый
+      // спрайт вместо createRadialGradient на каждый кадр; darkness
+      // модулируется через globalAlpha (соотношение innerR = vr * 0.52
+      // к outerR запечено в спрайте).
+      ctx.globalAlpha = darkness;
+      ctx.drawImage(
+        getDarkEdgeSprite(),
+        px - outerR,
+        py - outerR,
+        outerR * 2,
+        outerR * 2,
+      );
+      ctx.globalAlpha = 1;
 
       ctx.restore();
 
@@ -3344,18 +3437,16 @@ export function start(canvas: HTMLCanvasElement): void {
           const glowR = baseR * (1.6 + pulse * 0.35);
           ctx.save();
           ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-          const g = ctx.createRadialGradient(sx, sy, baseR * 0.5, sx, sy, glowR);
-          // Парсим hex-цвет → rgb для rgba().
-          const rc = parseInt(glowColor.slice(1, 3), 16);
-          const gc2 = parseInt(glowColor.slice(3, 5), 16);
-          const bc = parseInt(glowColor.slice(5, 7), 16);
-          g.addColorStop(0, `rgba(${rc},${gc2},${bc},${0.18 + pulse * 0.14})`);
-          g.addColorStop(0.5, `rgba(${rc},${gc2},${bc},${0.07 + pulse * 0.06})`);
-          g.addColorStop(1, `rgba(${rc},${gc2},${bc},0)`);
-          ctx.fillStyle = g;
-          ctx.beginPath();
-          ctx.arc(sx, sy, glowR, 0, Math.PI * 2);
-          ctx.fill();
+          // Запечённый спрайт ореола (один на цвет фазы) вместо
+          // createRadialGradient + hex-парсинга на каждый кадр.
+          ctx.globalAlpha = 0.18 + pulse * 0.14;
+          ctx.drawImage(
+            getBossGlowSprite(glowColor),
+            sx - glowR,
+            sy - glowR,
+            glowR * 2,
+            glowR * 2,
+          );
           ctx.restore();
         }
       }
@@ -3396,40 +3487,11 @@ export function start(canvas: HTMLCanvasElement): void {
 
     // hit vignette
     if (state.hitVignette > 0) {
-      const t = state.hitVignette / HIT_VIGNETTE;
-      const grad = ctx.createRadialGradient(
-        viewW / 2,
-        viewH / 2,
-        Math.min(viewW, viewH) * 0.25,
-        viewW / 2,
-        viewH / 2,
-        Math.max(viewW, viewH) * 0.65,
-      );
-      grad.addColorStop(0, "rgba(0,0,0,0)");
-      grad.addColorStop(1, `rgba(60,0,0,${0.7 * t})`);
-      ctx.save();
-      ctx.fillStyle = grad;
-      ctx.fillRect(0, 0, viewW, viewH);
-      ctx.restore();
+      drawHitVignette(ctx, viewW, viewH, state.hitVignette / HIT_VIGNETTE);
     }
 
     // ambient corner vignette
-    {
-      const grad = ctx.createRadialGradient(
-        viewW / 2,
-        viewH / 2,
-        Math.min(viewW, viewH) * 0.3,
-        viewW / 2,
-        viewH / 2,
-        Math.max(viewW, viewH) * 0.7,
-      );
-      grad.addColorStop(0, "rgba(0,0,0,0)");
-      grad.addColorStop(1, "rgba(0,0,0,0.4)");
-      ctx.save();
-      ctx.fillStyle = grad;
-      ctx.fillRect(0, 0, viewW, viewH);
-      ctx.restore();
-    }
+    drawCornerVignette(ctx, viewW, viewH);
 
     // room-cleared flash
     if (state.clearFlash > 0) {

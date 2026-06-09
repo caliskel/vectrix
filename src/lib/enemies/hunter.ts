@@ -445,11 +445,18 @@ export class Hunter implements Enemy {
     maxAlpha: number,
     glowBlur: number,
   ): void {
-    for (const sample of this.trailSamples) sample.age += dt;
-    if (this.trailSamples.length > 0) {
-      this.trailSamples = this.trailSamples.filter(
-        (s) => s.age < HUNTER_TRAIL_MAX_AGE_SEC,
-      );
+    // In-place compaction — .filter() аллоцировал массив каждый кадр на
+    // каждого хантера.
+    {
+      let w = 0;
+      for (let i = 0; i < this.trailSamples.length; i++) {
+        const sample = this.trailSamples[i];
+        sample.age += dt;
+        if (sample.age < HUNTER_TRAIL_MAX_AGE_SEC) {
+          this.trailSamples[w++] = sample;
+        }
+      }
+      this.trailSamples.length = w;
     }
     this.trailTimer += dt;
     if (this.trailTimer < interval) return;
