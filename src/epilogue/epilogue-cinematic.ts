@@ -20,6 +20,8 @@ import {
   BLINK_CLOSE_DURATION_MS,
   DASH_DURATION_MS,
   PLAYER_MAX_SPEED,
+  PLAYER_ACCEL_FACTOR,
+  PLAYER_FRICTION,
   PLAYER_SIZE,
   PLAYER_WALK_FACTOR,
 } from "../lib/config";
@@ -103,8 +105,6 @@ const EYE_CX = ROOM_W_PX / 2;
 const EYE_CY = 420;
 const HERO_SIZE = PLAYER_SIZE;
 const HERO_SCALE_VOID = 0.85;
-const ACCEL_FACTOR = 9;
-const FRICTION = 8.0;
 const WALL_T = 30;
 
 type PhaseId =
@@ -390,10 +390,10 @@ function tickRoomScene(state: EpilogueState, dt: number): void {
     player.facingX = input.x;
     player.facingY = input.y;
   }
-  const accel = PLAYER_MAX_SPEED * ACCEL_FACTOR;
+  const accel = PLAYER_MAX_SPEED * PLAYER_ACCEL_FACTOR;
   player.vx += input.x * accel * dt;
   player.vy += input.y * accel * dt;
-  const damp = Math.exp(-FRICTION * dt);
+  const damp = Math.exp(-PLAYER_FRICTION * dt);
   player.vx *= damp;
   player.vy *= damp;
   const cap = isActionPressed("walk", state.keys, state.keybinds)

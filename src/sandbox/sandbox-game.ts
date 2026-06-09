@@ -17,6 +17,8 @@ import {
   PARTICLE_SPAWN_INTERVAL_MS,
   PARTICLE_TRAIL_MIN_SPEED,
   PLAYER_MAX_SPEED,
+  PLAYER_ACCEL_FACTOR,
+  PLAYER_FRICTION,
   PLAYER_SIZE,
   PLAYER_WALK_FACTOR,
   PRESETS,
@@ -291,8 +293,6 @@ function hitBounds(b: Bounds | null, x: number, y: number): boolean {
   return x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h;
 }
 
-const ACCEL_FACTOR = 9;
-const FRICTION = 8.0;
 const SPAWN_ANGLE_SPREAD = Math.PI / 3;
 const WALL_THICKNESS = 6;
 
@@ -1116,10 +1116,10 @@ function frame(now: number) {
       player.facingX = input.x;
       player.facingY = input.y;
     }
-    const accel = PLAYER_MAX_SPEED * ACCEL_FACTOR;
+    const accel = PLAYER_MAX_SPEED * PLAYER_ACCEL_FACTOR;
     player.vx += input.x * accel * dt;
     player.vy += input.y * accel * dt;
-    const damp = Math.exp(-FRICTION * dt);
+    const damp = Math.exp(-PLAYER_FRICTION * dt);
     player.vx *= damp;
     player.vy *= damp;
     const maxSpeed = PLAYER_MAX_SPEED;

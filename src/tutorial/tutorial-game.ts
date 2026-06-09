@@ -44,6 +44,8 @@ import {
   PARTICLE_SPAWN_INTERVAL_MS,
   PARTICLE_TRAIL_MIN_SPEED,
   PLAYER_MAX_SPEED,
+  PLAYER_ACCEL_FACTOR,
+  PLAYER_FRICTION,
   PLAYER_SIZE,
   PLAYER_WALK_FACTOR,
   loadSettings,
@@ -194,8 +196,6 @@ import type { Room } from "../lib/room";
 const ROOM_W_PX = 1200;
 const ROOM_H_PX = 800;
 
-const ACCEL_FACTOR = 9;
-const FRICTION = 8.0;
 const HIT_IFRAME = 1.0;
 const HIT_VIGNETTE = 0.2;
 const TURRET_KILL_SCORE = 500;
@@ -1618,10 +1618,10 @@ export function start(canvas: HTMLCanvasElement): void {
         player.facingX = input.x;
         player.facingY = input.y;
       }
-      const accel = PLAYER_MAX_SPEED * ACCEL_FACTOR;
+      const accel = PLAYER_MAX_SPEED * PLAYER_ACCEL_FACTOR;
       player.vx += input.x * accel * dt;
       player.vy += input.y * accel * dt;
-      const damp = Math.exp(-FRICTION * dt);
+      const damp = Math.exp(-PLAYER_FRICTION * dt);
       player.vx *= damp;
       player.vy *= damp;
       const cap = isActionPressed("walk", keys, keybinds)

@@ -83,6 +83,21 @@ const STORAGE_KEY_LEGACY_V3 = "dash-proto:settings:v3";
 export const PLAYER_SIZE = 32;
 export const PLAYER_MAX_SPEED = 440;
 export const PLAYER_WALK_FACTOR = 0.4;
+// Ground-movement feel — shared by sandbox / rooms / tutorial / epilogue
+// so the hero handles identically everywhere (previously duplicated as
+// local ACCEL_FACTOR / FRICTION consts in each game file).
+//   accel = PLAYER_MAX_SPEED * PLAYER_ACCEL_FACTOR  (px/s²)
+//   per-frame friction damp = exp(-PLAYER_FRICTION * dt)
+// Equilibrium speed of the accel/friction system is
+//   PLAYER_MAX_SPEED * PLAYER_ACCEL_FACTOR / PLAYER_FRICTION.
+// Keeping the two factors EQUAL makes that equilibrium land exactly on
+// PLAYER_MAX_SPEED, so the hard velocity cap stops fighting friction and
+// only acts as a safety clamp. Higher (equal) values = snappier: shorter
+// coast (PLAYER_MAX_SPEED / PLAYER_FRICTION px) and faster turns
+// (time constant 1 / PLAYER_FRICTION s). 14/14 ⇒ ~31 px coast, ~71 ms
+// turn — the "responsive" profile tuned for precise bullet-hell dodging.
+export const PLAYER_ACCEL_FACTOR = 14;
+export const PLAYER_FRICTION = 14;
 export const DASH_DISTANCE = 120;
 export const DASH_DURATION_MS = 140;
 export const DASH_IFRAMES_MS = DASH_DURATION_MS + 80;
