@@ -204,6 +204,21 @@ resize();
 window.addEventListener("resize", resize);
 installGodModeToggle();
 
+// Pointer tracking for the optional mouse-movement scheme (Settings →
+// Controls → Mouse movement). Sandbox runs full-screen with no camera
+// or letterbox, so canvas-local coords ARE world coords. `mouseSeen`
+// gates movement until the first real pointer event so enabling the
+// toggle doesn't fling the player to (0,0) before the mouse moves.
+let mouseX = 0;
+let mouseY = 0;
+let mouseSeen = false;
+window.addEventListener("mousemove", (e) => {
+  const rect = canvas.getBoundingClientRect();
+  mouseX = e.clientX - rect.left;
+  mouseY = e.clientY - rect.top;
+  mouseSeen = true;
+});
+
 const keys = new Set<string>();
 const menu = createMenu(settings, save, () => resetRun());
 // Pause overlay layered above the settings menu — the bind key
@@ -536,23 +551,56 @@ function dashSpeedNow(): number {
   return dur > 0 ? DASH_DISTANCE / dur : 0;
 }
 
+// Mouse-movement tuning. Velocity is set DIRECTLY (no accel/friction)
+// so the scheme reads as sharp + precise with full 360°. The dead zone
+// lets the player park exactly on the cursor without jitter; the
+// approach range eases speed down over the last stretch so the orb
+// settles onto the cursor instead of overshooting and oscillating.
+const MOUSE_DEADZONE_PX = 6;
+const MOUSE_APPROACH_PX = 36;
+
+function mouseMoveVelocity(cap: number): { vx: number; vy: number } {
+  if (!mouseSeen) return { vx: 0, vy: 0 };
+  const dx = mouseX - player.x;
+  const dy = mouseY - player.y;
+  const dist = Math.hypot(dx, dy);
+  if (dist <= MOUSE_DEADZONE_PX) return { vx: 0, vy: 0 };
+  const approach = Math.min(1, (dist - MOUSE_DEADZONE_PX) / MOUSE_APPROACH_PX);
+  const v = cap * approach;
+  return { vx: (dx / dist) * v, vy: (dy / dist) * v };
+}
+
 function tryStartDash() {
   if (player.dashTime > 0 || player.cooldown > 0) return;
 
-  const input = inputDir();
   let dx: number;
   let dy: number;
-  if (input.x !== 0 || input.y !== 0) {
-    dx = input.x;
-    dy = input.y;
-  } else {
-    const speed = Math.hypot(player.vx, player.vy);
-    if (speed > 1) {
-      dx = player.vx / speed;
-      dy = player.vy / speed;
+  if (settings.controls.mouseMove && mouseSeen) {
+    // Under mouse control the dash fires toward the cursor.
+    const mdx = mouseX - player.x;
+    const mdy = mouseY - player.y;
+    const md = Math.hypot(mdx, mdy);
+    if (md > 1) {
+      dx = mdx / md;
+      dy = mdy / md;
     } else {
       dx = player.facingX;
       dy = player.facingY;
+    }
+  } else {
+    const input = inputDir();
+    if (input.x !== 0 || input.y !== 0) {
+      dx = input.x;
+      dy = input.y;
+    } else {
+      const speed = Math.hypot(player.vx, player.vy);
+      if (speed > 1) {
+        dx = player.vx / speed;
+        dy = player.vy / speed;
+      } else {
+        dx = player.facingX;
+        dy = player.facingY;
+      }
     }
   }
   const len = Math.hypot(dx, dy) || 1;
@@ -1111,26 +1159,39 @@ function frame(now: number) {
       player.vy *= 0.35;
     }
   } else {
-    const input = inputDir();
-    if (input.x !== 0 || input.y !== 0) {
-      player.facingX = input.x;
-      player.facingY = input.y;
-    }
-    const accel = PLAYER_MAX_SPEED * PLAYER_ACCEL_FACTOR;
-    player.vx += input.x * accel * dt;
-    player.vy += input.y * accel * dt;
-    const damp = Math.exp(-PLAYER_FRICTION * dt);
-    player.vx *= damp;
-    player.vy *= damp;
-    const maxSpeed = PLAYER_MAX_SPEED;
     const cap = isActionPressed("walk", keys, keybinds)
-      ? maxSpeed * PLAYER_WALK_FACTOR
-      : maxSpeed;
-    const sp = Math.hypot(player.vx, player.vy);
-    if (sp > cap) {
-      const k = cap / sp;
-      player.vx *= k;
-      player.vy *= k;
+      ? PLAYER_MAX_SPEED * PLAYER_WALK_FACTOR
+      : PLAYER_MAX_SPEED;
+    if (settings.controls.mouseMove) {
+      // Direct velocity toward the cursor — no accel/friction so it's
+      // sharp (stops on a dime) and precise (full 360°, eases onto the
+      // cursor via the approach ramp). `walk` still slows for fine aim.
+      const mv = mouseMoveVelocity(cap);
+      player.vx = mv.vx;
+      player.vy = mv.vy;
+      if (player.vx !== 0 || player.vy !== 0) {
+        const sp = Math.hypot(player.vx, player.vy);
+        player.facingX = player.vx / sp;
+        player.facingY = player.vy / sp;
+      }
+    } else {
+      const input = inputDir();
+      if (input.x !== 0 || input.y !== 0) {
+        player.facingX = input.x;
+        player.facingY = input.y;
+      }
+      const accel = PLAYER_MAX_SPEED * PLAYER_ACCEL_FACTOR;
+      player.vx += input.x * accel * dt;
+      player.vy += input.y * accel * dt;
+      const damp = Math.exp(-PLAYER_FRICTION * dt);
+      player.vx *= damp;
+      player.vy *= damp;
+      const sp = Math.hypot(player.vx, player.vy);
+      if (sp > cap) {
+        const k = cap / sp;
+        player.vx *= k;
+        player.vy *= k;
+      }
     }
   }
 

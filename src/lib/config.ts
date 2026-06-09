@@ -22,6 +22,14 @@ export type AudioSettings = {
   music: number;  // 0..1 (no music routed yet — slot for future)
 };
 
+export type ControlsSettings = {
+  // When true, the player moves toward the mouse cursor (full 360°,
+  // instant/precise) instead of WASD's 8-directional input. Toggled
+  // live from the sandbox Settings menu. Default off — keyboard stays
+  // the baseline scheme.
+  mouseMove: boolean;
+};
+
 export type PickupsSettings = {
   dropChance: number;        // probability 0..1 of a dash-through bullet dropping a pickup
   lifetime: number;          // seconds before pickup expires
@@ -60,6 +68,7 @@ export type Settings = {
   run: RunSettings;
   pickups: PickupsSettings;
   audio: AudioSettings;
+  controls: ControlsSettings;
 };
 
 import { PALETTE } from "./palette";
@@ -410,6 +419,9 @@ export const DEFAULT_SETTINGS: Settings = {
     sfx: 0.6,
     music: 0.8,
   },
+  controls: {
+    mouseMove: false,
+  },
 };
 
 export type Preset = {
@@ -417,6 +429,7 @@ export type Preset = {
   run?: Partial<RunSettings>;
   pickups?: Partial<PickupsSettings>;
   audio?: Partial<AudioSettings>;
+  controls?: Partial<ControlsSettings>;
 };
 
 export const PRESETS: Record<"Easy" | "Normal" | "Hard", Preset> = {

@@ -135,6 +135,7 @@ export function createMenu(
     });
     panel.appendChild(closeBtn);
     panel.appendChild(makeHeader());
+    panel.appendChild(makeControls());
     panel.appendChild(makeRun());
     panel.appendChild(makeBullets());
     // Player + dash physics live as constants in lib/config.ts so
@@ -231,6 +232,35 @@ export function createMenu(
       save();
     });
     return input;
+  }
+
+  function makeToggle(value: boolean, onChange: (v: boolean) => void) {
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.checked = value;
+    input.style.width = "20px";
+    input.style.height = "20px";
+    input.style.accentColor = "#00e5ff";
+    input.style.cursor = "pointer";
+    input.addEventListener("change", () => {
+      onChange(input.checked);
+      save();
+    });
+    return input;
+  }
+
+  function makeControls() {
+    const c = settings.controls;
+    const s = makeSection("Controls");
+    s.appendChild(
+      makeRow(
+        "Mouse movement",
+        makeToggle(c.mouseMove, (v) => {
+          c.mouseMove = v;
+        }),
+      ),
+    );
+    return s;
   }
 
   function makeRun() {
