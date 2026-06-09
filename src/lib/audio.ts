@@ -51,6 +51,14 @@ class AudioEngine {
   private musicQueuedFadeSec = 0;
   private activeMusicKey?: string;
 
+  // Master kill-switch for ALL looping music (menu / gameplay / boss).
+  // Set to false to disable music engine-wide while keeping SFX intact:
+  // setMusicTrack() skips registration (so the mp3s are never fetched)
+  // and playMusic() is a no-op. Flip back to true to restore music with
+  // zero call-site changes. SFX go through separate synth chains and are
+  // unaffected.
+  private musicEnabled = false;
+
   // Sound 1: dash (white-noise breath, no pitch sweep, no reverb)
   private dashNoise?: NoiseSynth;
 
@@ -289,6 +297,9 @@ class AudioEngine {
    *  playMusic(key). Re-registering an existing key with a new URL
    *  swaps the underlying Player; calling with the same URL is a no-op. */
   setMusicTrack(key: string, url: string): void {
+    // Music disabled engine-wide — skip registration so the mp3 is
+    // never fetched. Flip `musicEnabled` to re-enable.
+    if (!this.musicEnabled) return;
     if (this.musicUrls.get(key) === url && this.musicTracks.has(key)) return;
     this.musicUrls.set(key, url);
     // If we already had a player for this key under a different URL,
@@ -310,6 +321,8 @@ class AudioEngine {
    *  (and the new track's fade-in). Calls targeting the currently
    *  active track are no-ops. */
   playMusic(key: string, crossfadeSec = 1.0): void {
+    // Music disabled engine-wide — no-op. Flip `musicEnabled` to re-enable.
+    if (!this.musicEnabled) return;
     this.musicQueuedKey = key;
     this.musicQueuedFadeSec = Math.max(0, crossfadeSec);
     this.tryStartMusic();
