@@ -2,6 +2,7 @@ import type { Door } from "./door";
 import type { Enemy } from "./enemies/types";
 import type { Marker } from "./markers";
 import type { Wall } from "./walls";
+import type { ZoneThemeId } from "./zone-theme";
 
 /** Lazy enemy spawn — added to a room's `pendingEnemies` list and
  *  fired by rooms-game when `player.x` crosses `triggerX`. The `spawn`
@@ -57,10 +58,6 @@ export type HeartMechanicCfg = {
   registrationGoalSec: number;
 };
 
-/** Static config for the Sleeping Chamber mechanic (bottom side-room). */
-export type SleepingChamberCfg = {
-  visibilityRadius: number;
-};
 
 export type Room = {
   id: string;
@@ -117,11 +114,15 @@ export type Room = {
    *  transitioning forward (not viaBack) when triggered. */
   extraExits?: Array<{ door: Door; nextRoomId: string }>;
   heartMechanic?: HeartMechanicCfg;
-  sleepingChamber?: SleepingChamberCfg;
+  /** Marks the Sleeping Chamber stealth room — gates the noisy-sector
+   *  flag when a Watcher alerts there. (The room once carried its own
+   *  visibility radius; darkness params now live on the zone theme.) */
+  sleepingChamber?: boolean;
   /** Zone theme id (see lib/zone-theme.ts) — names the room's visual
    *  identity: floor wash, decor vocabulary, wall style, darkness.
-   *  Absent / unknown ids resolve to the default theme. */
-  theme?: string;
+   *  Absent resolves to the default theme. JSON rooms cross this
+   *  boundary via validateRoomJson, which rejects unknown ids. */
+  theme?: ZoneThemeId;
   /** Per-room override of the theme's reactivity intensity (0..1).
    *  Static in v1; rarely needed — the theme default usually fits. */
   themeIntensity?: number;

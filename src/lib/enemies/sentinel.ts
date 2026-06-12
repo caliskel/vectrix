@@ -7,6 +7,7 @@
 // import { audio } from "../audio";
 import { isInstakill } from "../god-mode";
 import { acquireBullet } from "../bullets";
+import { findContainingWall } from "../walls";
 import { pushParticle, pushRing } from "../particles";
 import { initAwareness } from "./awareness";
 import type {
@@ -3030,6 +3031,10 @@ export class Sentinel implements Enemy {
       const dxB = x - this.x;
       const dyB = y - this.y;
       if (dxB * dxB + dyB * dyB < minBx) continue;
+      // Notched arenas (room5 corner slabs) put wall AABBs inside the
+      // roll bounds — a mine baked into a wall telegraphs on top of it
+      // and its detonation bullets are culled the same frame. Reject.
+      if (findContainingWall(x, y, ctxRoom.walls)) continue;
       this.mines.push({ x, y, age: 0 });
       this.spawnMineFx(ctxRoom, x, y);
       return true;

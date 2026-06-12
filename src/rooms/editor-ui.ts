@@ -46,7 +46,7 @@ import {
   markExported,
 } from "./editor-drafts";
 import type { Room } from "../lib/room";
-import { listZoneThemeIds } from "../lib/zone-theme";
+import { isKnownZoneThemeId, listZoneThemeIds } from "../lib/zone-theme";
 import type {
   EnemySpec,
   PendingEnemySpec,
@@ -948,7 +948,7 @@ function buildRoomForm(
       if (v === THEME_NONE) {
         delete draft.theme;
         delete room.theme;
-      } else {
+      } else if (isKnownZoneThemeId(v)) {
         draft.theme = v;
         room.theme = v;
       }

@@ -1,7 +1,7 @@
 import { makeDoor } from "../lib/door";
 import { Watcher } from "../lib/enemies/watcher";
 import type { Wall } from "../lib/walls";
-import type { Room, SleepingChamberCfg } from "../lib/room";
+import type { Room } from "../lib/room";
 
 const ROOM_W = 1200;
 const ROOM_H = 800;
@@ -57,10 +57,6 @@ export function buildInfectedHubBottom(): Room {
     { x: 350, y: 365, w: 70, h: 22, infected: true },
   ];
 
-  const sleepingChamber: SleepingChamberCfg = {
-    visibilityRadius: 240,
-  };
-
   const w1 = new Watcher(300, 460);
   w1.detectionRadius = 270;
   const w2 = new Watcher(870, 540);
@@ -88,6 +84,6 @@ export function buildInfectedHubBottom(): Room {
     width: ROOM_W,
     height: ROOM_H,
     initialKey: { x: KEY_X, y: KEY_Y },
-    sleepingChamber,
+    sleepingChamber: true,
   };
 }

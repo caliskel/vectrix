@@ -15,6 +15,7 @@
  * See `docs/plans/2026-05-12-002-feat-level-editor-plan.md` U1.
  */
 
+import type { ZoneThemeId } from "../lib/zone-theme";
 import { Hunter } from "../lib/enemies/hunter";
 import { Turret } from "../lib/enemies/turret";
 import { Watcher } from "../lib/enemies/watcher";
@@ -159,6 +160,6 @@ export function buildRoomFromJson(json: RoomJson, idHint?: string): Room {
     worldLabels: json.worldLabels?.map((label) => ({ ...label })),
     // Zone theme id — validated above (unknown ids throw); absent
     // resolves to the default theme in resolveZoneTheme downstream.
-    theme: json.theme,
+    theme: json.theme as ZoneThemeId | undefined,
   };
 }
