@@ -107,6 +107,10 @@ export type RoomJson = {
   id: string;
   width?: number;
   height?: number;
+  /** Zone theme id (see `lib/zone-theme.ts`). Validated against the
+   *  known theme registry; absent → default theme downstream. No
+   *  intensity field in v1 — intensity stays code-side. */
+  theme?: string;
   spawnX: number;
   spawnY: number;
   walls: WallSpec[];

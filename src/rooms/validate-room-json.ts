@@ -18,13 +18,30 @@
  * See `docs/plans/2026-05-12-002-feat-level-editor-plan.md` U1 + U3.
  */
 
+import { isKnownZoneThemeId, listZoneThemeIds } from "../lib/zone-theme";
 import type { EnemySpec, PendingEnemySpec, RoomJson } from "./room-json-types";
 
 const ENEMY_TYPES = new Set<EnemySpec["type"]>(["turret", "watcher", "hunter"]);
 
-/** Throws on any structural problem. Returns void on success. Error
- *  messages name the offending field for surfacing in the editor UI. */
-export function validateRoomJson(json: unknown, idHint?: string): void {
+/** Outer wall band thickness — every room's perimeter walls are 30 px
+ *  thick by convention (see room1.ts and friends). Kept local instead
+ *  of imported from `lib/walls.ts` because that module is browser-only
+ *  (canvas bakes) and this validator must stay Node-safe. */
+const OUTER_WALL_BAND_PX = 30;
+/** Mirrors DEFAULT_WIDTH / DEFAULT_HEIGHT in build-room-from-json.ts
+ *  (not imported — that module transitively pulls browser-only code). */
+const DEFAULT_ROOM_WIDTH = 1200;
+const DEFAULT_ROOM_HEIGHT = 800;
+
+/** Throws on any structural problem. Error messages name the offending
+ *  field for surfacing in the editor UI.
+ *
+ *  Returns a list of non-fatal warnings (authoring-rule violations that
+ *  shouldn't block a save / load — e.g. an ambient spawn area leaking
+ *  outside the wall-enclosed interior). Each warning is also emitted
+ *  via `console.warn` so existing callers that ignore the return value
+ *  (Vite save endpoint, JSON room loader) still surface it. */
+export function validateRoomJson(json: unknown, idHint?: string): string[] {
   if (typeof json !== "object" || json === null) {
     throw new Error(`validateRoomJson(${idHint ?? "?"}): payload must be an object`);
   }
@@ -32,6 +49,12 @@ export function validateRoomJson(json: unknown, idHint?: string): void {
   const id = idHint ?? j.id;
   const need = (cond: boolean, msg: string): void => {
     if (!cond) throw new Error(`validateRoomJson(${id ?? "?"}): ${msg}`);
+  };
+  const warnings: string[] = [];
+  const warn = (msg: string): void => {
+    const full = `validateRoomJson(${id ?? "?"}): WARNING: ${msg}`;
+    warnings.push(full);
+    console.warn(full);
   };
 
   need(typeof j.id === "string" && j.id.length > 0, "missing id");
@@ -45,6 +68,14 @@ export function validateRoomJson(json: unknown, idHint?: string): void {
   }
   if (j.height !== undefined) {
     need(typeof j.height === "number" && j.height > 0, "height must be a positive number");
+  }
+
+  if (j.theme !== undefined) {
+    need(typeof j.theme === "string", "theme must be a string");
+    need(
+      isKnownZoneThemeId(j.theme),
+      `unknown theme id ${JSON.stringify(j.theme)} — valid ids: ${listZoneThemeIds().join(", ")} (or omit the field for the default theme)`,
+    );
   }
 
   for (const w of j.walls) {
@@ -109,4 +140,47 @@ export function validateRoomJson(json: unknown, idHint?: string): void {
       "backDoor requires prevRoomId (string or null)",
     );
   }
+
+  // Ambient spawn-area sanity (U7) — the U6 authoring rule, automated:
+  // the spawn rectangle must lie fully inside the wall-enclosed
+  // interior and not overlap any declared wall, or bullets spawn
+  // inside walls / outside the silhouette. Non-fatal: warn, don't
+  // reject — an in-progress editor draft may legitimately pass
+  // through this state.
+  if (j.ambientBullets) {
+    const sa = j.ambientBullets.spawnArea;
+    need(
+      typeof sa === "object" && sa !== null &&
+        typeof sa.x === "number" && typeof sa.y === "number" &&
+        typeof sa.w === "number" && typeof sa.h === "number",
+      "ambientBullets.spawnArea must be a rect with numeric x, y, w, h",
+    );
+    const roomW = typeof j.width === "number" ? j.width : DEFAULT_ROOM_WIDTH;
+    const roomH = typeof j.height === "number" ? j.height : DEFAULT_ROOM_HEIGHT;
+    const minX = OUTER_WALL_BAND_PX;
+    const minY = OUTER_WALL_BAND_PX;
+    const maxX = roomW - OUTER_WALL_BAND_PX;
+    const maxY = roomH - OUTER_WALL_BAND_PX;
+    const saStr = `(x=${sa.x}, y=${sa.y}, w=${sa.w}, h=${sa.h})`;
+    if (sa.x < minX || sa.y < minY || sa.x + sa.w > maxX || sa.y + sa.h > maxY) {
+      warn(
+        `ambientBullets.spawnArea ${saStr} extends outside the room interior ` +
+          `x ${minX}..${maxX} / y ${minY}..${maxY} ` +
+          `(${roomW}x${roomH} room minus the ${OUTER_WALL_BAND_PX}px outer wall band)`,
+      );
+    }
+    for (const w of j.walls) {
+      const overlaps =
+        sa.x < w.x + w.w && sa.x + sa.w > w.x &&
+        sa.y < w.y + w.h && sa.y + sa.h > w.y;
+      if (overlaps) {
+        warn(
+          `ambientBullets.spawnArea ${saStr} intersects wall at ` +
+            `(x=${w.x}, y=${w.y}, w=${w.w}, h=${w.h})`,
+        );
+      }
+    }
+  }
+
+  return warnings;
 }

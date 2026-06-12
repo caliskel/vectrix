@@ -157,5 +157,8 @@ export function buildRoomFromJson(json: RoomJson, idHint?: string): Room {
         }
       : undefined,
     worldLabels: json.worldLabels?.map((label) => ({ ...label })),
+    // Zone theme id — validated above (unknown ids throw); absent
+    // resolves to the default theme in resolveZoneTheme downstream.
+    theme: json.theme,
   };
 }

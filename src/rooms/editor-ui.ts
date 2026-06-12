@@ -46,6 +46,7 @@ import {
   markExported,
 } from "./editor-drafts";
 import type { Room } from "../lib/room";
+import { listZoneThemeIds } from "../lib/zone-theme";
 import type {
   EnemySpec,
   PendingEnemySpec,
@@ -820,7 +821,7 @@ function buildPropertiesForm(
 
   switch (sel.kind) {
     case "room":
-      return buildRoomForm(draft, onChange);
+      return buildRoomForm(draft, room, onChange);
     case "wall":
       return buildWallForm(sel.index, draft, room, onChange);
     case "turret":
@@ -921,12 +922,39 @@ function selectRow<T extends string>(
   return row;
 }
 
-function buildRoomForm(draft: RoomJson, onChange: () => void): HTMLElement {
+/** Selector sentinel for "no theme declared" — absent field in the
+ *  JSON, resolves to the default theme downstream. */
+const THEME_NONE = "(none)";
+
+function buildRoomForm(
+  draft: RoomJson,
+  room: Room,
+  onChange: () => void,
+): HTMLElement {
   const c = document.createElement("div");
   c.appendChild(textRow("id", draft.id, (v) => {
     draft.id = v;
     onChange();
   }));
+  c.appendChild(selectRow(
+    "theme",
+    draft.theme ?? THEME_NONE,
+    [THEME_NONE, ...listZoneThemeIds()],
+    (v) => {
+      // Mutate both draft and live room (the other forms' spec+live
+      // pattern) — the room-mutation commit re-runs syncRoomFx, which
+      // re-resolves the zone theme from currentRoom.theme, so the
+      // editing preview retints immediately.
+      if (v === THEME_NONE) {
+        delete draft.theme;
+        delete room.theme;
+      } else {
+        draft.theme = v;
+        room.theme = v;
+      }
+      onChange();
+    },
+  ));
   c.appendChild(numberRow("width", draft.width ?? 1200, (v) => {
     draft.width = v;
     onChange();
