@@ -68,6 +68,7 @@ export function buildInfectedHubBottom(): Room {
 
   return {
     id: "infected-hub-bottom",
+    theme: "infected",
     walls,
     enemies: [w1, w2],
     door: null,

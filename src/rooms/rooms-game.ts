@@ -1,4 +1,5 @@
 import { audio } from "../lib/audio";
+import { resolveZoneTheme, type ZoneThemeState } from "../lib/zone-theme";
 import { createDevMenu, type DevMenu } from "../lib/dev-menu";
 import { drawFpsOverlay, recordFrame } from "../lib/fps-meter";
 import {
@@ -739,6 +740,12 @@ export function start(canvas: HTMLCanvasElement): void {
   let chamberFlickerTimer = 3 + Math.random() * 4; // до следующего мигания
   let chamberFlickerAge = -1; // -1 = неактивно, 0+ = идёт мигание
   const CHAMBER_FLICKER_DURATION = 0.45;
+  // Zone theme — per-room visual identity (wash, decor, wall style,
+  // darkness). Re-resolved in syncRoomFx on every transition/restart.
+  let zoneTheme: ZoneThemeState = resolveZoneTheme(
+    currentRoom.theme,
+    currentRoom.themeIntensity,
+  );
   let arenaBg: ArenaBg = createArenaBg(
     currentRoom.width ?? ROOM_W_PX,
     currentRoom.height ?? ROOM_H_PX,
@@ -788,6 +795,7 @@ export function start(canvas: HTMLCanvasElement): void {
   function syncRoomFx() {
     const w = currentRoom.width ?? ROOM_W_PX;
     const h = currentRoom.height ?? ROOM_H_PX;
+    zoneTheme = resolveZoneTheme(currentRoom.theme, currentRoom.themeIntensity);
     arenaBg = createArenaBg(w, h);
     wallFx = createWallFx(currentRoom.walls);
     gridNodes = createGridNodeState(w, h);
@@ -2359,9 +2367,9 @@ export function start(canvas: HTMLCanvasElement): void {
     }
     perfEnd("upd_enemies");
 
-    // Мигание электричества — infected sector + room1.
+    // Мигание электричества — тёмные комнаты (по зональной теме).
     // Noisy-флаг только для sleeping chamber.
-    if (HUB_ZONE.has(currentRoom.id) || currentRoom.id === "room1" || currentRoom.id === "room5") {
+    if (zoneTheme.theme.darkness) {
       if (currentRoom.sleepingChamber) {
         for (const e of currentRoom.enemies) {
           if (e.type === "watcher" && e.awarenessState === "alerting" && !state.noisySector) {
@@ -3372,8 +3380,9 @@ export function start(canvas: HTMLCanvasElement): void {
 
     ctx.restore();
 
-    // Тёмный оверлей с радиусом свечения вокруг ГГ — infected sector + room1.
-    if (HUB_ZONE.has(currentRoom.id) || currentRoom.id === "room1" || currentRoom.id === "room5") {
+    // Тёмный оверлей с радиусом свечения вокруг ГГ — комнаты, чья
+    // зональная тема объявляет darkness (инфицированный сектор + босс).
+    if (zoneTheme.theme.darkness) {
       // Единый мягкий «сумрак» во всех комнатах — широкая лужа света
       // вокруг ГГ и ровная негустая темнота снаружи (как было сделано
       // для хаба / 2-й комнаты). Без power-мигания, чтобы свет был

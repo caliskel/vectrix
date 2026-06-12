@@ -130,6 +130,7 @@ export function buildRoom1(): Room {
 
   return {
     id: "room1",
+    theme: "infected",
     walls,
     enemies: [],
     door: makeDoor(

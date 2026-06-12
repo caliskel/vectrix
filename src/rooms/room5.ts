@@ -36,6 +36,7 @@ export function buildRoom5(): Room {
 
   return {
     id: "room5",
+    theme: "boss",
     walls,
     enemies: [
       new Sentinel(SENTINEL_X, SENTINEL_Y, {

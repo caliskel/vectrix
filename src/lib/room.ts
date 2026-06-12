@@ -118,4 +118,11 @@ export type Room = {
   extraExits?: Array<{ door: Door; nextRoomId: string }>;
   heartMechanic?: HeartMechanicCfg;
   sleepingChamber?: SleepingChamberCfg;
+  /** Zone theme id (see lib/zone-theme.ts) — names the room's visual
+   *  identity: floor wash, decor vocabulary, wall style, darkness.
+   *  Absent / unknown ids resolve to the default theme. */
+  theme?: string;
+  /** Per-room override of the theme's reactivity intensity (0..1).
+   *  Static in v1; rarely needed — the theme default usually fits. */
+  themeIntensity?: number;
 };

@@ -58,6 +58,7 @@ export function buildInfectedHubTop(): Room {
 
   return {
     id: "infected-hub-top",
+    theme: "infected",
     walls,
     enemies: [
       // Один Watcher — стоит по другую сторону сердца от входа,

@@ -179,6 +179,7 @@ export function buildInfectedHub(opts: { noisy: boolean }): Room {
 
   return {
     id: "infected-hub",
+    theme: "infected",
     walls,
     enemies: [watcher1, watcher2],
     door: eastDoor,
