@@ -3374,18 +3374,16 @@ export function start(canvas: HTMLCanvasElement): void {
 
     // Тёмный оверлей с радиусом свечения вокруг ГГ — infected sector + room1.
     if (HUB_ZONE.has(currentRoom.id) || currentRoom.id === "room1" || currentRoom.id === "room5") {
-      const visR = currentRoom.sleepingChamber?.visibilityRadius ?? 270;
+      // Единый мягкий «сумрак» во всех комнатах — широкая лужа света
+      // вокруг ГГ и ровная негустая темнота снаружи (как было сделано
+      // для хаба / 2-й комнаты). Без power-мигания, чтобы свет был
+      // ровным везде.
+      const visR = 600;
       const px = (player.x - camera.x) * scale + offsetX;
       const py = (player.y - camera.y) * scale + offsetY;
       const vr = visR * scale;
 
-      // Мигание — имитация отключения электричества: серия быстрых вспышек.
-      // sin(t * π * 8) даёт 4 цикла on/off за CHAMBER_FLICKER_DURATION секунд.
-      let darkness = 0.94;
-      if (chamberFlickerAge >= 0) {
-        const ft = chamberFlickerAge / CHAMBER_FLICKER_DURATION;
-        darkness = Math.sin(ft * Math.PI * 8) > 0 ? 0.10 : 0.94;
-      }
+      const darkness = 0.45;
 
       ctx.save();
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
