@@ -29,6 +29,7 @@ const SECTIONS = [
   "bgtext",
   "arenabg",
   "grid",
+  "decor",
   "walls",
   "enemies",
   "detection",

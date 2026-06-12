@@ -94,6 +94,13 @@ import {
 } from "../lib/arena-bg";
 import { resolveZoneTheme } from "../lib/zone-theme";
 import {
+  createThemeDecor,
+  drawThemeDecorMargins,
+  drawThemeDecorProps,
+  updateThemeDecor,
+  type ThemeDecor,
+} from "../lib/theme-decor";
+import {
   createDeathFx,
   drawDeathFx,
   shouldShowDeathOverlay,
@@ -917,6 +924,18 @@ export function start(canvas: HTMLCanvasElement): void {
     zoneTheme,
   );
   let wallFx: WallFx = createWallFx(currentRoom.walls);
+  // Zone decor — margin parallax silhouettes + in-arena emissive
+  // props. Per-room state, hard-swapped in syncRoomFx like arenaBg
+  // (mirrors rooms-game).
+  let themeDecor: ThemeDecor = createThemeDecor(
+    zoneTheme,
+    currentRoom.width ?? ROOM_W_PX,
+    currentRoom.height ?? ROOM_H_PX,
+    viewW,
+    viewH,
+    currentRoom.spawnX,
+    currentRoom.spawnY,
+  );
   // Single instance for the tutorial — flows across room transitions.
   const energyBg: EnergyBackground = createEnergyBackground(viewW, viewH);
   const bgText: BackgroundTextState = createBackgroundTextState(viewW, viewH);
@@ -956,6 +975,15 @@ export function start(canvas: HTMLCanvasElement): void {
     wallFx = createWallFx(currentRoom.walls);
     gridNodes = createGridNodeState(w, h);
     archiveFx = createArchiveFx(w, h);
+    themeDecor = createThemeDecor(
+      zoneTheme,
+      w,
+      h,
+      viewW,
+      viewH,
+      currentRoom.spawnX,
+      currentRoom.spawnY,
+    );
   }
 
   // overlay button bounds (CSS pixel space)
@@ -2207,6 +2235,7 @@ export function start(canvas: HTMLCanvasElement): void {
     updateBackgroundTexts(bgText, dt, ctx, viewW, viewH, computeArenaBounds());
     updateGridNodes(gridNodes, dt);
     updateArchiveFx(archiveFx, dt, player.x, player.y);
+    updateThemeDecor(themeDecor, dt);
     tickScanlines(dt);
 
     // eye state: pupil tracks the closest threat in the room, dash ghosts
@@ -2428,7 +2457,12 @@ export function start(canvas: HTMLCanvasElement): void {
     // Energy + text background passes — clipped out of the visible
     // arena rect so they only show in the letterbox / camera margins.
     const arenaBounds = computeArenaBounds();
-    drawEnergyBackground(ctx, energyBg, viewW, viewH, arenaBounds);
+    // Zones with their own margin identity suppress the legacy fixed
+    // cyan energy pass (the tutorial theme keeps it on, but the gate
+    // mirrors rooms-game 1-to-1; update keeps ticking regardless).
+    if (!zoneTheme.theme.suppressBackgroundEnergy) {
+      drawEnergyBackground(ctx, energyBg, viewW, viewH, arenaBounds);
+    }
     drawBackgroundTexts(ctx, bgText, viewW, viewH, arenaBounds);
 
     // screen shake — applied to the room transform only so HUD stays put
@@ -2468,6 +2502,28 @@ export function start(canvas: HTMLCanvasElement): void {
     );
 
     drawArchiveFx(ctx, archiveFx);
+
+    // Themed emissive props — sparse world-space decor (rosette,
+    // corner brackets, accent dots) drawn under walls / entities so
+    // they read as architecture, never as pickups or threats. Cull
+    // rect mirrors rooms-game's camera-relative bounds (tutorial has
+    // no editor zoom, so the visible world rect is the canonical
+    // viewport).
+    {
+      const cullMargin = 80;
+      const cullLeft = camera.x - cullMargin;
+      const cullRight = camera.x + ROOM_W_PX + cullMargin;
+      const cullTop = camera.y - cullMargin;
+      const cullBottom = camera.y + ROOM_H_PX + cullMargin;
+      drawThemeDecorProps(
+        ctx,
+        themeDecor,
+        cullLeft,
+        cullTop,
+        cullRight,
+        cullBottom,
+      );
+    }
 
     drawWalls(ctx, currentRoom.walls);
     drawWallOverlay(ctx, wallFx, currentRoom.walls);
@@ -2646,6 +2702,24 @@ export function start(canvas: HTMLCanvasElement): void {
     // the player's last known position even in scrolling rooms.
     if (state.deathFx) drawDeathFx(ctx, state.deathFx);
 
+    ctx.restore();
+
+    // Margin parallax decor — self-luminous wireframe silhouettes in
+    // the letterbox / camera margins. Same relative slot as rooms-game
+    // (the tutorial has no darkness overlay / boss glow to draw after).
+    // Screen space, clipped to viewport-minus-arena.
+    ctx.save();
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    drawThemeDecorMargins(
+      ctx,
+      themeDecor,
+      viewW,
+      viewH,
+      arenaBounds,
+      camera.x,
+      camera.y,
+      scale,
+    );
     ctx.restore();
 
     // room placeholder text

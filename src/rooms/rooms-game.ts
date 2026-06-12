@@ -120,6 +120,13 @@ import {
   type ArenaBg,
 } from "../lib/arena-bg";
 import {
+  createThemeDecor,
+  drawThemeDecorMargins,
+  drawThemeDecorProps,
+  updateThemeDecor,
+  type ThemeDecor,
+} from "../lib/theme-decor";
+import {
   createDeathFx,
   drawDeathFx,
   shouldShowDeathOverlay,
@@ -752,6 +759,17 @@ export function start(canvas: HTMLCanvasElement): void {
     zoneTheme,
   );
   let wallFx: WallFx = createWallFx(currentRoom.walls);
+  // Zone decor — margin parallax silhouettes + in-arena emissive
+  // props. Per-room state, hard-swapped in syncRoomFx like arenaBg.
+  let themeDecor: ThemeDecor = createThemeDecor(
+    zoneTheme,
+    currentRoom.width ?? ROOM_W_PX,
+    currentRoom.height ?? ROOM_H_PX,
+    viewW,
+    viewH,
+    currentRoom.spawnX,
+    currentRoom.spawnY,
+  );
   // Energy background — drifting neon lines + rising particles + an
   // occasional lightning streak, drawn in the canvas margins outside
   // the visible arena. Single instance for the whole session so the
@@ -801,6 +819,15 @@ export function start(canvas: HTMLCanvasElement): void {
     wallFx = createWallFx(currentRoom.walls);
     gridNodes = createGridNodeState(w, h);
     archiveFx = createArchiveFx(w, h);
+    themeDecor = createThemeDecor(
+      zoneTheme,
+      w,
+      h,
+      viewW,
+      viewH,
+      currentRoom.spawnX,
+      currentRoom.spawnY,
+    );
   }
 
   // overlay button bounds (CSS pixel space)
@@ -2021,6 +2048,7 @@ export function start(canvas: HTMLCanvasElement): void {
     updateBackgroundTexts(bgText, dt, ctx, viewW, viewH, computeArenaBounds());
     updateGridNodes(gridNodes, dt);
     updateArchiveFx(archiveFx, dt, player.x, player.y);
+    updateThemeDecor(themeDecor, dt);
     tickScanlines(dt);
 
     // -------- running --------
@@ -2897,7 +2925,12 @@ export function start(canvas: HTMLCanvasElement): void {
     // arena rect so they only show in the letterbox / camera margins.
     const arenaBounds = computeArenaBounds();
     perfBegin("energy");
-    drawEnergyBackground(ctx, energyBg, viewW, viewH, arenaBounds);
+    // Zones with their own margin identity suppress the legacy fixed
+    // cyan energy pass (update keeps ticking so the state stays warm
+    // across zone changes — it's cheap).
+    if (!zoneTheme.theme.suppressBackgroundEnergy) {
+      drawEnergyBackground(ctx, energyBg, viewW, viewH, arenaBounds);
+    }
     perfEnd("energy");
     perfBegin("bgtext");
     drawBackgroundTexts(ctx, bgText, viewW, viewH, arenaBounds);
@@ -2933,6 +2966,21 @@ export function start(canvas: HTMLCanvasElement): void {
     if (camera.zoom !== 1) ctx.scale(camera.zoom, camera.zoom);
     ctx.translate(-camera.x, -camera.y);
 
+    // Off-screen cull bounds in world coords — shared by the decor
+    // props pass below and the bullet / trail / particle loops further
+    // down. Room 1 / Room 4 are 3600 / 8000 px wide and many entities
+    // travel far outside the camera viewport; skipping their draw is
+    // the biggest per-frame draw-call save these corridor rooms get.
+    // Visible world rect: zoom < 1 expands what's on-screen, zoom > 1
+    // shrinks it. World width visible = ROOM_W_PX / zoom.
+    const cullMargin = 80;
+    const cullViewW = ROOM_W_PX / camera.zoom;
+    const cullViewH = ROOM_H_PX / camera.zoom;
+    const cullLeft = camera.x - cullMargin;
+    const cullRight = camera.x + cullViewW + cullMargin;
+    const cullTop = camera.y - cullMargin;
+    const cullBottom = camera.y + cullViewH + cullMargin;
+
     // DEEP FIELD background — radial spark + vignette anchored on
     // the player (the only consciousness still burning in the dead
     // network), parallax dots, grid pulses, radar sweeps.
@@ -2957,6 +3005,13 @@ export function start(canvas: HTMLCanvasElement): void {
     // above the floor so they read as part of the environment, not
     // floating overlays.
     drawArchiveFx(ctx, archiveFx);
+
+    // Themed emissive props — sparse world-space decor (rosette,
+    // corner brackets, accent dots) drawn under walls / entities so
+    // they read as architecture, never as pickups or threats.
+    perfBegin("decor");
+    drawThemeDecorProps(ctx, themeDecor, cullLeft, cullTop, cullRight, cullBottom);
+    perfEnd("decor");
 
     perfBegin("walls");
     drawWalls(ctx, currentRoom.walls);
@@ -3192,21 +3247,8 @@ export function start(canvas: HTMLCanvasElement): void {
     perfEnd("enemies");
 
 
-    // bullets — trail pass then live pass.
-    // Off-screen cull bounds in world coords. Room 1 / Room 4 are
-    // 3600 / 8000 px wide and many bullets travel far outside the
-    // camera viewport. Skipping the trail loop + sprite blit for
-    // off-screen bullets is the biggest per-frame draw-call save
-    // these corridor rooms can get.
-    const cullMargin = 80;
-    // Visible world rect: zoom < 1 expands what's on-screen, zoom > 1
-    // shrinks it. World width visible = ROOM_W_PX / zoom.
-    const cullViewW = ROOM_W_PX / camera.zoom;
-    const cullViewH = ROOM_H_PX / camera.zoom;
-    const cullLeft = camera.x - cullMargin;
-    const cullRight = camera.x + cullViewW + cullMargin;
-    const cullTop = camera.y - cullMargin;
-    const cullBottom = camera.y + cullViewH + cullMargin;
+    // bullets — trail pass then live pass, culled against the shared
+    // cull rect hoisted to the top of the camera block.
     const bSize = settings.bullets.size;
     const bColor = settings.bullets.color;
     perfBegin("trails");
@@ -3459,6 +3501,26 @@ export function start(canvas: HTMLCanvasElement): void {
         }
       }
     }
+
+    // Margin parallax decor — self-luminous wireframe silhouettes in
+    // the letterbox / camera margins. Drawn AFTER the darkness overlay
+    // (boss-glow precedent) so the decor glows through it, in screen
+    // space, clipped to viewport-minus-arena.
+    perfBegin("decor");
+    ctx.save();
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    drawThemeDecorMargins(
+      ctx,
+      themeDecor,
+      viewW,
+      viewH,
+      arenaBounds,
+      camera.x,
+      camera.y,
+      scale,
+    );
+    ctx.restore();
+    perfEnd("decor");
 
     // room placeholder text
     if (currentRoom.message) {
