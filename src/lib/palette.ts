@@ -18,6 +18,10 @@ export const PALETTE = {
   pickupBoost: "#c084fc",
   pickupBreaker: "#fb923c",
 
+  // Wall detail language (lib/walls.ts wall styles).
+  wallTrimNormal: "#a5f3fc",
+  wallTrimInfected: "#ff5577",
+
   // --- Zone theme colors (composed in lib/zone-theme.ts) ---
   // Neutral / sandbox / default — the historical cyan-slate identity.
   zoneNeutralAccent: "#7dd3fc",
@@ -27,6 +31,12 @@ export const PALETTE = {
   zoneNeutralDustFar: "#7dd3fc",
   zoneNeutralDustMid: "#a5f3fc",
   zoneNeutralDustNear: "#cffafe",
+  // Radar-sweep band colors — MUST stay rgba(...) strings: arena-bg
+  // parses them to derive the transparent gradient-edge variant.
+  zoneNeutralSweep: "rgba(125, 211, 252, 0.10)",
+  zoneInfectedSweep: "rgba(177, 76, 255, 0.08)",
+  zoneBossSweep: "rgba(255, 85, 119, 0.08)",
+  zoneTutorialSweep: "rgba(148, 163, 184, 0.08)",
   // Infected sector — red-purple per the visual-overhaul reference.
   // Wash leans purple so PALETTE.bullet red stays separable.
   zoneInfectedAccent: "#ff4d6d",

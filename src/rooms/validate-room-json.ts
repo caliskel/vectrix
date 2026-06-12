@@ -38,9 +38,9 @@ const DEFAULT_ROOM_HEIGHT = 800;
  *
  *  Emits non-fatal console warnings (authoring-rule violations that
  *  shouldn't block a save / load — e.g. an ambient spawn area leaking
- *  outside the wall-enclosed interior). Each warning is also emitted
- *  via `console.warn` so existing callers that ignore the return value
- *  (Vite save endpoint, JSON room loader) still surface it. */
+ *  outside the wall-enclosed interior). Warnings surface via
+ *  `console.warn` on both the Vite save endpoint (dev terminal) and
+ *  the JSON room loader (browser console). */
 export function validateRoomJson(json: unknown, idHint?: string): void {
   if (typeof json !== "object" || json === null) {
     throw new Error(`validateRoomJson(${idHint ?? "?"}): payload must be an object`);

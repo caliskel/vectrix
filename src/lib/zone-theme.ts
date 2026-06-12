@@ -62,7 +62,9 @@ export type ZoneTheme = {
   washInner: string;
   washOuter: string;
   washAlpha: number;
-  /** Arena-bg dust dot tints (back→front) and radar sweep band color. */
+  /** Arena-bg dust dot tints (back→front) and the radar sweep band
+   *  color. sweepColor MUST be an rgba(...) string — arena-bg parses
+   *  it to derive the transparent gradient-edge variant. */
   dustColors: [string, string, string];
   sweepColor: string;
   /** Margin / under-floor decor vocabulary (see DecorSilhouette). */
@@ -100,7 +102,7 @@ const NEUTRAL_BASE = {
     PALETTE.zoneNeutralDustMid,
     PALETTE.zoneNeutralDustNear,
   ] as [string, string, string],
-  sweepColor: "rgba(125, 211, 252, 0.10)",
+  sweepColor: PALETTE.zoneNeutralSweep,
   decorDominant: ["circuit", "dataBlock", "hexCluster"] as DecorSilhouette[],
   suppressBackgroundEnergy: false,
 };
@@ -128,7 +130,7 @@ const THEMES: Record<ZoneThemeId, ZoneTheme> = {
       PALETTE.zoneInfectedDustMid,
       PALETTE.zoneInfectedDustNear,
     ],
-    sweepColor: "rgba(177, 76, 255, 0.08)",
+    sweepColor: PALETTE.zoneInfectedSweep,
     decorDominant: ["hexCluster", "eye", "circuit"],
     suppressBackgroundEnergy: true,
   },
@@ -148,7 +150,7 @@ const THEMES: Record<ZoneThemeId, ZoneTheme> = {
       PALETTE.zoneBossDustMid,
       PALETTE.zoneBossDustNear,
     ],
-    sweepColor: "rgba(255, 85, 119, 0.08)",
+    sweepColor: PALETTE.zoneBossSweep,
     decorDominant: ["hexCluster", "eye"],
     suppressBackgroundEnergy: true,
   },
@@ -167,7 +169,7 @@ const THEMES: Record<ZoneThemeId, ZoneTheme> = {
       PALETTE.zoneTutorialDustMid,
       PALETTE.zoneTutorialDustNear,
     ],
-    sweepColor: "rgba(148, 163, 184, 0.08)",
+    sweepColor: PALETTE.zoneTutorialSweep,
     decorDominant: ["dataBlock", "circuit"],
     suppressBackgroundEnergy: false,
   },

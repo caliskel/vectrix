@@ -2459,8 +2459,8 @@ export function start(canvas: HTMLCanvasElement): void {
     // arena rect so they only show in the letterbox / camera margins.
     const arenaBounds = computeArenaBounds();
     // Zones with their own margin identity suppress the legacy fixed
-    // cyan energy pass (the tutorial theme keeps it on, but the gate
-    // mirrors rooms-game 1-to-1; update keeps ticking regardless).
+    // cyan energy pass (the tutorial theme keeps it on, but the gate —
+    // including the matching update gate — mirrors rooms-game 1-to-1).
     if (!zoneTheme.theme.suppressBackgroundEnergy) {
       drawEnergyBackground(ctx, energyBg, viewW, viewH, arenaBounds);
     }

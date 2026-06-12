@@ -172,7 +172,10 @@ function traceHex(
 
 /** 2–5 nested / adjacent pointy-top wireframe hexagons. */
 function bakeHexCluster(color: string, size: number): BakedSprite | null {
-  const s = makeSpriteCanvas(size);
+  // Adjacent hexes reach up to ~0.874×size from center ((mainR+r2)·√3/2
+  // + r2 with mainR = r2max = 0.32·size) — size the canvas to the true
+  // extent so cluster edges never bake clipped.
+  const s = makeSpriteCanvas(size * 1.75);
   if (!s) return null;
   const { canvas, ctx, half } = s;
   ctx.strokeStyle = color;

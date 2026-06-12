@@ -2904,8 +2904,8 @@ export function start(canvas: HTMLCanvasElement): void {
     const arenaBounds = computeArenaBounds();
     perfBegin("energy");
     // Zones with their own margin identity suppress the legacy fixed
-    // cyan energy pass (update keeps ticking so the state stays warm
-    // across zone changes — it's cheap).
+    // cyan energy pass (its update is gated the same way — the field
+    // simply freezes while suppressed and resumes on zone change).
     if (!zoneTheme.theme.suppressBackgroundEnergy) {
       drawEnergyBackground(ctx, energyBg, viewW, viewH, arenaBounds);
     }
