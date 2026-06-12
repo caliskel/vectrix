@@ -39,9 +39,9 @@ import {
 /** Camera-offset multiplier per depth layer (0 = far … 2 = near). */
 const LAYER_PARALLAX = [0.06, 0.2, 0.4] as const;
 /** Per-layer alpha ceilings — multiplied by zone intensity at seed. */
-const LAYER_ALPHA_CAP = [0.14, 0.22, 0.32] as const;
+const LAYER_ALPHA_CAP = [0.22, 0.34, 0.48] as const;
 /** Hard caps on fixture counts per layer (seed count = cap). */
-const LAYER_MAX_FIXTURES = [10, 7, 5] as const;
+const LAYER_MAX_FIXTURES = [14, 10, 7] as const;
 /** Base silhouette size range (px) per layer — far small, near large. */
 const LAYER_SIZE_MIN = [34, 52, 72] as const;
 const LAYER_SIZE_MAX = [54, 80, 112] as const;
@@ -75,9 +75,9 @@ const UNDERFLOOR_DRIFT_VY = [1.0, -1.9, 4.9] as const;
 
 // ---- in-arena props tuning -----------------------------------------------
 
-const PROP_ROSETTE_ALPHA = 0.16;
-const PROP_BRACKET_ALPHA = 0.14;
-const PROP_DOT_ALPHA = 0.12;
+const PROP_ROSETTE_ALPHA = 0.45;
+const PROP_BRACKET_ALPHA = 0.4;
+const PROP_DOT_ALPHA = 0.35;
 const PROP_ROSETTE_SIZE = 150;
 const PROP_BRACKET_SIZE = 56;
 const PROP_DOT_SIZE = 10;
@@ -450,7 +450,7 @@ function seedProps(
   spawnY: number,
 ): DecorProp[] {
   const props: DecorProp[] = [];
-  const color = zone.theme.accentDim;
+  const color = zone.theme.accent;
   const minDim = Math.min(roomW, roomH);
   const cx = roomW / 2;
   const cy = roomH / 2;

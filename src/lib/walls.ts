@@ -324,9 +324,9 @@ const HATCH_SPACING_PX = 8;
 // as a fake-glow pair (wide dim companion under a thin bright core).
 // All inside the bake, so cost is one-time.
 const TRIM_INSET_PX = 3;
-const TRIM_LINE_WIDTH = 1.5;
-const TRIM_GLOW_LINE_WIDTH = 4.5;
-const TRIM_GLOW_ALPHA_FACTOR = 0.22;
+const TRIM_LINE_WIDTH = 3;
+const TRIM_GLOW_LINE_WIDTH = 10;
+const TRIM_GLOW_ALPHA_FACTOR = 0.4;
 // Panel lines — subtle subdivision strokes across each wall's long
 // axis. Skipped when the wall is too thin on the cross axis for the
 // line to read as a panel seam.

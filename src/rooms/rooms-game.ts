@@ -251,23 +251,24 @@ const TUTORIAL_COMPLETED_KEY = "dash-proto:tutorial-completed";
 // CanvasGradient на кадр дёшево в Chrome, но заметно дорого в Safari /
 // Firefox. Запекаем спрайт один раз и рисуем drawImage с globalAlpha.
 const DARK_EDGE_SPRITE_R = 256;
-let darkEdgeSprite: HTMLCanvasElement | null = null;
-function getDarkEdgeSprite(): HTMLCanvasElement {
-  if (darkEdgeSprite) return darkEdgeSprite;
+const darkEdgeSprites = new Map<string, HTMLCanvasElement>();
+function getDarkEdgeSprite(duskRgb: string): HTMLCanvasElement {
+  let sprite = darkEdgeSprites.get(duskRgb);
+  if (sprite) return sprite;
   const R = DARK_EDGE_SPRITE_R;
   const c = document.createElement("canvas");
   c.width = R * 2;
   c.height = R * 2;
-  darkEdgeSprite = c;
+  darkEdgeSprites.set(duskRgb, c);
   const g = c.getContext("2d");
   if (!g) return c;
   // innerR/outerR = 0.52/1.10 из draw-кода ниже; стопы 1-в-1.
   const grad = g.createRadialGradient(R, R, R * (0.52 / 1.1), R, R, R);
-  grad.addColorStop(0, "rgba(5, 0, 12, 0)");
-  grad.addColorStop(0.25, "rgba(5, 0, 12, 0.12)");
-  grad.addColorStop(0.55, "rgba(5, 0, 12, 0.50)");
-  grad.addColorStop(0.8, "rgba(5, 0, 12, 0.82)");
-  grad.addColorStop(1, "rgba(5, 0, 12, 1)");
+  grad.addColorStop(0, `rgba(${duskRgb}, 0)`);
+  grad.addColorStop(0.25, `rgba(${duskRgb}, 0.12)`);
+  grad.addColorStop(0.55, `rgba(${duskRgb}, 0.50)`);
+  grad.addColorStop(0.8, `rgba(${duskRgb}, 0.82)`);
+  grad.addColorStop(1, `rgba(${duskRgb}, 1)`);
   g.fillStyle = grad;
   g.beginPath();
   g.arc(R, R, R, 0, Math.PI * 2);
@@ -3422,7 +3423,7 @@ export function start(canvas: HTMLCanvasElement): void {
       ctx.beginPath();
       ctx.rect(0, 0, viewW, viewH);
       ctx.arc(px, py, outerR, 0, Math.PI * 2, true);
-      ctx.fillStyle = `rgba(5, 0, 12, ${darkness})`;
+      ctx.fillStyle = `rgba(${zoneTheme.theme.darkness.duskRgb}, ${darkness})`;
       ctx.fill("evenodd");
 
       // Шаг 2: мягкий градиентный переход innerR → outerR — запечённый
@@ -3431,7 +3432,7 @@ export function start(canvas: HTMLCanvasElement): void {
       // к outerR запечено в спрайте).
       ctx.globalAlpha = darkness;
       ctx.drawImage(
-        getDarkEdgeSprite(),
+        getDarkEdgeSprite(zoneTheme.theme.darkness.duskRgb),
         px - outerR,
         py - outerR,
         outerR * 2,

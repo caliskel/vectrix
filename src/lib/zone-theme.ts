@@ -42,6 +42,10 @@ export type ZoneDarkness = {
   alpha: number;
   /** Light-pool radius around the player, world px. */
   visibilityRadiusPx: number;
+  /** Dusk tint as a bare "r, g, b" triplet — the overlay composes
+   *  rgba() from it, so a zone's darkness carries the zone's hue
+   *  instead of crushing everything to neutral black. */
+  duskRgb: string;
 };
 
 export type ZoneTheme = {
@@ -82,9 +86,16 @@ export type ZoneThemeState = {
   intensity: number;
 };
 
-const CAMPAIGN_DARKNESS: ZoneDarkness = {
+const INFECTED_DARKNESS: ZoneDarkness = {
   alpha: 0.45,
   visibilityRadiusPx: 600,
+  duskRgb: "24, 4, 38", // deep purple — the sector's hue survives the dusk
+};
+
+const BOSS_DARKNESS: ZoneDarkness = {
+  alpha: 0.45,
+  visibilityRadiusPx: 600,
+  duskRgb: "26, 4, 18", // deep crimson-black
 };
 
 // Neutral cyan-slate identity shared by the default and sandbox themes —
@@ -118,13 +129,13 @@ const THEMES: Record<ZoneThemeId, ZoneTheme> = {
   // purple over red so PALETTE.bullet red threats stay separable (R4).
   infected: {
     id: "infected",
-    darkness: CAMPAIGN_DARKNESS,
+    darkness: INFECTED_DARKNESS,
     intensity: 1,
     accent: PALETTE.zoneInfectedAccent,
     accentDim: PALETTE.zoneInfectedAccentDim,
     washInner: PALETTE.zoneInfectedWashInner,
     washOuter: PALETTE.zoneInfectedWashOuter,
-    washAlpha: 0.16,
+    washAlpha: 0.55,
     dustColors: [
       PALETTE.zoneInfectedDustFar,
       PALETTE.zoneInfectedDustMid,
@@ -138,13 +149,13 @@ const THEMES: Record<ZoneThemeId, ZoneTheme> = {
   // phase colors stay the loudest reds on screen.
   boss: {
     id: "boss",
-    darkness: CAMPAIGN_DARKNESS,
+    darkness: BOSS_DARKNESS,
     intensity: 1,
     accent: PALETTE.zoneBossAccent,
     accentDim: PALETTE.zoneBossAccentDim,
     washInner: PALETTE.zoneBossWashInner,
     washOuter: PALETTE.zoneBossWashOuter,
-    washAlpha: 0.13,
+    washAlpha: 0.45,
     dustColors: [
       PALETTE.zoneBossDustFar,
       PALETTE.zoneBossDustMid,
