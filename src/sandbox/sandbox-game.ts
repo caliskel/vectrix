@@ -65,6 +65,12 @@ import {
 } from "../lib/arena-bg";
 import { resolveZoneTheme } from "../lib/zone-theme";
 import {
+  createThemeDecor,
+  drawThemeDecorUnderfloor,
+  updateThemeDecor,
+  type ThemeDecor,
+} from "../lib/theme-decor";
+import {
   createDeathFx,
   drawDeathFx,
   shouldShowDeathOverlay,
@@ -149,6 +155,11 @@ const bgFx = new BackgroundFx();
 // wash rebuilds with it at the new dimensions.
 const zoneTheme = resolveZoneTheme("sandbox");
 let arenaBg: ArenaBg | null = null;
+// Under-floor zone decor — dim drifting silhouettes drawn beneath the
+// (now transparent) grid bake. Sandbox has no rooms, so the viewport
+// IS the world: created on the first resize() and reseeded on every
+// resize alongside the grid rebuild.
+let themeDecor: ThemeDecor | null = null;
 // Energy background — kept in module scope so resizes don't reset
 // the drifting state. Created once on the first resize().
 let energyBg: EnergyBackground | null = null;
@@ -168,6 +179,10 @@ function resize() {
   rebuildGrid();
   bgFx.resize(viewW, viewH);
   arenaBg = createArenaBg(viewW, viewH, zoneTheme);
+  // Reseed the under-floor decor with the grid — fixture density is
+  // count-capped, so a viewport change needs a fresh scatter (the
+  // viewport is the world here; in-arena props are seeded but unused).
+  themeDecor = createThemeDecor(zoneTheme, viewW, viewH, viewW, viewH);
   if (!energyBg) energyBg = createEnergyBackground(viewW, viewH);
   if (!bgText) bgText = createBackgroundTextState(viewW, viewH);
 }
@@ -182,8 +197,11 @@ function rebuildGrid() {
   const gctx = gc.getContext("2d");
   if (!gctx) return;
   gctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  gctx.fillStyle = PALETTE.bg;
-  gctx.fillRect(0, 0, viewW, viewH);
+  // Transparent bake — grid lines only, no opaque PALETTE.bg base.
+  // render() fills PALETTE.bg at frame start, so an opaque fill here
+  // would just bury the arena-bg wash / bgFx / under-floor decor
+  // layers that draw beneath the grid blit. (lib/grid.ts::
+  // createGridCanvas is the same transparent idea but has no callers.)
   gctx.strokeStyle = PALETTE.bgGrid;
   gctx.lineWidth = 1;
   gctx.beginPath();
@@ -1071,6 +1089,7 @@ function frame(now: number) {
 
   bgFx.update(dt);
   if (arenaBg) updateArenaBg(arenaBg, dt);
+  if (themeDecor) updateThemeDecor(themeDecor, dt);
   if (energyBg) updateEnergyBackground(energyBg, dt, viewW, viewH);
   if (bgText) {
     const sandboxArena: ArenaScreenBounds = { x: 0, y: 0, w: viewW, h: viewH };
@@ -1508,14 +1527,17 @@ function multColor(m: number): string {
 }
 
 function render() {
-  // Solid bg → ambient pulse → grid lines → ambient dust. Order matters:
-  // grid sits ABOVE the pulse so the cells stay legible, and dust sits
-  // above the grid so the foreground reads as "things drifting in the
-  // arena" instead of being lost between lines.
+  // Solid bg → arena wash/dust → ambient pulse → under-floor decor →
+  // grid lines (transparent bake) → ambient dust. Order matters: the
+  // decor reads as machinery under a glass floor because the grid
+  // blits ABOVE it, the grid sits above the pulse so the cells stay
+  // legible, and dust sits above the grid so the foreground reads as
+  // "things drifting in the arena" instead of being lost between lines.
   ctx.fillStyle = PALETTE.bg;
   ctx.fillRect(0, 0, viewW, viewH);
   if (arenaBg) drawArenaBg(ctx, arenaBg);
   bgFx.drawBack(ctx, viewW, viewH);
+  if (themeDecor) drawThemeDecorUnderfloor(ctx, themeDecor, viewW, viewH);
 
   // Energy + text background — sandbox runs full-screen, so the arena
   // bounds cover the whole viewport and both modules short-circuit.

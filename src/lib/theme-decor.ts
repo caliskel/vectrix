@@ -21,9 +21,12 @@
 // deterministically from the room dimensions so rooms sharing a theme
 // read as cohesive architecture, not random scatter.
 //
-// Future reuse: a sandbox "underfloor" placement (slow autonomous
-// drift, no camera) can iterate the same marginFixtures / sprites
-// with a different draw entry — the fixtures carry no camera state.
+// The sandbox "underfloor" placement (drawThemeDecorUnderfloor)
+// iterates the same marginFixtures / sprites with a different draw
+// entry: full-viewport, no arena clip, no camera parallax — each depth
+// layer drifts slowly and autonomously off d.age instead, and every
+// alpha is further scaled by UNDERFLOOR_ALPHA_FACTOR (the fixtures
+// carry no camera state, so the two draws share all seeding).
 
 import type { DecorSilhouette, ZoneThemeState } from "./zone-theme";
 import type { ArenaScreenBounds } from "./background-energy";
@@ -51,6 +54,21 @@ const PULSE_DEPTH = 0.18; // alpha swings ±18 % around base
 /** Glow baked into every sprite (bake-time shadowBlur only). */
 const DECOR_GLOW_BLUR = 8;
 const SPRITE_PAD = DECOR_GLOW_BLUR * 2;
+
+// ---- under-floor tuning (sandbox full-viewport placement) ------------------
+
+/** Hard alpha budget multiplied onto every under-floor fixture on top
+ *  of the layer caps × zone intensity. The sandbox has no letterbox
+ *  separating decor from gameplay, so the layer must sit far below
+ *  threat brightness (bullets render at full alpha). */
+const UNDERFLOOR_ALPHA_FACTOR = 0.45;
+/** Autonomous per-layer drift velocity (px/s), indexed by depth layer
+ *  (0 far … 2 near). Replaces camera parallax — headings diverge so
+ *  the depth layers visibly slide past each other; magnitudes ramp
+ *  ~2 → 6 px/s far → near. Applied as d.age × velocity at draw time,
+ *  so the drift is dt-driven and freezes with the game loop. */
+const UNDERFLOOR_DRIFT_VX = [-1.7, 2.9, -3.4] as const;
+const UNDERFLOOR_DRIFT_VY = [1.0, -1.9, 4.9] as const;
 
 // ---- in-arena props tuning -----------------------------------------------
 
@@ -576,6 +594,62 @@ export function drawThemeDecorMargins(
     }
   }
 
+  ctx.restore();
+}
+
+// ---- draw: sandbox under-floor layer ---------------------------------------
+
+/**
+ * Full-viewport under-floor pass — same fixtures and sprites as the
+ * margin layer, drawn beneath a transparent grid bake instead of
+ * beside the arena. Differences from drawThemeDecorMargins:
+ * - no arena clip (positions resolve over the full viewport),
+ * - no camera parallax — each depth layer drifts autonomously at its
+ *   UNDERFLOOR_DRIFT_* velocity, advanced via d.age (dt-driven in
+ *   updateThemeDecor, so it freezes with the game loop),
+ * - every alpha is additionally scaled by UNDERFLOOR_ALPHA_FACTOR so
+ *   the decor stays far below threat brightness.
+ * Caller must have the identity×dpr transform active. Allocation-free.
+ */
+export function drawThemeDecorUnderfloor(
+  ctx: CanvasRenderingContext2D,
+  d: ThemeDecor,
+  viewW: number,
+  viewH: number,
+): void {
+  const fixtures = d.marginFixtures;
+  if (fixtures.length === 0) return;
+  ctx.save();
+  const spanX = viewW + WRAP_MARGIN_PX * 2;
+  const spanY = viewH + WRAP_MARGIN_PX * 2;
+  for (let i = 0; i < fixtures.length; i++) {
+    const f = fixtures[i];
+    if (!f.sprite) continue;
+    const dx = UNDERFLOOR_DRIFT_VX[f.layer] * d.age;
+    const dy = UNDERFLOOR_DRIFT_VY[f.layer] * d.age;
+    const x = wrapCoord(f.nx * spanX + dx, spanX) - WRAP_MARGIN_PX;
+    const y = wrapCoord(f.ny * spanY + dy, spanY) - WRAP_MARGIN_PX;
+    const half = f.spriteHalf;
+    if (x + half < 0 || x - half > viewW || y + half < 0 || y - half > viewH) {
+      continue;
+    }
+    let alpha = f.baseAlpha * UNDERFLOOR_ALPHA_FACTOR;
+    if (f.pulseSpeed !== 0) {
+      // Pulse only dims — the under-floor budget cap holds at every
+      // phase of the cycle (same contract as the margin pass).
+      alpha *= 1 - PULSE_DEPTH * (Math.sin(f.pulsePhase) * 0.5 + 0.5);
+    }
+    ctx.globalAlpha = alpha;
+    if (f.rotation !== 0) {
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(f.rotation);
+      ctx.drawImage(f.sprite, -half, -half);
+      ctx.restore();
+    } else {
+      ctx.drawImage(f.sprite, x - half, y - half);
+    }
+  }
   ctx.restore();
 }
 
