@@ -1,7 +1,7 @@
 ---
 title: "feat: Zone-theme visual overhaul (GD-inspired juice within VECTRIX)"
 type: feat
-status: active
+status: completed
 date: 2026-06-12
 origin: docs/brainstorms/visual-overhaul-zone-themes-requirements.md
 ---
