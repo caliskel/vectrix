@@ -758,18 +758,39 @@ after the boss-death sequence. On launch the engine checks
 it renders a "STORY MODE LOCKED" overlay with a CTA to
 `/tutorial.html`.
 
-**Dark atmosphere** — all campaign rooms (room1, infected-hub,
-infected-hub-top, infected-hub-bottom, room5) render a radial
-visibility overlay: soft-edged dark mask with a ~270 px glow
-radius around the player. Power-flicker effect triggers every
-3–8 s (4 rapid on/off pulses, 0.45 s total). Controlled by a
-single condition in `rooms-game.ts` — trivial to disable per
-room.
+**Dark atmosphere** — rooms whose zone theme declares `darkness`
+(infected sector + boss) render a uniform soft dusk: a wide light
+pool around the player (visibility radius 600 px) with an even
+0.45-alpha darkness outside. Parameters live on the theme
+(`ZoneDarkness` in `lib/zone-theme.ts`); the old per-room id set
+and the power-flicker effect are gone. Self-luminous margin decor
+(see "Zone themes" below) draws above the darkness so it glows
+through.
 
 **Hero thoughts** — scramble-text monologue anchored under the
 player (world space). "how do i do this?" on first campaign
 entry (from tutorial). "why is it so dark here?" on first
 entry into infected-hub. Both are one-shot per run.
+
+**Zone themes** (`lib/zone-theme.ts`) — every room (and mode)
+resolves a `ZoneTheme` naming its visual identity: floor wash
+colors, arena-bg dust/pulse/sweep tints, margin-decor vocabulary,
+wall style accents, darkness params, and `suppressBackgroundEnergy`.
+Themes: `default`/`sandbox` (neutral cyan), `infected` (red-purple,
+dark), `boss` (crimson, dark), `tutorial` (calm slate). Rooms
+declare `theme:`; JSON rooms carry an optional validated field;
+unknown/absent ids fall back to default. `intensity` (0..1, static
+in v1) scales wash/decor budgets — the future gameplay-reactivity
+hook. `lib/theme-decor.ts` renders self-luminous wireframe parallax
+decor in the letterbox margins (3 depth layers, even-odd clip,
+draws AFTER the darkness overlay), sparse in-arena props (world
+space, between grid and walls), and a dim under-floor variant in
+sandbox (beneath the now-transparent sandbox grid bake). All decor
+sprites bake at seed time (shadowBlur only there), counts are
+hard-capped, animation is dt-driven. Perf section: `decor`.
+The infected hub and room5 use notched perimeters composed from
+flush AABB wall blocks with merge flags — collision unchanged;
+Sentinel mine spawns reject points inside wall AABBs.
 
 ### Room 1 — corridor (`room1.ts`)
 
