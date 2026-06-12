@@ -743,10 +743,6 @@ export function start(canvas: HTMLCanvasElement): void {
   let heartPulseRings: HeartPulseRing[] = [];
   let heartComplete = false;
   let heartAge = 0; // running timer for rotation/beat animations
-  // Sleeping Chamber flicker state — имитирует отключение электричества.
-  let chamberFlickerTimer = 3 + Math.random() * 4; // до следующего мигания
-  let chamberFlickerAge = -1; // -1 = неактивно, 0+ = идёт мигание
-  const CHAMBER_FLICKER_DURATION = 0.45;
   // Zone theme — per-room visual identity (wash, decor, wall style,
   // darkness). Re-resolved in syncRoomFx on every transition/restart.
   let zoneTheme: ZoneThemeState = resolveZoneTheme(
@@ -765,8 +761,6 @@ export function start(canvas: HTMLCanvasElement): void {
     zoneTheme,
     currentRoom.width ?? ROOM_W_PX,
     currentRoom.height ?? ROOM_H_PX,
-    viewW,
-    viewH,
     currentRoom.spawnX,
     currentRoom.spawnY,
   );
@@ -823,8 +817,6 @@ export function start(canvas: HTMLCanvasElement): void {
       zoneTheme,
       w,
       h,
-      viewW,
-      viewH,
       currentRoom.spawnX,
       currentRoom.spawnY,
     );
@@ -2044,7 +2036,9 @@ export function start(canvas: HTMLCanvasElement): void {
     // breathing even when the boss / cinematic timeScale slows world sim.
     updateArenaBg(arenaBg, dt);
     updateWallFx(wallFx, dt, currentRoom.walls);
-    updateEnergyBackground(energyBg, dt, viewW, viewH);
+    if (!zoneTheme.theme.suppressBackgroundEnergy) {
+      updateEnergyBackground(energyBg, dt, viewW, viewH);
+    }
     updateBackgroundTexts(bgText, dt, ctx, viewW, viewH, computeArenaBounds());
     updateGridNodes(gridNodes, dt);
     updateArchiveFx(archiveFx, dt, player.x, player.y);
@@ -2396,29 +2390,13 @@ export function start(canvas: HTMLCanvasElement): void {
     }
     perfEnd("upd_enemies");
 
-    // Мигание электричества — тёмные комнаты (по зональной теме).
-    // Noisy-флаг только для sleeping chamber.
-    if (zoneTheme.theme.darkness) {
-      if (currentRoom.sleepingChamber) {
-        for (const e of currentRoom.enemies) {
-          if (e.type === "watcher" && e.awarenessState === "alerting" && !state.noisySector) {
-            state.noisySector = true;
-          }
+    // Noisy-флаг — только для sleeping chamber (тёмные комнаты).
+    if (zoneTheme.theme.darkness && currentRoom.sleepingChamber) {
+      for (const e of currentRoom.enemies) {
+        if (e.type === "watcher" && e.awarenessState === "alerting" && !state.noisySector) {
+          state.noisySector = true;
         }
       }
-      if (chamberFlickerAge < 0) {
-        chamberFlickerTimer -= dt;
-        if (chamberFlickerTimer <= 0) {
-          chamberFlickerTimer = 3 + Math.random() * 5;
-          chamberFlickerAge = 0;
-        }
-      } else {
-        chamberFlickerAge += dt;
-        if (chamberFlickerAge >= CHAMBER_FLICKER_DURATION) chamberFlickerAge = -1;
-      }
-    } else {
-      chamberFlickerAge = -1;
-      chamberFlickerTimer = 3 + Math.random() * 4;
     }
 
     // Pulsing Heart — tick pulse rings + registration progress.
@@ -3426,16 +3404,13 @@ export function start(canvas: HTMLCanvasElement): void {
     // Тёмный оверлей с радиусом свечения вокруг ГГ — комнаты, чья
     // зональная тема объявляет darkness (инфицированный сектор + босс).
     if (zoneTheme.theme.darkness) {
-      // Единый мягкий «сумрак» во всех комнатах — широкая лужа света
-      // вокруг ГГ и ровная негустая темнота снаружи (как было сделано
-      // для хаба / 2-й комнаты). Без power-мигания, чтобы свет был
-      // ровным везде.
-      const visR = 600;
+      // Единый мягкий «сумрак» — широкая лужа света вокруг ГГ и ровная
+      // негустая темнота снаружи. Параметры живут на зональной теме.
       const px = (player.x - camera.x) * scale + offsetX;
       const py = (player.y - camera.y) * scale + offsetY;
-      const vr = visR * scale;
+      const vr = zoneTheme.theme.darkness.visibilityRadiusPx * scale;
 
-      const darkness = 0.45;
+      const darkness = zoneTheme.theme.darkness.alpha;
 
       ctx.save();
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);

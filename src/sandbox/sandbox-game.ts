@@ -179,10 +179,11 @@ function resize() {
   rebuildGrid();
   bgFx.resize(viewW, viewH);
   arenaBg = createArenaBg(viewW, viewH, zoneTheme);
-  // Reseed the under-floor decor with the grid — fixture density is
-  // count-capped, so a viewport change needs a fresh scatter (the
-  // viewport is the world here; in-arena props are seeded but unused).
-  themeDecor = createThemeDecor(zoneTheme, viewW, viewH, viewW, viewH);
+  // Created once — fixtures live in normalized wrap-span fractions and
+  // re-flow against the live viewport at draw time, so resize needs no
+  // reseed (and reseeding would re-bake ~22 glow sprites per resize
+  // event). No spawn point → no in-arena props seeded (never drawn here).
+  if (!themeDecor) themeDecor = createThemeDecor(zoneTheme, viewW, viewH);
   if (!energyBg) energyBg = createEnergyBackground(viewW, viewH);
   if (!bgText) bgText = createBackgroundTextState(viewW, viewH);
 }

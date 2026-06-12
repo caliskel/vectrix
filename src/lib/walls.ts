@@ -933,7 +933,7 @@ export function addWallImpact(fx: WallFx, x: number, y: number): void {
 // Per-wall semantic styles ALWAYS win: the `infected` flag keeps the
 // red quarantine identity and `dashable` keeps the cyan dashed
 // language in every theme. The theme only re-skins the NORMAL group:
-// when a non-default theme declares wallStyleId "normal", its
+// for any non-default theme, its
 // accent/accentDim replace the cyan stroke/trim/detail colors and the
 // body fill derives from a darkened accentDim (infected zone walls go
 // red-purple, boss walls crimson, tutorial walls calm slate). The
@@ -959,7 +959,6 @@ const themedStyleCache = new Map<string, WallStyle>();
 
 function resolveNormalStyle(theme?: ZoneThemeState): WallStyle {
   if (!theme || theme.theme.id === "default") return NORMAL_WALL_STYLE;
-  if (theme.theme.wallStyleId === "infected") return INFECTED_WALL_STYLE;
   const id = theme.theme.id;
   let style = themedStyleCache.get(id);
   if (!style) {

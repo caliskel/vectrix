@@ -18,7 +18,7 @@ import {
   FLOATING_TEXT_STABLE_DURATION_MIN_MS,
   FLOATING_TEXT_TYPING_SPEED_MS,
 } from "./config";
-import type { ArenaScreenBounds } from "./background-energy";
+import { clipArenaMargins, type ArenaScreenBounds } from "./background-energy";
 
 const WORD_POOL: string[] = [
   // --- System / technical ---
@@ -259,10 +259,7 @@ export function drawBackgroundTexts(
       ctx.restore();
       return;
     }
-    ctx.beginPath();
-    ctx.rect(0, 0, viewW, viewH);
-    ctx.rect(arena.x, arena.y, arena.w, arena.h);
-    ctx.clip("evenodd");
+    clipArenaMargins(ctx, viewW, viewH, arena);
   }
 
   ctx.textAlign = "left";

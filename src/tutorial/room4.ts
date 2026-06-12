@@ -24,6 +24,7 @@ export function buildRoom4(): Room {
   ];
   return {
     id: "room4",
+    theme: "tutorial",
     walls,
     enemies: [],
     door: null,

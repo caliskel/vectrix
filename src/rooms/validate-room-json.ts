@@ -36,12 +36,12 @@ const DEFAULT_ROOM_HEIGHT = 800;
 /** Throws on any structural problem. Error messages name the offending
  *  field for surfacing in the editor UI.
  *
- *  Returns a list of non-fatal warnings (authoring-rule violations that
+ *  Emits non-fatal console warnings (authoring-rule violations that
  *  shouldn't block a save / load — e.g. an ambient spawn area leaking
  *  outside the wall-enclosed interior). Each warning is also emitted
  *  via `console.warn` so existing callers that ignore the return value
  *  (Vite save endpoint, JSON room loader) still surface it. */
-export function validateRoomJson(json: unknown, idHint?: string): string[] {
+export function validateRoomJson(json: unknown, idHint?: string): void {
   if (typeof json !== "object" || json === null) {
     throw new Error(`validateRoomJson(${idHint ?? "?"}): payload must be an object`);
   }
@@ -50,10 +50,8 @@ export function validateRoomJson(json: unknown, idHint?: string): string[] {
   const need = (cond: boolean, msg: string): void => {
     if (!cond) throw new Error(`validateRoomJson(${id ?? "?"}): ${msg}`);
   };
-  const warnings: string[] = [];
   const warn = (msg: string): void => {
     const full = `validateRoomJson(${id ?? "?"}): WARNING: ${msg}`;
-    warnings.push(full);
     console.warn(full);
   };
 
@@ -182,5 +180,4 @@ export function validateRoomJson(json: unknown, idHint?: string): string[] {
     }
   }
 
-  return warnings;
 }

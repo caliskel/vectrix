@@ -29,7 +29,10 @@
 // carry no camera state, so the two draws share all seeding).
 
 import type { DecorSilhouette, ZoneThemeState } from "./zone-theme";
-import type { ArenaScreenBounds } from "./background-energy";
+import {
+  clipArenaMargins,
+  type ArenaScreenBounds,
+} from "./background-energy";
 
 // ---- margin-layer tuning -------------------------------------------------
 
@@ -96,7 +99,6 @@ const PROP_DOT_POSITIONS: ReadonlyArray<readonly [number, number]> = [
 // ---- types ---------------------------------------------------------------
 
 type DecorFixture = {
-  kind: DecorSilhouette;
   layer: number; // 0 far, 1 mid, 2 near
   /** Normalized [0..1) position over the wrap span. */
   nx: number;
@@ -374,18 +376,12 @@ export function createThemeDecor(
   zone: ZoneThemeState,
   roomW: number,
   roomH: number,
-  viewW: number,
-  viewH: number,
   spawnX?: number,
   spawnY?: number,
 ): ThemeDecor {
-  // viewW / viewH are part of the seeding API but intentionally unused
-  // today: margin fixtures store normalized [0..1) wrap-span fractions
-  // and consume the live viewport size at draw time, so window resizes
+  // Margin fixtures store normalized [0..1) wrap-span fractions and
+  // consume the live viewport size at draw time, so window resizes
   // re-flow the layer without re-seeding (background-energy pattern).
-  // A future underfloor branch may seed against the viewport directly.
-  void viewW;
-  void viewH;
   const marginFixtures: DecorFixture[] = [];
   const kinds = zone.theme.decorDominant;
   if (kinds.length > 0) {
@@ -402,7 +398,6 @@ export function createThemeDecor(
         const rotates = kind === "hexCluster";
         const pulses = kind === "dataBlock" || kind === "eye";
         marginFixtures.push({
-          kind,
           layer,
           nx: Math.random(),
           ny: Math.random(),
@@ -430,7 +425,13 @@ export function createThemeDecor(
   return {
     zone,
     marginFixtures,
-    props: seedProps(zone, roomW, roomH, spawnX, spawnY),
+    // Props are world-space room dressing — only seeded when the caller
+    // has a room (spawn point provided). The sandbox under-floor branch
+    // passes none and never draws props, so the bakes are skipped.
+    props:
+      spawnX !== undefined && spawnY !== undefined
+        ? seedProps(zone, roomW, roomH, spawnX, spawnY)
+        : [],
     age: 0,
   };
 }
@@ -442,8 +443,8 @@ function seedProps(
   zone: ZoneThemeState,
   roomW: number,
   roomH: number,
-  spawnX?: number,
-  spawnY?: number,
+  spawnX: number,
+  spawnY: number,
 ): DecorProp[] {
   const props: DecorProp[] = [];
   const color = zone.theme.accentDim;
@@ -455,7 +456,7 @@ function seedProps(
   // it doesn't sit directly under the player's entry point.
   let rx = cx;
   let ry = cy;
-  if (spawnX !== undefined && spawnY !== undefined) {
+  {
     const dx = cx - spawnX;
     const dy = cy - spawnY;
     const d = Math.hypot(dx, dy);
@@ -532,14 +533,77 @@ export function updateThemeDecor(d: ThemeDecor, dt: number): void {
   }
 }
 
-// ---- draw: margin layer ------------------------------------------------------
+// ---- draw: margin + under-floor fixture passes ----------------------------
+
+// Per-layer draw offsets, computed by each entry point into module
+// scratch (no per-frame allocation), consumed by the shared loop.
+const LAYER_OFFSET_X = [0, 0, 0];
+const LAYER_OFFSET_Y = [0, 0, 0];
+
+/**
+ * Shared fixture blit loop: wrap → viewport cull → optional inside-
+ * arena reject → pulse-dim → rotate-or-blit. The pulse only DIMS
+ * (never exceeds baseAlpha) so the per-layer alpha caps hold at every
+ * phase of the cycle. Allocation-free.
+ *
+ * `arena` (when given) rejects fixtures whose sprite AABB lies fully
+ * inside the arena rect — the margin clip would discard them anyway,
+ * so the drawImage is pure waste (most fixtures land there in play).
+ */
+function drawFixtures(
+  ctx: CanvasRenderingContext2D,
+  d: ThemeDecor,
+  viewW: number,
+  viewH: number,
+  alphaFactor: number,
+  arena: ArenaScreenBounds | null,
+): void {
+  const fixtures = d.marginFixtures;
+  const spanX = viewW + WRAP_MARGIN_PX * 2;
+  const spanY = viewH + WRAP_MARGIN_PX * 2;
+  for (let i = 0; i < fixtures.length; i++) {
+    const f = fixtures[i];
+    if (!f.sprite) continue;
+    const x =
+      wrapCoord(f.nx * spanX + LAYER_OFFSET_X[f.layer], spanX) -
+      WRAP_MARGIN_PX;
+    const y =
+      wrapCoord(f.ny * spanY + LAYER_OFFSET_Y[f.layer], spanY) -
+      WRAP_MARGIN_PX;
+    const half = f.spriteHalf;
+    if (x + half < 0 || x - half > viewW || y + half < 0 || y - half > viewH) {
+      continue;
+    }
+    if (
+      arena &&
+      x - half >= arena.x &&
+      x + half <= arena.x + arena.w &&
+      y - half >= arena.y &&
+      y + half <= arena.y + arena.h
+    ) {
+      continue;
+    }
+    let alpha = f.baseAlpha * alphaFactor;
+    if (f.pulseSpeed !== 0) {
+      alpha *= 1 - PULSE_DEPTH * (Math.sin(f.pulsePhase) * 0.5 + 0.5);
+    }
+    ctx.globalAlpha = alpha;
+    if (f.rotation !== 0) {
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(f.rotation);
+      ctx.drawImage(f.sprite, -half, -half);
+      ctx.restore();
+    } else {
+      ctx.drawImage(f.sprite, x - half, y - half);
+    }
+  }
+}
 
 /**
  * Screen-space margin pass. Caller must have the identity×dpr
- * transform active. Clips to viewport-minus-arena with the same
- * two-rect even-odd pattern as drawEnergyBackground — but does NOT
- * early-return when the arena covers the viewport (margins can be
- * legitimately zero-width some frames; the clip masks everything).
+ * transform active. Clips to viewport-minus-arena (clipArenaMargins)
+ * and bails out entirely when the arena covers the whole viewport.
  *
  * `scaleToScreen` is the letterbox scale (world px → screen px) so the
  * parallax offsets track the camera at screen speed.
@@ -554,62 +618,34 @@ export function drawThemeDecorMargins(
   cameraY: number,
   scaleToScreen: number,
 ): void {
-  const fixtures = d.marginFixtures;
-  if (fixtures.length === 0) return;
-  ctx.save();
-  ctx.beginPath();
-  ctx.rect(0, 0, viewW, viewH);
-  ctx.rect(arena.x, arena.y, arena.w, arena.h);
-  ctx.clip("evenodd");
-
-  const spanX = viewW + WRAP_MARGIN_PX * 2;
-  const spanY = viewH + WRAP_MARGIN_PX * 2;
-  for (let i = 0; i < fixtures.length; i++) {
-    const f = fixtures[i];
-    if (!f.sprite) continue;
-    const factor = LAYER_PARALLAX[f.layer];
-    const px = -cameraX * factor * scaleToScreen;
-    const py = -cameraY * factor * scaleToScreen;
-    const x = wrapCoord(f.nx * spanX + px, spanX) - WRAP_MARGIN_PX;
-    const y = wrapCoord(f.ny * spanY + py, spanY) - WRAP_MARGIN_PX;
-    const half = f.spriteHalf;
-    if (x + half < 0 || x - half > viewW || y + half < 0 || y - half > viewH) {
-      continue;
-    }
-    let alpha = f.baseAlpha;
-    if (f.pulseSpeed !== 0) {
-      // Pulse only dims (never exceeds baseAlpha) so the per-layer
-      // alpha cap holds at every phase of the cycle.
-      alpha *= 1 - PULSE_DEPTH * (Math.sin(f.pulsePhase) * 0.5 + 0.5);
-    }
-    ctx.globalAlpha = alpha;
-    if (f.rotation !== 0) {
-      ctx.save();
-      ctx.translate(x, y);
-      ctx.rotate(f.rotation);
-      ctx.drawImage(f.sprite, -half, -half);
-      ctx.restore();
-    } else {
-      ctx.drawImage(f.sprite, x - half, y - half);
-    }
+  if (d.marginFixtures.length === 0) return;
+  if (
+    arena.x <= 0 &&
+    arena.y <= 0 &&
+    arena.x + arena.w >= viewW &&
+    arena.y + arena.h >= viewH
+  ) {
+    return; // arena covers the viewport — nothing visible this frame
   }
-
+  for (let layer = 0; layer < LAYER_PARALLAX.length; layer++) {
+    LAYER_OFFSET_X[layer] = -cameraX * LAYER_PARALLAX[layer] * scaleToScreen;
+    LAYER_OFFSET_Y[layer] = -cameraY * LAYER_PARALLAX[layer] * scaleToScreen;
+  }
+  ctx.save();
+  clipArenaMargins(ctx, viewW, viewH, arena);
+  drawFixtures(ctx, d, viewW, viewH, 1, arena);
   ctx.restore();
 }
 
-// ---- draw: sandbox under-floor layer ---------------------------------------
-
 /**
- * Full-viewport under-floor pass — same fixtures and sprites as the
- * margin layer, drawn beneath a transparent grid bake instead of
- * beside the arena. Differences from drawThemeDecorMargins:
- * - no arena clip (positions resolve over the full viewport),
- * - no camera parallax — each depth layer drifts autonomously at its
- *   UNDERFLOOR_DRIFT_* velocity, advanced via d.age (dt-driven in
- *   updateThemeDecor, so it freezes with the game loop),
- * - every alpha is additionally scaled by UNDERFLOOR_ALPHA_FACTOR so
- *   the decor stays far below threat brightness.
- * Caller must have the identity×dpr transform active. Allocation-free.
+ * Full-viewport under-floor pass (sandbox) — same fixtures and sprites
+ * as the margin layer, drawn beneath a transparent grid bake instead of
+ * beside the arena. No arena clip, no camera parallax: each depth layer
+ * drifts autonomously at its UNDERFLOOR_DRIFT_* velocity via d.age
+ * (dt-driven in updateThemeDecor, so it freezes with the game loop),
+ * and every alpha is additionally scaled by UNDERFLOOR_ALPHA_FACTOR so
+ * the decor stays far below threat brightness. Caller must have the
+ * identity×dpr transform active.
  */
 export function drawThemeDecorUnderfloor(
   ctx: CanvasRenderingContext2D,
@@ -617,39 +653,13 @@ export function drawThemeDecorUnderfloor(
   viewW: number,
   viewH: number,
 ): void {
-  const fixtures = d.marginFixtures;
-  if (fixtures.length === 0) return;
-  ctx.save();
-  const spanX = viewW + WRAP_MARGIN_PX * 2;
-  const spanY = viewH + WRAP_MARGIN_PX * 2;
-  for (let i = 0; i < fixtures.length; i++) {
-    const f = fixtures[i];
-    if (!f.sprite) continue;
-    const dx = UNDERFLOOR_DRIFT_VX[f.layer] * d.age;
-    const dy = UNDERFLOOR_DRIFT_VY[f.layer] * d.age;
-    const x = wrapCoord(f.nx * spanX + dx, spanX) - WRAP_MARGIN_PX;
-    const y = wrapCoord(f.ny * spanY + dy, spanY) - WRAP_MARGIN_PX;
-    const half = f.spriteHalf;
-    if (x + half < 0 || x - half > viewW || y + half < 0 || y - half > viewH) {
-      continue;
-    }
-    let alpha = f.baseAlpha * UNDERFLOOR_ALPHA_FACTOR;
-    if (f.pulseSpeed !== 0) {
-      // Pulse only dims — the under-floor budget cap holds at every
-      // phase of the cycle (same contract as the margin pass).
-      alpha *= 1 - PULSE_DEPTH * (Math.sin(f.pulsePhase) * 0.5 + 0.5);
-    }
-    ctx.globalAlpha = alpha;
-    if (f.rotation !== 0) {
-      ctx.save();
-      ctx.translate(x, y);
-      ctx.rotate(f.rotation);
-      ctx.drawImage(f.sprite, -half, -half);
-      ctx.restore();
-    } else {
-      ctx.drawImage(f.sprite, x - half, y - half);
-    }
+  if (d.marginFixtures.length === 0) return;
+  for (let layer = 0; layer < LAYER_PARALLAX.length; layer++) {
+    LAYER_OFFSET_X[layer] = UNDERFLOOR_DRIFT_VX[layer] * d.age;
+    LAYER_OFFSET_Y[layer] = UNDERFLOOR_DRIFT_VY[layer] * d.age;
   }
+  ctx.save();
+  drawFixtures(ctx, d, viewW, viewH, UNDERFLOOR_ALPHA_FACTOR, null);
   ctx.restore();
 }
 

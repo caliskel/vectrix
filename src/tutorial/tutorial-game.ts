@@ -92,7 +92,7 @@ import {
   updateArenaBg,
   type ArenaBg,
 } from "../lib/arena-bg";
-import { resolveZoneTheme } from "../lib/zone-theme";
+import { resolveZoneTheme, type ZoneThemeState } from "../lib/zone-theme";
 import {
   createThemeDecor,
   drawThemeDecorMargins,
@@ -913,11 +913,13 @@ export function start(canvas: HTMLCanvasElement): void {
   // should see a fade-in plus the "how do i do this?" thought.
   // Cleared on the rooms-game side after the first read.
   const FROM_TUTORIAL_KEY = "dash-proto:from-tutorial";
-  // Zone theme — the whole tutorial shares the calm slate theme
-  // (mirrors rooms-game's per-room zoneTheme integration; the
-  // tutorial has no per-room theme variation, so one resolve at
-  // start() covers every room).
-  const zoneTheme = resolveZoneTheme("tutorial");
+  // Zone theme — resolved from the room like rooms-game does (every
+  // tutorial room declares theme: "tutorial", so the whole mode shares
+  // the calm slate identity; re-resolved in syncRoomFx for parity).
+  let zoneTheme: ZoneThemeState = resolveZoneTheme(
+    currentRoom.theme,
+    currentRoom.themeIntensity,
+  );
   let arenaBg: ArenaBg = createArenaBg(
     currentRoom.width ?? ROOM_W_PX,
     currentRoom.height ?? ROOM_H_PX,
@@ -931,8 +933,6 @@ export function start(canvas: HTMLCanvasElement): void {
     zoneTheme,
     currentRoom.width ?? ROOM_W_PX,
     currentRoom.height ?? ROOM_H_PX,
-    viewW,
-    viewH,
     currentRoom.spawnX,
     currentRoom.spawnY,
   );
@@ -971,6 +971,7 @@ export function start(canvas: HTMLCanvasElement): void {
   function syncRoomFx() {
     const w = currentRoom.width ?? ROOM_W_PX;
     const h = currentRoom.height ?? ROOM_H_PX;
+    zoneTheme = resolveZoneTheme(currentRoom.theme, currentRoom.themeIntensity);
     arenaBg = createArenaBg(w, h, zoneTheme);
     wallFx = createWallFx(currentRoom.walls);
     gridNodes = createGridNodeState(w, h);
@@ -979,8 +980,6 @@ export function start(canvas: HTMLCanvasElement): void {
       zoneTheme,
       w,
       h,
-      viewW,
-      viewH,
       currentRoom.spawnX,
       currentRoom.spawnY,
     );
@@ -2231,7 +2230,9 @@ export function start(canvas: HTMLCanvasElement): void {
 
     updateArenaBg(arenaBg, dt);
     updateWallFx(wallFx, dt, currentRoom.walls);
-    updateEnergyBackground(energyBg, dt, viewW, viewH);
+    if (!zoneTheme.theme.suppressBackgroundEnergy) {
+      updateEnergyBackground(energyBg, dt, viewW, viewH);
+    }
     updateBackgroundTexts(bgText, dt, ctx, viewW, viewH, computeArenaBounds());
     updateGridNodes(gridNodes, dt);
     updateArchiveFx(archiveFx, dt, player.x, player.y);

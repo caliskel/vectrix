@@ -133,6 +133,21 @@ export type ArenaScreenBounds = {
   h: number;
 };
 
+/** Two-rect even-odd clip: everything in the viewport EXCEPT the
+ *  arena rect. Shared by every margin-only layer (energy lines,
+ *  background text, theme decor) so the masking idiom lives once. */
+export function clipArenaMargins(
+  ctx: CanvasRenderingContext2D,
+  viewW: number,
+  viewH: number,
+  arena: ArenaScreenBounds,
+): void {
+  ctx.beginPath();
+  ctx.rect(0, 0, viewW, viewH);
+  ctx.rect(arena.x, arena.y, arena.w, arena.h);
+  ctx.clip("evenodd");
+}
+
 export function createEnergyBackground(
   viewW: number,
   viewH: number,
@@ -287,10 +302,7 @@ export function drawEnergyBackground(
       ctx.restore();
       return;
     }
-    ctx.beginPath();
-    ctx.rect(0, 0, viewW, viewH);
-    ctx.rect(arena.x, arena.y, arena.w, arena.h);
-    ctx.clip("evenodd");
+    clipArenaMargins(ctx, viewW, viewH, arena);
   }
 
   // --- Lines pass ---

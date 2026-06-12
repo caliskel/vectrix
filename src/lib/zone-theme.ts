@@ -1,8 +1,8 @@
 // Zone theme registry — the single source of per-zone visual identity.
 // A room (or a whole mode) names a ZoneThemeId; everything visual that
 // differs between zones reads the resolved theme: floor wash colors,
-// arena-bg sublayer tints, margin decor vocabulary, wall style, and
-// whether the campaign darkness overlay applies.
+// arena-bg sublayer tints, margin decor vocabulary, and whether the
+// campaign darkness overlay applies (and how dark).
 //
 // Color values reference PALETTE (single source of truth for colors —
 // the zone entries live there, this module only composes them).
@@ -31,20 +31,29 @@ export type ZoneThemeId =
   | "tutorial";
 
 /** Wireframe silhouette kinds the margin/under-floor decor can draw.
- *  Themes pick dominant kinds (frequent) and suppressed kinds (never
- *  drawn in that zone) so zones read as different places, not the same
- *  wallpaper recolored. */
+ *  Themes list the kinds that appear in their zone (decorDominant);
+ *  anything not listed never seeds there, so zones read as different
+ *  places, not the same wallpaper recolored. */
 export type DecorSilhouette = "hexCluster" | "circuit" | "dataBlock" | "eye";
+
+/** Darkness overlay parameters — null for zones with full visibility. */
+export type ZoneDarkness = {
+  /** Overlay opacity outside the light pool (0..1). */
+  alpha: number;
+  /** Light-pool radius around the player, world px. */
+  visibilityRadiusPx: number;
+};
 
 export type ZoneTheme = {
   id: ZoneThemeId;
-  /** Campaign darkness overlay applies in rooms with this theme. */
-  darkness: boolean;
+  /** Campaign darkness overlay — null = none. Truthy check gates it. */
+  darkness: ZoneDarkness | null;
   /** Reactivity hook — 0..1, static in v1. Scales wash alpha and
    *  decor activity. 1 = the zone's designed look. */
   intensity: number;
-  /** Zone accent pair — bright accent for decor/trim highlights, dim
-   *  accent for far layers and faint fills. */
+  /** Zone accent pair — bright accent for decor/trim highlights (also
+   *  the arena-bg grid-pulse color), dim accent for far layers and
+   *  faint fills. */
   accent: string;
   accentDim: string;
   /** Floor wash — radial bloom baked into arena-bg. Inner = center
@@ -53,23 +62,15 @@ export type ZoneTheme = {
   washInner: string;
   washOuter: string;
   washAlpha: number;
-  /** Arena-bg sublayer tints (dust dot layers back→front, grid pulse,
-   *  radar sweep) so the deep field matches the zone instead of staying
-   *  fixed cyan under every wash. */
+  /** Arena-bg dust dot tints (back→front) and radar sweep band color. */
   dustColors: [string, string, string];
-  pulseColor: string;
   sweepColor: string;
-  /** Margin / under-floor decor vocabulary. */
+  /** Margin / under-floor decor vocabulary (see DecorSilhouette). */
   decorDominant: DecorSilhouette[];
-  decorSuppressed: DecorSilhouette[];
   /** Skip the legacy background-energy margin pass for this zone —
    *  its fixed cyan palette would bleed under zones whose identity
    *  conflicts with it (e.g. infected red-purple). */
   suppressBackgroundEnergy: boolean;
-  /** Wall style the walls bake uses for walls without a per-wall
-   *  semantic override (infected flag, dashable). Consumed from the
-   *  themed-walls unit onward. */
-  wallStyleId: "normal" | "infected";
 };
 
 /** Resolved theme handed to consumers — theme definition plus the
@@ -79,102 +80,96 @@ export type ZoneThemeState = {
   intensity: number;
 };
 
+const CAMPAIGN_DARKNESS: ZoneDarkness = {
+  alpha: 0.45,
+  visibilityRadiusPx: 600,
+};
+
+// Neutral cyan-slate identity shared by the default and sandbox themes —
+// the game's historical deep-field look.
+const NEUTRAL_BASE = {
+  darkness: null,
+  intensity: 1,
+  accent: PALETTE.zoneNeutralAccent,
+  accentDim: PALETTE.zoneNeutralAccentDim,
+  washInner: PALETTE.zoneNeutralWashInner,
+  washOuter: PALETTE.zoneNeutralWashOuter,
+  washAlpha: 0.10,
+  dustColors: [
+    PALETTE.zoneNeutralDustFar,
+    PALETTE.zoneNeutralDustMid,
+    PALETTE.zoneNeutralDustNear,
+  ] as [string, string, string],
+  sweepColor: "rgba(125, 211, 252, 0.10)",
+  decorDominant: ["circuit", "dataBlock", "hexCluster"] as DecorSilhouette[],
+  suppressBackgroundEnergy: false,
+};
+
 const THEMES: Record<ZoneThemeId, ZoneTheme> = {
-  // Neutral fallback — also what legacy JSON rooms get. Mirrors the
-  // game's historical cyan-slate deep field.
-  default: {
-    id: "default",
-    darkness: false,
-    intensity: 1,
-    accent: PALETTE.zoneNeutralAccent,
-    accentDim: PALETTE.zoneNeutralAccentDim,
-    washInner: PALETTE.zoneNeutralWashInner,
-    washOuter: PALETTE.zoneNeutralWashOuter,
-    washAlpha: 0.10,
-    dustColors: [PALETTE.zoneNeutralDustFar, PALETTE.zoneNeutralDustMid, PALETTE.zoneNeutralDustNear],
-    pulseColor: PALETTE.zoneNeutralAccent,
-    sweepColor: "rgba(125, 211, 252, 0.10)",
-    decorDominant: ["circuit", "dataBlock", "hexCluster"],
-    decorSuppressed: ["eye"],
-    suppressBackgroundEnergy: false,
-    wallStyleId: "normal",
-  },
+  // Neutral fallback — also what legacy JSON rooms get.
+  default: { ...NEUTRAL_BASE, id: "default" },
+  // Sandbox — same neutral identity, dimmer wash: the under-floor decor
+  // has no letterbox separation from gameplay there.
+  sandbox: { ...NEUTRAL_BASE, id: "sandbox", washAlpha: 0.08 },
   // The campaign's infected sector (room1 corridor + hub trio) —
   // red-purple identity per the approved reference image. Wash leans
   // purple over red so PALETTE.bullet red threats stay separable (R4).
   infected: {
     id: "infected",
-    darkness: true,
+    darkness: CAMPAIGN_DARKNESS,
     intensity: 1,
     accent: PALETTE.zoneInfectedAccent,
     accentDim: PALETTE.zoneInfectedAccentDim,
     washInner: PALETTE.zoneInfectedWashInner,
     washOuter: PALETTE.zoneInfectedWashOuter,
     washAlpha: 0.16,
-    dustColors: [PALETTE.zoneInfectedDustFar, PALETTE.zoneInfectedDustMid, PALETTE.zoneInfectedDustNear],
-    pulseColor: PALETTE.zoneInfectedAccent,
+    dustColors: [
+      PALETTE.zoneInfectedDustFar,
+      PALETTE.zoneInfectedDustMid,
+      PALETTE.zoneInfectedDustNear,
+    ],
     sweepColor: "rgba(177, 76, 255, 0.08)",
     decorDominant: ["hexCluster", "eye", "circuit"],
-    decorSuppressed: ["dataBlock"],
     suppressBackgroundEnergy: true,
-    wallStyleId: "normal",
   },
   // Boss arena — deeper crimson, fewer cool tones; the Sentinel's own
   // phase colors stay the loudest reds on screen.
   boss: {
     id: "boss",
-    darkness: true,
+    darkness: CAMPAIGN_DARKNESS,
     intensity: 1,
     accent: PALETTE.zoneBossAccent,
     accentDim: PALETTE.zoneBossAccentDim,
     washInner: PALETTE.zoneBossWashInner,
     washOuter: PALETTE.zoneBossWashOuter,
     washAlpha: 0.13,
-    dustColors: [PALETTE.zoneBossDustFar, PALETTE.zoneBossDustMid, PALETTE.zoneBossDustNear],
-    pulseColor: PALETTE.zoneBossAccent,
+    dustColors: [
+      PALETTE.zoneBossDustFar,
+      PALETTE.zoneBossDustMid,
+      PALETTE.zoneBossDustNear,
+    ],
     sweepColor: "rgba(255, 85, 119, 0.08)",
     decorDominant: ["hexCluster", "eye"],
-    decorSuppressed: ["dataBlock"],
     suppressBackgroundEnergy: true,
-    wallStyleId: "normal",
-  },
-  // Sandbox — neutral cyan, subtle: the under-floor decor must stay
-  // far below threat brightness because there is no letterbox
-  // separation between decor and gameplay.
-  sandbox: {
-    id: "sandbox",
-    darkness: false,
-    intensity: 1,
-    accent: PALETTE.zoneNeutralAccent,
-    accentDim: PALETTE.zoneNeutralAccentDim,
-    washInner: PALETTE.zoneNeutralWashInner,
-    washOuter: PALETTE.zoneNeutralWashOuter,
-    washAlpha: 0.08,
-    dustColors: [PALETTE.zoneNeutralDustFar, PALETTE.zoneNeutralDustMid, PALETTE.zoneNeutralDustNear],
-    pulseColor: PALETTE.zoneNeutralAccent,
-    sweepColor: "rgba(125, 211, 252, 0.10)",
-    decorDominant: ["circuit", "dataBlock", "hexCluster"],
-    decorSuppressed: ["eye"],
-    suppressBackgroundEnergy: false,
-    wallStyleId: "normal",
   },
   // Tutorial — calm slate; quietest zone so the lessons stay in focus.
   tutorial: {
     id: "tutorial",
-    darkness: false,
+    darkness: null,
     intensity: 0.7,
     accent: PALETTE.zoneTutorialAccent,
     accentDim: PALETTE.zoneTutorialAccentDim,
     washInner: PALETTE.zoneTutorialWashInner,
     washOuter: PALETTE.zoneTutorialWashOuter,
     washAlpha: 0.08,
-    dustColors: [PALETTE.zoneTutorialDustFar, PALETTE.zoneTutorialDustMid, PALETTE.zoneTutorialDustNear],
-    pulseColor: PALETTE.zoneTutorialAccent,
+    dustColors: [
+      PALETTE.zoneTutorialDustFar,
+      PALETTE.zoneTutorialDustMid,
+      PALETTE.zoneTutorialDustNear,
+    ],
     sweepColor: "rgba(148, 163, 184, 0.08)",
     decorDominant: ["dataBlock", "circuit"],
-    decorSuppressed: ["eye"],
     suppressBackgroundEnergy: false,
-    wallStyleId: "normal",
   },
 };
 

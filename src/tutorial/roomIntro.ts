@@ -17,6 +17,7 @@ const ROOM_H = 800;
 export function buildRoomIntro(): Room {
   return {
     id: "roomIntro",
+    theme: "tutorial",
     walls: [],
     enemies: [],
     door: null,

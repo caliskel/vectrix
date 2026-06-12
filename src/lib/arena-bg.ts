@@ -155,7 +155,7 @@ export function createArenaBg(
     washOuter: theme.washOuter,
     washAlpha: theme.washAlpha * zone.intensity,
     dustColors: theme.dustColors,
-    pulseColor: theme.pulseColor,
+    pulseColor: theme.accent,
     sweepColor: theme.sweepColor,
     sweepColorClear: rgbaWithZeroAlpha(theme.sweepColor),
   };

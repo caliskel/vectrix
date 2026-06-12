@@ -30,6 +30,7 @@ export function buildRoom3(): Room {
   ];
   return {
     id: "room3",
+    theme: "tutorial",
     walls,
     // Two hunters — a vertical pair forming a wedge the player must
     // dash through. Spread symmetrically above + below the door y so

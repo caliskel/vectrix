@@ -29,6 +29,7 @@ export function buildRoom2(): Room {
   ];
   return {
     id: "room2",
+    theme: "tutorial",
     walls,
     enemies: [new Watcher(950, 400)],
     door: makeDoor(
