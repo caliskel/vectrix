@@ -3014,8 +3014,8 @@ export function start(canvas: HTMLCanvasElement): void {
     perfEnd("decor");
 
     perfBegin("walls");
-    drawWalls(ctx, currentRoom.walls);
-    drawWallOverlay(ctx, wallFx, currentRoom.walls);
+    drawWalls(ctx, currentRoom.walls, zoneTheme);
+    drawWallOverlay(ctx, wallFx, currentRoom.walls, zoneTheme);
     if (currentRoom.door) drawDoor(ctx, currentRoom.door);
     if (currentRoom.backDoor) drawDoor(ctx, currentRoom.backDoor);
     if (currentRoom.extraExits) {

@@ -1,5 +1,6 @@
 import { PALETTE } from "./palette";
 import type { Player } from "./player";
+import type { ZoneThemeState } from "./zone-theme";
 
 export type Wall = {
   x: number;
@@ -273,6 +274,19 @@ type WallStyle = {
   strokeAlpha: number;
   glowBlur: number;
   hatchAlpha: number;
+  /** Bright inner edge trim line — the "neon trim" pass. Rendered as
+   *  a fake-glow pair (wide dim companion + thin bright line) inset
+   *  just inside the outer stroke. */
+  trimColor: string;
+  trimAlpha: number;
+  /** Subdivision panel lines across the wall's long axis, drawn in
+   *  trimColor at this alpha. */
+  panelAlpha: number;
+  /** Small filled diamond rivets at non-merged corners. */
+  rivetColor: string;
+  /** Short diagonal accent ticks at midpoints of long edges. */
+  hazardColor: string;
+  hazardAlpha: number;
 };
 
 const NORMAL_WALL_STYLE: WallStyle = {
@@ -281,6 +295,12 @@ const NORMAL_WALL_STYLE: WallStyle = {
   strokeAlpha: WALL_STROKE_ALPHA,
   glowBlur: WALL_GLOW_BLUR,
   hatchAlpha: 0.05,
+  trimColor: "#a5f3fc",
+  trimAlpha: 0.85,
+  panelAlpha: 0.12,
+  rivetColor: WALL_STROKE,
+  hazardColor: WALL_STROKE,
+  hazardAlpha: 0.3,
 };
 
 const INFECTED_WALL_STYLE: WallStyle = {
@@ -289,11 +309,51 @@ const INFECTED_WALL_STYLE: WallStyle = {
   strokeAlpha: INFECTED_WALL_STROKE_ALPHA,
   glowBlur: INFECTED_WALL_GLOW_BLUR,
   hatchAlpha: INFECTED_HATCH_ALPHA,
+  trimColor: "#ff5577",
+  trimAlpha: 0.85,
+  panelAlpha: 0.12,
+  rivetColor: INFECTED_WALL_STROKE,
+  hazardColor: INFECTED_WALL_STROKE,
+  hazardAlpha: 0.3,
 };
 const BRACKET_LEN_PX = 14;
 const BRACKET_INSET_PX = 2;
 const BRACKET_LINE_WIDTH = 2.5;
 const HATCH_SPACING_PX = 8;
+// Edge trim — bright neon line just inside the outer stroke, rendered
+// as a fake-glow pair (wide dim companion under a thin bright core).
+// All inside the bake, so cost is one-time.
+const TRIM_INSET_PX = 3;
+const TRIM_LINE_WIDTH = 1.5;
+const TRIM_GLOW_LINE_WIDTH = 4.5;
+const TRIM_GLOW_ALPHA_FACTOR = 0.22;
+// Panel lines — subtle subdivision strokes across each wall's long
+// axis. Skipped when the wall is too thin on the cross axis for the
+// line to read as a panel seam.
+const PANEL_LINE_SPACING_PX = 48;
+const PANEL_MIN_THICKNESS_PX = 26;
+const PANEL_LINE_INSET_PX = 5;
+const PANEL_END_MARGIN_PX = 14;
+const PANEL_MERGED_END_MARGIN_PX = 4;
+// Corner rivets — small filled diamonds inset diagonally from each
+// non-merged corner (augmenting the existing brackets).
+const RIVET_HALF_PX = 2.4;
+const RIVET_INSET_PX = 8;
+const RIVET_ALPHA = 0.9;
+// Hazard ticks — short "///" diagonals at the midpoint of long edges.
+const HAZARD_MIN_EDGE_PX = 240;
+const HAZARD_MIN_THICKNESS_PX = 14;
+const HAZARD_TICK_COUNT = 3;
+const HAZARD_TICK_SPACING_PX = 7;
+const HAZARD_TICK_HALF_PX = 3;
+const HAZARD_TICK_DEPTH_NEAR_PX = 3;
+const HAZARD_TICK_DEPTH_FAR_PX = 11;
+const HAZARD_LINE_WIDTH = 2;
+// How much the theme's accentDim is darkened to produce the themed
+// wall body fill (keeps the body dark so the trim stays the bright
+// layer, matching the existing fill value ranges).
+const THEMED_FILL_DARKEN = 0.55;
+const THEMED_FILL_ALPHA = 0.85;
 // Width of the gradient blend on a merged edge — the wall's fill
 // fades from the neighbour's colour to its own across this many pixels
 // so cyan→red transitions read as a smooth gradient instead of a hard
@@ -388,6 +448,10 @@ type CachedLayer = {
   // length here. Without this, the cached image stays from phase 1
   // and the dash wall renders invisibly.
   wallCount: number;
+  // Theme id the layer was baked with. Theme changes normally arrive
+  // with a fresh walls array (room transition rebuilds the room), but
+  // editor / restart paths may reuse an array — rebake if it differs.
+  themeId: string;
 };
 const layerCache = new WeakMap<Wall[], CachedLayer>();
 
@@ -864,6 +928,71 @@ export function addWallImpact(fx: WallFx, x: number, y: number): void {
   fx.ripples.push({ x, y, age: 0 });
 }
 
+// --- Effective wall style resolution (theme-aware) ---
+//
+// Per-wall semantic styles ALWAYS win: the `infected` flag keeps the
+// red quarantine identity and `dashable` keeps the cyan dashed
+// language in every theme. The theme only re-skins the NORMAL group:
+// when a non-default theme declares wallStyleId "normal", its
+// accent/accentDim replace the cyan stroke/trim/detail colors and the
+// body fill derives from a darkened accentDim (infected zone walls go
+// red-purple, boss walls crimson, tutorial walls calm slate). The
+// default theme (and themeless callers, e.g. the epilogue cinematic)
+// keep the historical cyan style untouched.
+
+type WallStyleSet = { normal: WallStyle; infected: WallStyle };
+
+function hexChannel(hex: string, i: number): number {
+  return parseInt(hex.slice(1 + i * 2, 3 + i * 2), 16) || 0;
+}
+
+function darkenHexToRgba(hex: string, mul: number, alpha: number): string {
+  const r = Math.round(hexChannel(hex, 0) * mul);
+  const g = Math.round(hexChannel(hex, 1) * mul);
+  const b = Math.round(hexChannel(hex, 2) * mul);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+// Memo per theme id — bakes are rare but drawWallOverlay reads the
+// effective style every frame for the marching-dash color.
+const themedStyleCache = new Map<string, WallStyle>();
+
+function resolveNormalStyle(theme?: ZoneThemeState): WallStyle {
+  if (!theme || theme.theme.id === "default") return NORMAL_WALL_STYLE;
+  if (theme.theme.wallStyleId === "infected") return INFECTED_WALL_STYLE;
+  const id = theme.theme.id;
+  let style = themedStyleCache.get(id);
+  if (!style) {
+    const accent = theme.theme.accent;
+    style = {
+      fill: darkenHexToRgba(theme.theme.accentDim, THEMED_FILL_DARKEN, THEMED_FILL_ALPHA),
+      stroke: accent,
+      strokeAlpha: NORMAL_WALL_STYLE.strokeAlpha,
+      glowBlur: NORMAL_WALL_STYLE.glowBlur,
+      hatchAlpha: NORMAL_WALL_STYLE.hatchAlpha,
+      trimColor: accent,
+      trimAlpha: NORMAL_WALL_STYLE.trimAlpha,
+      panelAlpha: NORMAL_WALL_STYLE.panelAlpha,
+      rivetColor: accent,
+      hazardColor: accent,
+      hazardAlpha: NORMAL_WALL_STYLE.hazardAlpha,
+    };
+    themedStyleCache.set(id, style);
+  }
+  return style;
+}
+
+function resolveWallStyles(theme?: ZoneThemeState): WallStyleSet {
+  return { normal: resolveNormalStyle(theme), infected: INFECTED_WALL_STYLE };
+}
+
+// Cache key for the baked layer — wall styling only depends on the
+// theme id (intensity doesn't touch walls), and the default theme
+// renders identically to "no theme".
+function wallThemeKey(theme?: ZoneThemeState): string {
+  return theme?.theme.id ?? "default";
+}
+
 // Solid fill — flat rect per wall, one batched pass per style. When
 // `blendNeighborFill` is provided, walls whose left/right edge is
 // flagged `mergeLeft`/`mergeRight` get a `MERGE_BLEND_PX` linear
@@ -954,6 +1083,7 @@ function paintSolidGroup(
   if (walls.length === 0) return;
   paintFill(ctx, walls, style.fill, blendNeighborFill);
   paintHatch(ctx, walls, style.stroke, style.hatchAlpha);
+  paintPanelLines(ctx, walls, style);
 
   // Outer stroke — emit only the edges that are NOT marked as merged.
   ctx.save();
@@ -1019,6 +1149,197 @@ function paintSolidGroup(
   }
   ctx.stroke();
   ctx.restore();
+
+  paintEdgeTrim(ctx, walls, style);
+  paintCornerRivets(ctx, walls, style);
+  paintHazardTicks(ctx, walls, style);
+}
+
+// Edge trim — a second, brighter line just inside the outer stroke.
+// Fake-glow pair: one path stroked twice (wide dim companion + thin
+// bright core) so the trim reads neon without per-frame shadowBlur.
+// Merged edges are skipped entirely, and on edges adjacent to a merged
+// seam the trim extends to the wall bounds so abutting segments read
+// as one continuous trim line (no double-stroked joints — the seam
+// edge itself emits nothing).
+function paintEdgeTrim(
+  ctx: CanvasRenderingContext2D,
+  walls: Wall[],
+  style: WallStyle,
+): void {
+  ctx.save();
+  ctx.shadowBlur = 0;
+  ctx.beginPath();
+  for (const w of walls) {
+    if (Math.min(w.w, w.h) < TRIM_INSET_PX * 2 + 4) continue;
+    const ti = TRIM_INSET_PX + 0.5;
+    const xL = w.mergeLeft ? w.x : w.x + ti;
+    const xR = w.mergeRight ? w.x + w.w : w.x + w.w - ti;
+    const yT = w.mergeTop ? w.y : w.y + ti;
+    const yB = w.mergeBottom ? w.y + w.h : w.y + w.h - ti;
+    if (!w.mergeTop) {
+      ctx.moveTo(xL, w.y + ti);
+      ctx.lineTo(xR, w.y + ti);
+    }
+    if (!w.mergeBottom) {
+      ctx.moveTo(xL, w.y + w.h - ti);
+      ctx.lineTo(xR, w.y + w.h - ti);
+    }
+    if (!w.mergeLeft) {
+      ctx.moveTo(w.x + ti, yT);
+      ctx.lineTo(w.x + ti, yB);
+    }
+    if (!w.mergeRight) {
+      ctx.moveTo(w.x + w.w - ti, yT);
+      ctx.lineTo(w.x + w.w - ti, yB);
+    }
+  }
+  // Dim glow companion first, bright core on top.
+  ctx.strokeStyle = style.trimColor;
+  ctx.globalAlpha = style.trimAlpha * TRIM_GLOW_ALPHA_FACTOR;
+  ctx.lineWidth = TRIM_GLOW_LINE_WIDTH;
+  ctx.stroke();
+  ctx.globalAlpha = style.trimAlpha;
+  ctx.lineWidth = TRIM_LINE_WIDTH;
+  ctx.stroke();
+  ctx.restore();
+}
+
+// Panel lines — faint subdivision strokes across each wall's long
+// axis every PANEL_LINE_SPACING_PX. Lines stay clear of non-merged
+// ends (where brackets/rivets live) but run close to merged seams so
+// the panel rhythm continues across multi-segment perimeters.
+function paintPanelLines(
+  ctx: CanvasRenderingContext2D,
+  walls: Wall[],
+  style: WallStyle,
+): void {
+  ctx.save();
+  ctx.shadowBlur = 0;
+  ctx.strokeStyle = style.trimColor;
+  ctx.globalAlpha = style.panelAlpha;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (const w of walls) {
+    const horizontal = w.w >= w.h;
+    const thickness = horizontal ? w.h : w.w;
+    if (thickness < PANEL_MIN_THICKNESS_PX) continue;
+    if (horizontal) {
+      const y1 = w.y + PANEL_LINE_INSET_PX;
+      const y2 = w.y + w.h - PANEL_LINE_INSET_PX;
+      const startMargin = w.mergeLeft ? PANEL_MERGED_END_MARGIN_PX : PANEL_END_MARGIN_PX;
+      const endMargin = w.mergeRight ? PANEL_MERGED_END_MARGIN_PX : PANEL_END_MARGIN_PX;
+      const xEnd = w.x + w.w - endMargin;
+      for (let x = w.x + Math.max(PANEL_LINE_SPACING_PX, startMargin); x <= xEnd; x += PANEL_LINE_SPACING_PX) {
+        const px = Math.round(x) + 0.5;
+        ctx.moveTo(px, y1);
+        ctx.lineTo(px, y2);
+      }
+    } else {
+      const x1 = w.x + PANEL_LINE_INSET_PX;
+      const x2 = w.x + w.w - PANEL_LINE_INSET_PX;
+      const startMargin = w.mergeTop ? PANEL_MERGED_END_MARGIN_PX : PANEL_END_MARGIN_PX;
+      const endMargin = w.mergeBottom ? PANEL_MERGED_END_MARGIN_PX : PANEL_END_MARGIN_PX;
+      const yEnd = w.y + w.h - endMargin;
+      for (let y = w.y + Math.max(PANEL_LINE_SPACING_PX, startMargin); y <= yEnd; y += PANEL_LINE_SPACING_PX) {
+        const py = Math.round(y) + 0.5;
+        ctx.moveTo(x1, py);
+        ctx.lineTo(x2, py);
+      }
+    }
+  }
+  ctx.stroke();
+  ctx.restore();
+}
+
+// Corner rivets — small filled diamonds inset diagonally from each
+// non-merged corner, augmenting the brackets. Same merge suppression
+// as the brackets so merged seams stay clean.
+function paintCornerRivets(
+  ctx: CanvasRenderingContext2D,
+  walls: Wall[],
+  style: WallStyle,
+): void {
+  ctx.save();
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = style.rivetColor;
+  ctx.globalAlpha = RIVET_ALPHA;
+  ctx.beginPath();
+  for (const w of walls) {
+    if (Math.min(w.w, w.h) < RIVET_INSET_PX * 2) continue;
+    const x1 = w.x + RIVET_INSET_PX;
+    const y1 = w.y + RIVET_INSET_PX;
+    const x2 = w.x + w.w - RIVET_INSET_PX;
+    const y2 = w.y + w.h - RIVET_INSET_PX;
+    if (!w.mergeTop && !w.mergeLeft) addDiamond(ctx, x1, y1);
+    if (!w.mergeTop && !w.mergeRight) addDiamond(ctx, x2, y1);
+    if (!w.mergeBottom && !w.mergeRight) addDiamond(ctx, x2, y2);
+    if (!w.mergeBottom && !w.mergeLeft) addDiamond(ctx, x1, y2);
+  }
+  ctx.fill();
+  ctx.restore();
+}
+
+function addDiamond(ctx: CanvasRenderingContext2D, cx: number, cy: number): void {
+  ctx.moveTo(cx, cy - RIVET_HALF_PX);
+  ctx.lineTo(cx + RIVET_HALF_PX, cy);
+  ctx.lineTo(cx, cy + RIVET_HALF_PX);
+  ctx.lineTo(cx - RIVET_HALF_PX, cy);
+  ctx.closePath();
+}
+
+// Hazard ticks — three short "///" diagonals just inside the midpoint
+// of any long (> HAZARD_MIN_EDGE_PX) non-merged edge. Quiet accent
+// marker that breaks up long uniform stretches.
+function paintHazardTicks(
+  ctx: CanvasRenderingContext2D,
+  walls: Wall[],
+  style: WallStyle,
+): void {
+  ctx.save();
+  ctx.shadowBlur = 0;
+  ctx.strokeStyle = style.hazardColor;
+  ctx.globalAlpha = style.hazardAlpha;
+  ctx.lineWidth = HAZARD_LINE_WIDTH;
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  const half = Math.floor(HAZARD_TICK_COUNT / 2);
+  for (const w of walls) {
+    if (!w.mergeTop && w.w > HAZARD_MIN_EDGE_PX && w.h >= HAZARD_MIN_THICKNESS_PX) {
+      const mx = w.x + w.w / 2;
+      for (let k = -half; k <= half; k++) {
+        const cx = mx + k * HAZARD_TICK_SPACING_PX;
+        ctx.moveTo(cx - HAZARD_TICK_HALF_PX, w.y + HAZARD_TICK_DEPTH_FAR_PX);
+        ctx.lineTo(cx + HAZARD_TICK_HALF_PX, w.y + HAZARD_TICK_DEPTH_NEAR_PX);
+      }
+    }
+    if (!w.mergeBottom && w.w > HAZARD_MIN_EDGE_PX && w.h >= HAZARD_MIN_THICKNESS_PX) {
+      const mx = w.x + w.w / 2;
+      for (let k = -half; k <= half; k++) {
+        const cx = mx + k * HAZARD_TICK_SPACING_PX;
+        ctx.moveTo(cx - HAZARD_TICK_HALF_PX, w.y + w.h - HAZARD_TICK_DEPTH_FAR_PX);
+        ctx.lineTo(cx + HAZARD_TICK_HALF_PX, w.y + w.h - HAZARD_TICK_DEPTH_NEAR_PX);
+      }
+    }
+    if (!w.mergeLeft && w.h > HAZARD_MIN_EDGE_PX && w.w >= HAZARD_MIN_THICKNESS_PX) {
+      const my = w.y + w.h / 2;
+      for (let k = -half; k <= half; k++) {
+        const cy = my + k * HAZARD_TICK_SPACING_PX;
+        ctx.moveTo(w.x + HAZARD_TICK_DEPTH_FAR_PX, cy - HAZARD_TICK_HALF_PX);
+        ctx.lineTo(w.x + HAZARD_TICK_DEPTH_NEAR_PX, cy + HAZARD_TICK_HALF_PX);
+      }
+    }
+    if (!w.mergeRight && w.h > HAZARD_MIN_EDGE_PX && w.w >= HAZARD_MIN_THICKNESS_PX) {
+      const my = w.y + w.h / 2;
+      for (let k = -half; k <= half; k++) {
+        const cy = my + k * HAZARD_TICK_SPACING_PX;
+        ctx.moveTo(w.x + w.w - HAZARD_TICK_DEPTH_FAR_PX, cy - HAZARD_TICK_HALF_PX);
+        ctx.lineTo(w.x + w.w - HAZARD_TICK_DEPTH_NEAR_PX, cy + HAZARD_TICK_HALF_PX);
+      }
+    }
+  }
+  ctx.stroke();
+  ctx.restore();
 }
 
 // Dashable wall: same dark fill + cyan hatch as a normal wall (so it
@@ -1046,11 +1367,16 @@ function paintDashableGroup(
   ctx.restore();
 }
 
-function paintWalls(ctx: CanvasRenderingContext2D, walls: Wall[]): void {
-  // Split into three render groups: normal solid (cyan), infected
-  // solid (red quarantine), dashable (dark fill + cyan dashed
-  // outline). Each runs its own paint pipeline so shadowBlur fires
-  // once per pass instead of per wall.
+function paintWalls(
+  ctx: CanvasRenderingContext2D,
+  walls: Wall[],
+  styles: WallStyleSet,
+): void {
+  // Split into three render groups: normal solid (theme-styled),
+  // infected solid (red quarantine — semantic, theme-exempt),
+  // dashable (dark fill + cyan dashed outline — semantic,
+  // theme-exempt). Each runs its own paint pipeline so shadowBlur
+  // fires once per pass instead of per wall.
   const normalSolid: Wall[] = [];
   const infectedSolid: Wall[] = [];
   const dashableWalls: Wall[] = [];
@@ -1060,21 +1386,24 @@ function paintWalls(ctx: CanvasRenderingContext2D, walls: Wall[]): void {
     else normalSolid.push(w);
   }
 
-  paintSolidGroup(ctx, normalSolid, NORMAL_WALL_STYLE);
-  // Infected segments blend into the normal cyan fill on every merged
-  // edge so the corridor's cyan→red→cyan transition reads as one
-  // continuous panel with a tint gradient rather than three abutting
-  // colour blocks.
+  paintSolidGroup(ctx, normalSolid, styles.normal);
+  // Infected segments blend into the effective normal fill on every
+  // merged edge so the corridor's normal→red→normal transition reads
+  // as one continuous panel with a tint gradient rather than three
+  // abutting colour blocks.
   paintSolidGroup(
     ctx,
     infectedSolid,
-    INFECTED_WALL_STYLE,
-    NORMAL_WALL_STYLE.fill,
+    styles.infected,
+    styles.normal.fill,
   );
   paintDashableGroup(ctx, dashableWalls);
 }
 
-function getWallLayer(walls: Wall[]): CachedLayer | null {
+function getWallLayer(
+  walls: Wall[],
+  theme?: ZoneThemeState,
+): CachedLayer | null {
   if (walls.length === 0) return null;
   let maxX = 0;
   let maxY = 0;
@@ -1086,13 +1415,15 @@ function getWallLayer(walls: Wall[]): CachedLayer | null {
   }
   const extentX = Math.ceil(maxX + WALL_GLOW_BLUR);
   const extentY = Math.ceil(maxY + WALL_GLOW_BLUR);
+  const themeId = wallThemeKey(theme);
 
   const cached = layerCache.get(walls);
   if (
     cached &&
     cached.extentX === extentX &&
     cached.extentY === extentY &&
-    cached.wallCount === walls.length
+    cached.wallCount === walls.length &&
+    cached.themeId === themeId
   ) {
     return cached;
   }
@@ -1101,12 +1432,13 @@ function getWallLayer(walls: Wall[]): CachedLayer | null {
   canvas.height = extentY;
   const wctx = canvas.getContext("2d");
   if (!wctx) return null;
-  paintWalls(wctx, walls);
+  paintWalls(wctx, walls, resolveWallStyles(theme));
   const layer: CachedLayer = {
     canvas,
     extentX,
     extentY,
     wallCount: walls.length,
+    themeId,
   };
   layerCache.set(walls, layer);
   return layer;
@@ -1115,9 +1447,10 @@ function getWallLayer(walls: Wall[]): CachedLayer | null {
 export function drawWalls(
   ctx: CanvasRenderingContext2D,
   walls: Wall[],
+  theme?: ZoneThemeState,
 ): void {
   if (walls.length === 0) return;
-  const layer = getWallLayer(walls);
+  const layer = getWallLayer(walls, theme);
   if (!layer) return;
   ctx.drawImage(layer.canvas, 0, 0);
 }
@@ -1130,20 +1463,28 @@ export function drawWallOverlay(
   ctx: CanvasRenderingContext2D,
   fx: WallFx,
   walls: Wall[],
+  theme?: ZoneThemeState,
 ): void {
   if (walls.length === 0) return;
   const solidWalls: Wall[] = [];
   for (const w of walls) if (!w.dashable) solidWalls.push(w);
 
+  // Marching dashes follow the effective normal wall stroke so the
+  // animated flow doesn't paint cyan over a red-purple themed bake.
+  // The other overlay FX (pulses, ripples, cracks, arcs, sparks) stay
+  // on their fixed electric-cyan palette — they read as energy
+  // events, not wall identity.
+  const marchColor = resolveNormalStyle(theme).stroke;
+
   // 1. Marching dashes inside the outline — subtle "energy flow".
   if (solidWalls.length > 0) {
     ctx.save();
-    ctx.strokeStyle = WALL_STROKE;
+    ctx.strokeStyle = marchColor;
     ctx.globalAlpha = MARCHING_DASH_ALPHA;
     ctx.lineWidth = 1;
     ctx.setLineDash([...MARCHING_DASH_PATTERN]);
     ctx.lineDashOffset = -fx.marchOffset;
-    ctx.shadowColor = WALL_STROKE;
+    ctx.shadowColor = marchColor;
     ctx.shadowBlur = 6;
     ctx.beginPath();
     for (const w of solidWalls) {

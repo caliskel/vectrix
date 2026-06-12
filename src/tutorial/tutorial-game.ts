@@ -2525,8 +2525,8 @@ export function start(canvas: HTMLCanvasElement): void {
       );
     }
 
-    drawWalls(ctx, currentRoom.walls);
-    drawWallOverlay(ctx, wallFx, currentRoom.walls);
+    drawWalls(ctx, currentRoom.walls, zoneTheme);
+    drawWallOverlay(ctx, wallFx, currentRoom.walls, zoneTheme);
     if (currentRoom.door) drawDoor(ctx, currentRoom.door);
 
     // tutorial markers — drawn after walls, before enemies. Active
