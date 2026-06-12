@@ -54,6 +54,7 @@ import {
   updateArenaBg,
   type ArenaBg,
 } from "../lib/arena-bg";
+import { resolveZoneTheme } from "../lib/zone-theme";
 import {
   createGridNodeState,
   drawRoomGrid,
@@ -246,7 +247,10 @@ export function createEpilogueState(): EpilogueState {
     keys: new Set<string>(),
     bg: createVoidBg(ROOM_W_PX, ROOM_H_PX),
     roomWalls,
-    roomArenaBg: createArenaBg(ROOM_W_PX, ROOM_H_PX),
+    // Epilogue room recreation keeps the neutral theme — the infection
+    // is gone by this point, so the historical cyan-slate field reads
+    // as the world returning to calm.
+    roomArenaBg: createArenaBg(ROOM_W_PX, ROOM_H_PX, resolveZoneTheme("default")),
     roomGridNodes: createGridNodeState(ROOM_W_PX, ROOM_H_PX),
     roomWallFx: createWallFx(roomWalls),
     roomCamera: createCamera(),

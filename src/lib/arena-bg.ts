@@ -3,11 +3,18 @@
 // with bullets / enemies / player for the player's attention.
 //
 // Layers (back to front):
+//   0. Floor wash — per-zone radial bloom (theme.washInner at center
+//      fading to theme.washOuter at the edges), baked once at reduced
+//      resolution and stretched across the arena rect
 //   1. Radial gradient from arena center (cool fade-to-dark)
 //   2. Parallax dot field — 3 depth layers drifting slowly
-//   3. Grid pulses — bright cyan beam travels along a grid line every
+//   3. Grid pulses — bright beam travels along a grid line every
 //      4–8 s, lighting up nodes as it crosses
 //   4. Radar sweeps — soft diagonal gradient sweep every 12–20 s
+//
+// Sublayer colors (dust dots, grid pulse, radar sweep) come from the
+// resolved ZoneThemeState passed to createArenaBg so the deep field
+// matches the zone instead of staying fixed cyan under every wash.
 //
 // Scanlines run at the screen layer, not here (kept in the mode's
 // render path so they live outside the camera transform).
@@ -18,6 +25,7 @@
 // is just additive fillRect calls.
 
 import { GRID_STEP } from "./grid";
+import type { ZoneThemeState } from "./zone-theme";
 
 // Spark-glow gradient: thin cool halo around the player's
 // consciousness. Kept dim so it reads as the spark's own faint
@@ -37,15 +45,15 @@ type DotLayer = {
   speedY: number;
   radius: number;
   alpha: number;
-  color: string;
 };
 const DOT_LAYERS: DotLayer[] = [
   // Dust drifting through dead space — kept dim across all layers so
   // it reads as "specks the abandoned ventilation never cleared", not
-  // a starfield.
-  { speedX: 3, speedY: 1.5, radius: 0.7, alpha: 0.09, color: "#7dd3fc" },
-  { speedX: 9, speedY: 4, radius: 0.9, alpha: 0.14, color: "#a5f3fc" },
-  { speedX: 17, speedY: 7, radius: 1.1, alpha: 0.20, color: "#cffafe" },
+  // a starfield. Colors come per-instance from the zone theme's
+  // dustColors (back→front: [0] far/dim … [2] near/bright).
+  { speedX: 3, speedY: 1.5, radius: 0.7, alpha: 0.09 },
+  { speedX: 9, speedY: 4, radius: 0.9, alpha: 0.14 },
+  { speedX: 17, speedY: 7, radius: 1.1, alpha: 0.20 },
 ];
 
 const GRID_PULSE_INTERVAL_MIN = 4.0;
@@ -53,13 +61,16 @@ const GRID_PULSE_INTERVAL_MAX = 8.0;
 const GRID_PULSE_SPEED = 1100; // px/s along the line
 const GRID_PULSE_HEAD_LEN = 80;
 const GRID_PULSE_TAIL_LEN = 220;
-const GRID_PULSE_COLOR = "#7dd3fc";
 
 const RADAR_SWEEP_INTERVAL_MIN = 12.0;
 const RADAR_SWEEP_INTERVAL_MAX = 20.0;
 const RADAR_SWEEP_DURATION = 2.4; // seconds end-to-end
 const RADAR_SWEEP_WIDTH = 220;     // px width of the bright band
-const RADAR_SWEEP_COLOR = "rgba(125, 211, 252, 0.10)";
+
+// Floor-wash bake resolution cap. Rooms go up to 8000×700 world px;
+// the wash is a smooth radial gradient, so it scales cleanly from a
+// small bake stretched over the full arena rect at blit time.
+const WASH_SPRITE_MAX_SIDE = 512;
 
 type Dot = { x: number; y: number };
 
@@ -99,9 +110,25 @@ export type ArenaBg = {
   // call time (e.g. during module init in tests).
   lightSprite: HTMLCanvasElement | null;
   lightSpriteHalf: number;
+  // Per-zone theming, resolved once at create time. The wash sprite
+  // bakes the radial bloom (washInner → washOuter at washAlpha ×
+  // intensity) at reduced resolution; lazy on first draw, same reason
+  // as lightSprite.
+  washSprite: HTMLCanvasElement | null;
+  washInner: string;
+  washOuter: string;
+  washAlpha: number; // effective: theme.washAlpha × intensity
+  dustColors: [string, string, string];
+  pulseColor: string;
+  sweepColor: string;
+  sweepColorClear: string; // sweepColor's rgb with alpha 0 (gradient edges)
 };
 
-export function createArenaBg(width: number, height: number): ArenaBg {
+export function createArenaBg(
+  width: number,
+  height: number,
+  zone: ZoneThemeState,
+): ArenaBg {
   const dotsPerLayer: Dot[][] = [];
   const areaUnits = (width * height) / 10000;
   const count = Math.max(8, Math.floor(areaUnits * DOT_DENSITY_PER_10K));
@@ -112,6 +139,7 @@ export function createArenaBg(width: number, height: number): ArenaBg {
     }
     dotsPerLayer.push(arr);
   }
+  const theme = zone.theme;
   return {
     width,
     height,
@@ -122,7 +150,59 @@ export function createArenaBg(width: number, height: number): ArenaBg {
     sweepTimer: pickInterval(RADAR_SWEEP_INTERVAL_MIN, RADAR_SWEEP_INTERVAL_MAX) * 0.5,
     lightSprite: null,
     lightSpriteHalf: 0,
+    washSprite: null,
+    washInner: theme.washInner,
+    washOuter: theme.washOuter,
+    washAlpha: theme.washAlpha * zone.intensity,
+    dustColors: theme.dustColors,
+    pulseColor: theme.pulseColor,
+    sweepColor: theme.sweepColor,
+    sweepColorClear: rgbaWithZeroAlpha(theme.sweepColor),
   };
+}
+
+// "rgba(r, g, b, a)" → "rgba(r, g, b, 0)" — parsed once at create
+// time so the per-frame sweep gradient never string-munges.
+function rgbaWithZeroAlpha(rgba: string): string {
+  const m = rgba.match(/^rgba?\(([^)]+)\)$/);
+  if (!m) return "rgba(0, 0, 0, 0)";
+  const parts = m[1].split(",").map((s) => s.trim());
+  return `rgba(${parts[0]}, ${parts[1]}, ${parts[2]}, 0)`;
+}
+
+// Pre-render the floor wash — a radial bloom brighter at the arena
+// center fading to the outer color toward the edges — at reduced
+// resolution (long side capped at WASH_SPRITE_MAX_SIDE). The bake
+// keeps the arena's aspect ratio, so stretching it over the full
+// arena rect at blit time keeps the bloom circular in world space.
+function buildWashSprite(
+  width: number,
+  height: number,
+  inner: string,
+  outer: string,
+  alpha: number,
+): HTMLCanvasElement | null {
+  if (typeof document === "undefined") return null;
+  const downscale = Math.min(1, WASH_SPRITE_MAX_SIDE / Math.max(width, height));
+  const sw = Math.max(1, Math.round(width * downscale));
+  const sh = Math.max(1, Math.round(height * downscale));
+  const c = document.createElement("canvas");
+  c.width = sw;
+  c.height = sh;
+  const ctx = c.getContext("2d");
+  if (!ctx) return null;
+  const cx = sw / 2;
+  const cy = sh / 2;
+  // Radius reaches the corners so the outer color lands exactly at
+  // the arena's farthest points — no flat band past the gradient end.
+  const radius = Math.hypot(cx, cy);
+  const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, radius);
+  g.addColorStop(0, inner);
+  g.addColorStop(1, outer);
+  ctx.globalAlpha = alpha;
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, sw, sh);
+  return c;
 }
 
 // Pre-render the combined spark glow + vignette into a square canvas
@@ -280,13 +360,31 @@ export function drawArenaBg(
 ): void {
   const { width: w, height: h } = bg;
 
+  ctx.save();
+  ctx.shadowBlur = 0;
+
+  // 0. Floor wash — per-zone radial bloom, baked once (lazy on first
+  // draw) at reduced resolution and stretched over the full arena
+  // rect. Drawn before the light sprite so its vignette darkens the
+  // wash edges (dark corners per the zone reference).
+  if (!bg.washSprite) {
+    bg.washSprite = buildWashSprite(
+      bg.width,
+      bg.height,
+      bg.washInner,
+      bg.washOuter,
+      bg.washAlpha,
+    );
+  }
+  if (bg.washSprite) {
+    ctx.drawImage(bg.washSprite, 0, 0, w, h);
+  }
+
   // 1. Combined spark glow + vignette — pre-baked into one sprite
   // (lazy on first draw) and blitted at the light anchor. Replaces
   // two full-arena radial-gradient fillRects per frame.
   const lx = lightAnchor ? lightAnchor.x : w / 2;
   const ly = lightAnchor ? lightAnchor.y : h / 2;
-  ctx.save();
-  ctx.shadowBlur = 0;
   if (!bg.lightSprite) {
     const baked = buildLightSprite(bg.width, bg.height);
     bg.lightSprite = baked.sprite;
@@ -305,7 +403,7 @@ export function drawArenaBg(
     const layer = DOT_LAYERS[i];
     const dots = bg.dotsPerLayer[i];
     ctx.globalAlpha = layer.alpha;
-    ctx.fillStyle = layer.color;
+    ctx.fillStyle = bg.dustColors[i];
     const r = layer.radius;
     const d2 = r * 2;
     for (const d of dots) {
@@ -318,7 +416,7 @@ export function drawArenaBg(
   if (bg.pulses.length > 0) {
     ctx.save();
     ctx.lineWidth = 1.5;
-    ctx.shadowColor = GRID_PULSE_COLOR;
+    ctx.shadowColor = bg.pulseColor;
     ctx.shadowBlur = 14;
     for (const p of bg.pulses) {
       // Compute head position along the axis.
@@ -327,7 +425,7 @@ export function drawArenaBg(
       const tailEnd = headStart - p.direction * (GRID_PULSE_HEAD_LEN + GRID_PULSE_TAIL_LEN);
 
       // Head — solid bright.
-      ctx.strokeStyle = GRID_PULSE_COLOR;
+      ctx.strokeStyle = bg.pulseColor;
       ctx.globalAlpha = 0.85;
       ctx.beginPath();
       if (p.axis === "col") {
@@ -378,9 +476,9 @@ export function drawArenaBg(
       const gx1 = cx - s.sinA * RADAR_SWEEP_WIDTH;
       const gy1 = cy + s.cosA * RADAR_SWEEP_WIDTH;
       const sg = ctx.createLinearGradient(gx0, gy0, gx1, gy1);
-      sg.addColorStop(0, "rgba(125, 211, 252, 0)");
-      sg.addColorStop(0.5, RADAR_SWEEP_COLOR);
-      sg.addColorStop(1, "rgba(125, 211, 252, 0)");
+      sg.addColorStop(0, bg.sweepColorClear);
+      sg.addColorStop(0.5, bg.sweepColor);
+      sg.addColorStop(1, bg.sweepColorClear);
       // Fade in / out by overall age so the band doesn't appear / disappear hard.
       const envelope = u < 0.15 ? u / 0.15 : u > 0.85 ? (1 - u) / 0.15 : 1;
       ctx.globalAlpha = envelope;

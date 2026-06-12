@@ -92,6 +92,7 @@ import {
   updateArenaBg,
   type ArenaBg,
 } from "../lib/arena-bg";
+import { resolveZoneTheme } from "../lib/zone-theme";
 import {
   createDeathFx,
   drawDeathFx,
@@ -905,9 +906,15 @@ export function start(canvas: HTMLCanvasElement): void {
   // should see a fade-in plus the "how do i do this?" thought.
   // Cleared on the rooms-game side after the first read.
   const FROM_TUTORIAL_KEY = "dash-proto:from-tutorial";
+  // Zone theme — the whole tutorial shares the calm slate theme
+  // (mirrors rooms-game's per-room zoneTheme integration; the
+  // tutorial has no per-room theme variation, so one resolve at
+  // start() covers every room).
+  const zoneTheme = resolveZoneTheme("tutorial");
   let arenaBg: ArenaBg = createArenaBg(
     currentRoom.width ?? ROOM_W_PX,
     currentRoom.height ?? ROOM_H_PX,
+    zoneTheme,
   );
   let wallFx: WallFx = createWallFx(currentRoom.walls);
   // Single instance for the tutorial — flows across room transitions.
@@ -945,7 +952,7 @@ export function start(canvas: HTMLCanvasElement): void {
   function syncRoomFx() {
     const w = currentRoom.width ?? ROOM_W_PX;
     const h = currentRoom.height ?? ROOM_H_PX;
-    arenaBg = createArenaBg(w, h);
+    arenaBg = createArenaBg(w, h, zoneTheme);
     wallFx = createWallFx(currentRoom.walls);
     gridNodes = createGridNodeState(w, h);
     archiveFx = createArchiveFx(w, h);

@@ -63,6 +63,7 @@ import {
   tickScanlines,
   type ArenaBg,
 } from "../lib/arena-bg";
+import { resolveZoneTheme } from "../lib/zone-theme";
 import {
   createDeathFx,
   drawDeathFx,
@@ -143,6 +144,10 @@ const canvas = document.getElementById("app") as HTMLCanvasElement;
 const ctx = canvas.getContext("2d")!;
 const post = new PostProcessor();
 const bgFx = new BackgroundFx();
+// Zone theme — sandbox is a single neutral zone; resolved once.
+// resize() re-creates arenaBg keyed to the viewport size, so the
+// wash rebuilds with it at the new dimensions.
+const zoneTheme = resolveZoneTheme("sandbox");
 let arenaBg: ArenaBg | null = null;
 // Energy background — kept in module scope so resizes don't reset
 // the drifting state. Created once on the first resize().
@@ -162,7 +167,7 @@ function resize() {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   rebuildGrid();
   bgFx.resize(viewW, viewH);
-  arenaBg = createArenaBg(viewW, viewH);
+  arenaBg = createArenaBg(viewW, viewH, zoneTheme);
   if (!energyBg) energyBg = createEnergyBackground(viewW, viewH);
   if (!bgText) bgText = createBackgroundTextState(viewW, viewH);
 }

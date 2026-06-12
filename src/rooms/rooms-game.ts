@@ -749,6 +749,7 @@ export function start(canvas: HTMLCanvasElement): void {
   let arenaBg: ArenaBg = createArenaBg(
     currentRoom.width ?? ROOM_W_PX,
     currentRoom.height ?? ROOM_H_PX,
+    zoneTheme,
   );
   let wallFx: WallFx = createWallFx(currentRoom.walls);
   // Energy background — drifting neon lines + rising particles + an
@@ -796,7 +797,7 @@ export function start(canvas: HTMLCanvasElement): void {
     const w = currentRoom.width ?? ROOM_W_PX;
     const h = currentRoom.height ?? ROOM_H_PX;
     zoneTheme = resolveZoneTheme(currentRoom.theme, currentRoom.themeIntensity);
-    arenaBg = createArenaBg(w, h);
+    arenaBg = createArenaBg(w, h, zoneTheme);
     wallFx = createWallFx(currentRoom.walls);
     gridNodes = createGridNodeState(w, h);
     archiveFx = createArchiveFx(w, h);
