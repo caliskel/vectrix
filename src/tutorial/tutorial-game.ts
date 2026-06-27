@@ -12,6 +12,7 @@ import {
   getBulletSprite,
   getBulletSpriteOffset,
 } from "../lib/bullet-sprite";
+import { getDustSprite } from "../lib/dust-sprite";
 import {
   createCamera,
   snapCamera,
@@ -1335,6 +1336,7 @@ export function start(canvas: HTMLCanvasElement): void {
         isDash ? 15 : 8,
         isDash ? 6 : 3,
         PARTICLE_DRAG,
+        true, // soft dust puff
       );
     }
   }
@@ -2507,15 +2509,16 @@ export function start(canvas: HTMLCanvasElement): void {
     // Themed emissive props — sparse world-space decor (rosette,
     // corner brackets, accent dots) drawn under walls / entities so
     // they read as architecture, never as pickups or threats. Cull
-    // rect mirrors rooms-game's camera-relative bounds (tutorial has
-    // no editor zoom, so the visible world rect is the canonical
-    // viewport).
+    // rect mirrors rooms-game: covers the ENTIRE visible viewport
+    // (letterbox bars included) via screen = (world − camera) · zoom ·
+    // scale + offset, so the visible world span is viewport/(zoom·scale).
     {
       const cullMargin = 80;
-      const cullLeft = camera.x - cullMargin;
-      const cullRight = camera.x + ROOM_W_PX + cullMargin;
-      const cullTop = camera.y - cullMargin;
-      const cullBottom = camera.y + ROOM_H_PX + cullMargin;
+      const cullWorldPerPx = 1 / (camera.zoom * scale);
+      const cullLeft = camera.x - offsetX * cullWorldPerPx - cullMargin;
+      const cullRight = camera.x + (viewW - offsetX) * cullWorldPerPx + cullMargin;
+      const cullTop = camera.y - offsetY * cullWorldPerPx - cullMargin;
+      const cullBottom = camera.y + (viewH - offsetY) * cullWorldPerPx + cullMargin;
       drawThemeDecorProps(
         ctx,
         themeDecor,
@@ -2611,8 +2614,13 @@ export function start(canvas: HTMLCanvasElement): void {
       const alpha = t < 0.5 ? 1 : Math.max(0, 1 - (t - 0.5) * 2);
       const sz = Math.max(0.5, p.initialSize * (1 - t));
       ctx.globalAlpha = alpha;
-      ctx.fillStyle = p.color;
-      ctx.fillRect(p.x - sz / 2, p.y - sz / 2, sz, sz);
+      if (p.soft) {
+        const d = sz * 2.6;
+        ctx.drawImage(getDustSprite(p.color), p.x - d / 2, p.y - d / 2, d, d);
+      } else {
+        ctx.fillStyle = p.color;
+        ctx.fillRect(p.x - sz / 2, p.y - sz / 2, sz, sz);
+      }
     }
     ctx.restore();
 

@@ -1342,9 +1342,10 @@ function paintHazardTicks(
 }
 
 // Dashable wall: same dark fill + cyan hatch as a normal wall (so it
-// reads as a panel, not an empty outline), but with the canonical
-// cyan dashed outline instead of solid stroke + brackets. Carries no
-// merge logic — dashable gates are visually distinct on purpose.
+// reads as a panel, not an empty outline). The cyan dashed outline is
+// NOT baked here — it's drawn per-frame in drawWallOverlay so the
+// dashes slowly march around the gate. Carries no merge logic —
+// dashable gates are visually distinct on purpose.
 function paintDashableGroup(
   ctx: CanvasRenderingContext2D,
   walls: Wall[],
@@ -1352,18 +1353,6 @@ function paintDashableGroup(
   if (walls.length === 0) return;
   paintFill(ctx, walls, WALL_FILL);
   paintHatch(ctx, walls, WALL_STROKE, NORMAL_WALL_STYLE.hatchAlpha);
-  ctx.save();
-  ctx.strokeStyle = PALETTE.playerDash;
-  ctx.shadowColor = PALETTE.playerDash;
-  ctx.shadowBlur = DASHABLE_GLOW_BLUR;
-  ctx.lineWidth = 1.5;
-  ctx.setLineDash([6, 6]);
-  ctx.beginPath();
-  for (const w of walls) {
-    ctx.rect(w.x + 0.5, w.y + 0.5, w.w - 1, w.h - 1);
-  }
-  ctx.stroke();
-  ctx.restore();
 }
 
 function paintWalls(
@@ -1466,7 +1455,32 @@ export function drawWallOverlay(
 ): void {
   if (walls.length === 0) return;
   const solidWalls: Wall[] = [];
-  for (const w of walls) if (!w.dashable) solidWalls.push(w);
+  const dashableWalls: Wall[] = [];
+  for (const w of walls) {
+    if (w.dashable) dashableWalls.push(w);
+    else solidWalls.push(w);
+  }
+
+  // 0. Dashable gates — cyan dashed outline drawn live (not baked) with
+  // a slowly crawling lineDashOffset so the "dash through me" boundary
+  // reads as energized. marchOffset ∈ [0,24) at 28 px/s; halved gives a
+  // calm ~14 px/s, and 12 (the [6,6] period) divides 24 so the offset
+  // wraps seamlessly.
+  if (dashableWalls.length > 0) {
+    ctx.save();
+    ctx.strokeStyle = PALETTE.playerDash;
+    ctx.shadowColor = PALETTE.playerDash;
+    ctx.shadowBlur = DASHABLE_GLOW_BLUR;
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([6, 6]);
+    ctx.lineDashOffset = -fx.marchOffset * 0.5;
+    ctx.beginPath();
+    for (const w of dashableWalls) {
+      ctx.rect(w.x + 0.5, w.y + 0.5, w.w - 1, w.h - 1);
+    }
+    ctx.stroke();
+    ctx.restore();
+  }
 
   // Marching dashes follow the effective normal wall stroke so the
   // animated flow doesn't paint cyan over a red-purple themed bake.

@@ -78,6 +78,7 @@ import {
   type DeathFx,
 } from "../lib/death-fx";
 import { getBulletSprite, getBulletSpriteOffset } from "../lib/bullet-sprite";
+import { getDustSprite } from "../lib/dust-sprite";
 import { drawFpsOverlay, recordFrame } from "../lib/fps-meter";
 import { createSandboxPauseMenu } from "../lib/pause-menu";
 import {
@@ -424,6 +425,7 @@ type Particle = {
   glowStrong: number;
   glowSoft: number;
   drag: number; // applied per second-equivalent multiplier (frame-rate independent)
+  soft?: boolean; // soft radial dust puff (player trail) vs sharp square
 };
 
 type EndSnapshot = {
@@ -901,6 +903,7 @@ function spawnTrailParticles(speed: number, isDash: boolean) {
       isDash ? 15 : 8,
       isDash ? 6 : 3,
       PARTICLE_DRAG,
+      true, // soft dust puff
     );
   }
 }
@@ -1618,8 +1621,13 @@ function render() {
     const alpha = t < 0.5 ? 1 : Math.max(0, 1 - (t - 0.5) * 2);
     const sz = Math.max(0.5, p.initialSize * (1 - t));
     ctx.globalAlpha = alpha;
-    ctx.fillStyle = p.color;
-    ctx.fillRect(p.x - sz / 2, p.y - sz / 2, sz, sz);
+    if (p.soft) {
+      const d = sz * 2.6;
+      ctx.drawImage(getDustSprite(p.color), p.x - d / 2, p.y - d / 2, d, d);
+    } else {
+      ctx.fillStyle = p.color;
+      ctx.fillRect(p.x - sz / 2, p.y - sz / 2, sz, sz);
+    }
   }
   ctx.restore();
 

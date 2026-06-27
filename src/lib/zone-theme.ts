@@ -86,18 +86,6 @@ export type ZoneThemeState = {
   intensity: number;
 };
 
-const INFECTED_DARKNESS: ZoneDarkness = {
-  alpha: 0.45,
-  visibilityRadiusPx: 600,
-  duskRgb: "24, 4, 38", // deep purple — the sector's hue survives the dusk
-};
-
-const BOSS_DARKNESS: ZoneDarkness = {
-  alpha: 0.45,
-  visibilityRadiusPx: 600,
-  duskRgb: "26, 4, 18", // deep crimson-black
-};
-
 // Neutral cyan-slate identity shared by the default and sandbox themes —
 // the game's historical deep-field look.
 const NEUTRAL_BASE = {
@@ -129,7 +117,7 @@ const THEMES: Record<ZoneThemeId, ZoneTheme> = {
   // purple over red so PALETTE.bullet red threats stay separable (R4).
   infected: {
     id: "infected",
-    darkness: INFECTED_DARKNESS,
+    darkness: null,
     intensity: 1,
     accent: PALETTE.zoneInfectedAccent,
     accentDim: PALETTE.zoneInfectedAccentDim,
@@ -149,7 +137,7 @@ const THEMES: Record<ZoneThemeId, ZoneTheme> = {
   // phase colors stay the loudest reds on screen.
   boss: {
     id: "boss",
-    darkness: BOSS_DARKNESS,
+    darkness: null,
     intensity: 1,
     accent: PALETTE.zoneBossAccent,
     accentDim: PALETTE.zoneBossAccentDim,

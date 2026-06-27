@@ -10,6 +10,10 @@ export type Particle = {
   glowStrong: number;
   glowSoft: number;
   drag: number; // applied per second-equivalent multiplier (frame-rate independent)
+  /** Render as a soft radial "dust" puff (baked sprite) instead of the
+   *  default sharp square. The player movement trail uses this so it
+   *  reads as kicked-up dust rather than pixel confetti. */
+  soft?: boolean;
 };
 
 export type FloatingText = {
@@ -138,6 +142,7 @@ export function pushParticle(
   glowStrong: number,
   glowSoft: number,
   drag: number,
+  soft = false,
 ): void {
   const recycled = particlePool.pop();
   if (recycled) {
@@ -152,6 +157,7 @@ export function pushParticle(
     recycled.glowStrong = glowStrong;
     recycled.glowSoft = glowSoft;
     recycled.drag = drag;
+    recycled.soft = soft;
     list.push(recycled);
     return;
   }
@@ -167,6 +173,7 @@ export function pushParticle(
     glowStrong,
     glowSoft,
     drag,
+    soft,
   });
 }
 

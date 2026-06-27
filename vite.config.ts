@@ -14,6 +14,7 @@ export default defineConfig({
         tutorial: resolve(__dirname, "tutorial.html"),
         intro: resolve(__dirname, "intro.html"),
         epilogue: resolve(__dirname, "epilogue.html"),
+        arena: resolve(__dirname, "arena.html"),
       },
     },
   },

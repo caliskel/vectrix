@@ -33,6 +33,7 @@ import {
   getBulletSprite,
   getBulletSpriteOffset,
 } from "../lib/bullet-sprite";
+import { getDustSprite } from "../lib/dust-sprite";
 import {
   createCamera,
   snapCamera,
@@ -246,36 +247,10 @@ const ROOM_TOTAL = 3;
 const TUTORIAL_COMPLETED_KEY = "dash-proto:tutorial-completed";
 
 // === Baked overlay sprites ===
-// Радиальные градиенты пересоздавались каждый кадр: edge-переход тёмного
-// слоя — в каждой комнате кампании, ореол босса — в room5. Создание
-// CanvasGradient на кадр дёшево в Chrome, но заметно дорого в Safari /
-// Firefox. Запекаем спрайт один раз и рисуем drawImage с globalAlpha.
-const DARK_EDGE_SPRITE_R = 256;
-const darkEdgeSprites = new Map<string, HTMLCanvasElement>();
-function getDarkEdgeSprite(duskRgb: string): HTMLCanvasElement {
-  let sprite = darkEdgeSprites.get(duskRgb);
-  if (sprite) return sprite;
-  const R = DARK_EDGE_SPRITE_R;
-  const c = document.createElement("canvas");
-  c.width = R * 2;
-  c.height = R * 2;
-  darkEdgeSprites.set(duskRgb, c);
-  const g = c.getContext("2d");
-  if (!g) return c;
-  // innerR/outerR = 0.52/1.10 из draw-кода ниже; стопы 1-в-1.
-  const grad = g.createRadialGradient(R, R, R * (0.52 / 1.1), R, R, R);
-  grad.addColorStop(0, `rgba(${duskRgb}, 0)`);
-  grad.addColorStop(0.25, `rgba(${duskRgb}, 0.12)`);
-  grad.addColorStop(0.55, `rgba(${duskRgb}, 0.50)`);
-  grad.addColorStop(0.8, `rgba(${duskRgb}, 0.82)`);
-  grad.addColorStop(1, `rgba(${duskRgb}, 1)`);
-  g.fillStyle = grad;
-  g.beginPath();
-  g.arc(R, R, R, 0, Math.PI * 2);
-  g.fill();
-  return c;
-}
-
+// Радиальный градиент ореола босса пересоздавался каждый кадр в room5.
+// Создание CanvasGradient на кадр дёшево в Chrome, но заметно дорого в
+// Safari / Firefox. Запекаем спрайт один раз и рисуем drawImage с
+// globalAlpha.
 const BOSS_GLOW_SPRITE_R = 192;
 const bossGlowSprites = new Map<string, HTMLCanvasElement>();
 function getBossGlowSprite(color: string): HTMLCanvasElement {
@@ -707,9 +682,9 @@ export function start(canvas: HTMLCanvasElement): void {
     fadeOutDuration: 0.9,
   });
   let roomsBootThoughtAge = 0;
-  // Мысль ГГ при первом входе в infected-hub: "why is it so dark here?"
-  // Срабатывает один раз за прохождение, не повторяется при перезаходе.
-  const HUB_THOUGHT_TEXT = "why is it so dark here?";
+  // Мысль ГГ при первом входе в infected-hub. Срабатывает один раз за
+  // прохождение, не повторяется при перезаходе.
+  const HUB_THOUGHT_TEXT = "what happened to this place?";
   const hubThoughtSchedule = makeScrambleSchedule({
     appearStart: 1.4,
     fadeInDuration: 0.5,
@@ -1485,6 +1460,7 @@ export function start(canvas: HTMLCanvasElement): void {
         isDash ? 15 : 8,
         isDash ? 6 : 3,
         PARTICLE_DRAG,
+        true, // soft dust puff
       );
     }
   }
@@ -2391,8 +2367,8 @@ export function start(canvas: HTMLCanvasElement): void {
     }
     perfEnd("upd_enemies");
 
-    // Noisy-флаг — только для sleeping chamber (тёмные комнаты).
-    if (zoneTheme.theme.darkness && currentRoom.sleepingChamber) {
+    // Noisy-флаг — только для sleeping chamber.
+    if (currentRoom.sleepingChamber) {
       for (const e of currentRoom.enemies) {
         if (e.type === "watcher" && e.awarenessState === "alerting" && !state.noisySector) {
           state.noisySector = true;
@@ -2950,15 +2926,21 @@ export function start(canvas: HTMLCanvasElement): void {
     // down. Room 1 / Room 4 are 3600 / 8000 px wide and many entities
     // travel far outside the camera viewport; skipping their draw is
     // the biggest per-frame draw-call save these corridor rooms get.
-    // Visible world rect: zoom < 1 expands what's on-screen, zoom > 1
-    // shrinks it. World width visible = ROOM_W_PX / zoom.
+    //
+    // The rect must cover the ENTIRE visible viewport, not just the
+    // canonical 1200×800 letterboxed arena: on a wide window the
+    // letterbox bars show real world (scale fits canonical, so the bars
+    // expose extra world on the short axis), and culling to 1200/zoom
+    // would clip on-screen bullets near the bars. World→screen is
+    // screen = (world − camera) · zoom · scale + offset, so the visible
+    // world span is viewport/(zoom·scale) and the top-left world point
+    // is camera − offset/(zoom·scale).
     const cullMargin = 80;
-    const cullViewW = ROOM_W_PX / camera.zoom;
-    const cullViewH = ROOM_H_PX / camera.zoom;
-    const cullLeft = camera.x - cullMargin;
-    const cullRight = camera.x + cullViewW + cullMargin;
-    const cullTop = camera.y - cullMargin;
-    const cullBottom = camera.y + cullViewH + cullMargin;
+    const cullWorldPerPx = 1 / (camera.zoom * scale);
+    const cullLeft = camera.x - offsetX * cullWorldPerPx - cullMargin;
+    const cullRight = camera.x + (viewW - offsetX) * cullWorldPerPx + cullMargin;
+    const cullTop = camera.y - offsetY * cullWorldPerPx - cullMargin;
+    const cullBottom = camera.y + (viewH - offsetY) * cullWorldPerPx + cullMargin;
 
     // DEEP FIELD background — radial spark + vignette anchored on
     // the player (the only consciousness still burning in the dead
@@ -3284,8 +3266,15 @@ export function start(canvas: HTMLCanvasElement): void {
       const alpha = t < 0.5 ? 1 : Math.max(0, 1 - (t - 0.5) * 2);
       const sz = Math.max(0.5, p.initialSize * (1 - t));
       ctx.globalAlpha = alpha;
-      ctx.fillStyle = p.color;
-      ctx.fillRect(p.x - sz / 2, p.y - sz / 2, sz, sz);
+      if (p.soft) {
+        // Soft dust puff — blit the baked radial sprite (≈2.6× the
+        // square footprint, mostly transparent at the edge).
+        const d = sz * 2.6;
+        ctx.drawImage(getDustSprite(p.color), p.x - d / 2, p.y - d / 2, d, d);
+      } else {
+        ctx.fillStyle = p.color;
+        ctx.fillRect(p.x - sz / 2, p.y - sz / 2, sz, sz);
+      }
     }
     ctx.restore();
     perfEnd("particles");
@@ -3402,79 +3391,39 @@ export function start(canvas: HTMLCanvasElement): void {
 
     ctx.restore();
 
-    // Тёмный оверлей с радиусом свечения вокруг ГГ — комнаты, чья
-    // зональная тема объявляет darkness (инфицированный сектор + босс).
-    if (zoneTheme.theme.darkness) {
-      // Единый мягкий «сумрак» — широкая лужа света вокруг ГГ и ровная
-      // негустая темнота снаружи. Параметры живут на зональной теме.
-      const px = (player.x - camera.x) * scale + offsetX;
-      const py = (player.y - camera.y) * scale + offsetY;
-      const vr = zoneTheme.theme.darkness.visibilityRadiusPx * scale;
-
-      const darkness = zoneTheme.theme.darkness.alpha;
-
-      ctx.save();
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-
-      // Шаг 1: сплошная тёмная заливка СНАРУЖИ мягкого радиуса.
-      // Используем even-odd с чуть меньшим радиусом (innerR), чтобы
-      // оставить место для градиентного перехода.
-      const outerR = vr * 1.10;
-      ctx.beginPath();
-      ctx.rect(0, 0, viewW, viewH);
-      ctx.arc(px, py, outerR, 0, Math.PI * 2, true);
-      ctx.fillStyle = `rgba(${zoneTheme.theme.darkness.duskRgb}, ${darkness})`;
-      ctx.fill("evenodd");
-
-      // Шаг 2: мягкий градиентный переход innerR → outerR — запечённый
-      // спрайт вместо createRadialGradient на каждый кадр; darkness
-      // модулируется через globalAlpha (соотношение innerR = vr * 0.52
-      // к outerR запечено в спрайте).
-      ctx.globalAlpha = darkness;
-      ctx.drawImage(
-        getDarkEdgeSprite(zoneTheme.theme.darkness.duskRgb),
-        px - outerR,
-        py - outerR,
-        outerR * 2,
-        outerR * 2,
-      );
-      ctx.globalAlpha = 1;
-
-      ctx.restore();
-
-      // Свечение босса поверх тёмного слоя — пульсирующий ореол
-      // вокруг Sentinel, цвет меняется по фазам.
-      if (currentRoom.id === "room5") {
-        const sentinel = findSentinel();
-        if (sentinel && !sentinel.isDead()) {
-          const PHASE_GLOW: Record<1 | 2 | 3, string> = {
-            1: "#ff3344",
-            2: "#ff5511",
-            3: "#ff2266",
-          };
-          const glowColor = PHASE_GLOW[sentinel.bossPhase];
-          // Позиция Sentinel в screen space.
-          const sx = (sentinel.x - camera.x) * scale + offsetX;
-          const sy = (sentinel.y - camera.y) * scale + offsetY;
-          const baseR = 130 * scale; // ≈ радиус внешнего кольца босса
-          // Пульсация: медленный sin + beat от bossPhase.
-          const t = performance.now() / 1000;
-          const pulse = 0.5 + 0.5 * Math.sin(t * 1.8 + sentinel.bossPhase * 1.1);
-          const glowR = baseR * (1.6 + pulse * 0.35);
-          ctx.save();
-          ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-          // Запечённый спрайт ореола (один на цвет фазы) вместо
-          // createRadialGradient + hex-парсинга на каждый кадр.
-          ctx.globalAlpha = 0.18 + pulse * 0.14;
-          ctx.drawImage(
-            getBossGlowSprite(glowColor),
-            sx - glowR,
-            sy - glowR,
-            glowR * 2,
-            glowR * 2,
-          );
-          ctx.restore();
-        }
+    // Свечение босса — пульсирующий ореол вокруг Sentinel в screen
+    // space, цвет меняется по фазам. (Тьма зон убрана — арена читается
+    // целиком, как в референсе; ореол босса остаётся самостоятельным.)
+    if (currentRoom.id === "room5") {
+      const sentinel = findSentinel();
+      if (sentinel && !sentinel.isDead()) {
+        const PHASE_GLOW: Record<1 | 2 | 3, string> = {
+          1: "#ff3344",
+          2: "#ff5511",
+          3: "#ff2266",
+        };
+        const glowColor = PHASE_GLOW[sentinel.bossPhase];
+        // Позиция Sentinel в screen space.
+        const sx = (sentinel.x - camera.x) * scale + offsetX;
+        const sy = (sentinel.y - camera.y) * scale + offsetY;
+        const baseR = 130 * scale; // ≈ радиус внешнего кольца босса
+        // Пульсация: медленный sin + beat от bossPhase.
+        const t = performance.now() / 1000;
+        const pulse = 0.5 + 0.5 * Math.sin(t * 1.8 + sentinel.bossPhase * 1.1);
+        const glowR = baseR * (1.6 + pulse * 0.35);
+        ctx.save();
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        // Запечённый спрайт ореола (один на цвет фазы) вместо
+        // createRadialGradient + hex-парсинга на каждый кадр.
+        ctx.globalAlpha = 0.18 + pulse * 0.14;
+        ctx.drawImage(
+          getBossGlowSprite(glowColor),
+          sx - glowR,
+          sy - glowR,
+          glowR * 2,
+          glowR * 2,
+        );
+        ctx.restore();
       }
     }
 
