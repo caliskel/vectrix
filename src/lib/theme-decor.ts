@@ -4,7 +4,7 @@
 // room, recreated by syncRoomFx() on every transition / restart /
 // teleport (hard swap, no crossfade).
 //
-// Performance contract (CLAUDE.md "Performance architecture"):
+// Performance contract (ARCHITECTURE.md "Performance architecture"):
 // - Every silhouette is baked into an offscreen sprite AT SEED TIME
 //   with its shadowBlur glow baked in. Per-frame cost = drawImage.
 // - Fixture counts are hard-capped by the LAYER_MAX_FIXTURES /

@@ -119,7 +119,7 @@ class AudioEngine {
   private hunterSnarlFilter?: Filter;
 
   // Sentinel boss — dedicated cues (replacing alert / hitHeavy
-  // placeholders flagged in CLAUDE.md).
+  // placeholders flagged in ARCHITECTURE.md).
   private bossPhaseSynth?: Synth;       // sub saw for BWAA
   private bossPhaseNoise?: NoiseSynth;  // sweep noise burst
   private bossPhaseFilter?: Filter;

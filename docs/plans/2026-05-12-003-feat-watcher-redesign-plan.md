@@ -28,7 +28,7 @@ origin: docs/brainstorms/watcher-redesign-requirements.md
 
 Подход — **single source of truth** в `src/lib/enemies/watcher.ts`: новые поля и поведение живут на классе. Game-files читают per-watcher `gazeAtPlayer` и агрегируют в state.maxGazeAtPlayer. Render-helpers и audio синт — shared в `lib/`.
 
-Тестовая стратегия — playtest scenarios через `pnpm dev` (codebase не имеет unit-test инфры; `tsc --noEmit` — gate на type-correctness, CLAUDE.md фиксирует это как канон).
+Тестовая стратегия — playtest scenarios через `pnpm dev` (codebase не имеет unit-test инфры; `tsc --noEmit` — gate на type-correctness, ARCHITECTURE.md фиксирует это как канон).
 
 ---
 
@@ -255,9 +255,9 @@ if (player.dashIframeTime > 0) {
   - `gaze < 0.5`: lineWidth 0.8, alpha 0.25, strokeStyle `rgba(255, 23, 68, alpha)` (Watcher PALETTE.bullet)
   - `0.5 <= gaze < 1.0`: lineWidth 1.4, alpha 0.45
   - `gaze >= 1.0`: lineWidth 1.8, alpha 0.6, мерцание via `sin(nowMs * 0.05) * 0.5 + 0.5` (8 Hz = `0.05 * 2π * 1000 ms / Hz`, нужно подобрать константу).
-  Без `shadowBlur` — perf-conscious (CLAUDE.md: per-frame shadowBlur запрещён).
+  Без `shadowBlur` — perf-conscious (ARCHITECTURE.md: per-frame shadowBlur запрещён).
 - `drawMarkedIndicator`: если `!isMarked` — skip. Иначе stroke circle вокруг `(player.x, player.y)` радиусом `player.size * 1.4` (player.size = 24, → r = 33.6), lineWidth 1.2, alpha 0.6, мерцание на той же 8 Hz частоте, цвет `#ff1744` (Watcher iris color).
-- В game render pipelines (both rooms-game and tutorial-game): найти существующий wall→enemy render boundary. Per CLAUDE.md и actual flow в rooms-game render — стены идут перед enemies. Между ними вставить loop по watcher-ам с вызовом `drawWatcherGazeLine`. После enemies / перед HUD — `drawMarkedIndicator` (он в world space вокруг игрока, не HUD).
+- В game render pipelines (both rooms-game and tutorial-game): найти существующий wall→enemy render boundary. Per ARCHITECTURE.md и actual flow в rooms-game render — стены идут перед enemies. Между ними вставить loop по watcher-ам с вызовом `drawWatcherGazeLine`. После enemies / перед HUD — `drawMarkedIndicator` (он в world space вокруг игрока, не HUD).
 - Передать pre-computed `losClear` per watcher: для каждого watcher-а в render tick — `losClear = !isSegmentBlocked(...)`. Можно не делать — пусть helper сам raycast'ит (дешевле кода, чуть дороже компьюта; 1-3 watcher × 60 fps = тривиально). Решение: helper делает raycast сам.
 
 **Patterns to follow:**

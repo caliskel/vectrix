@@ -33,7 +33,7 @@ has been through a full performance pass:
 2. **Sprite caches** for everything with a heavy `shadowBlur` glow:
    bullets, walls, turret bodies, hunter bodies, watcher bodies,
    player ring, **watcher laser beam + impact**, **key**, **pickups**.
-   See the "Sprite caches" table in CLAUDE.md.
+   See the "Sprite caches" table in ARCHITECTURE.md.
 3. **Ring fake glow** — two-stroke layered pattern replaces
    `shadowBlur` on impact rings in rooms-game + tutorial-game.
 4. **Off-screen culling** for bullets and particles in rooms-game.
@@ -41,7 +41,7 @@ has been through a full performance pass:
 5. **F2 perf overlay** (`lib/perf-meter.ts`) — toggles a per-section
    ms breakdown in rooms-game. Always profile before optimising.
 
-CLAUDE.md → "Performance architecture" section has the full reference.
+ARCHITECTURE.md → "Performance architecture" section has the full reference.
 Don't reinvent any of this — extend it.
 
 ## How to work without burning user patience
@@ -63,7 +63,7 @@ session. If you can't measure, say so out loud rather than guess.
 If you're typing `list.push({...})` or `list = list.filter(...)` in a hot
 path, STOP. Use the pool. If you're typing `ctx.shadowBlur = N` inside a
 per-entity loop, STOP. Build or use a sprite cache. The patterns are
-already documented in CLAUDE.md → "Performance architecture".
+already documented in ARCHITECTURE.md → "Performance architecture".
 
 ### 3. "Literally copy X" means literally copy X
 

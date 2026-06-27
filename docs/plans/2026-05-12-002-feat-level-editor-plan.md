@@ -240,7 +240,7 @@ Carry-forward from origin doc, grouped:
 
 9. **Conflict banner: compare hash JSON-файла, не mtime.** При Export сохраняем `codeHash = sha256(json)` в drafts. При reload сравниваем с current hash файла. Reason: mtime ненадёжен (touch, IDE rewrites, git checkout). Hash детерминирован. Размер JSON ≤ ~20KB, хэш быстрый.
 
-10. **Storage key: `dash-proto:editor-drafts:v1`.** Префикс `dash-proto:` (не `dash-prototype:`) — соответствует v4/v5-era convention. Версия v1 с миграционным no-op-loader'ом с первого дня (per CLAUDE.md storage rules).
+10. **Storage key: `dash-proto:editor-drafts:v1`.** Префикс `dash-proto:` (не `dash-prototype:`) — соответствует v4/v5-era convention. Версия v1 с миграционным no-op-loader'ом с первого дня (per ARCHITECTURE.md storage rules).
 
 11. **Тесты — manual verification scenarios.** В repo нет vitest/jest, добавление test framework — отдельный follow-up. Per-unit `Test scenarios` секции = чеклисты для manual проверки в браузере. Recommendation: добавить vitest для pure helpers (`build-room-from-json.ts`, `editor-drafts.ts`) в отдельный follow-up PR.
 
@@ -510,7 +510,7 @@ Carry-forward from origin doc, grouped:
       button "Revert to code"
   ```
 - Style injection (`STYLE_ID = "dp-editor-style"`). z-index 150.
-- Esc handler **capture phase** (per CLAUDE.md keybinds lesson): close editor on Esc, `stopPropagation` to prevent pause-menu fire underneath. Pattern из dev-menu.
+- Esc handler **capture phase** (per ARCHITECTURE.md keybinds lesson): close editor on Esc, `stopPropagation` to prevent pause-menu fire underneath. Pattern из dev-menu.
 - Toolbar tool selection → fires `config.onSelectTool(toolName)` (canvas layer reads).
 - Properties panel — switch on selection type, render appropriate fields:
   - **Room (pseudo-entity, selected when nothing else is selected via toolbar "Room" toggle):** width, height (numeric inputs only, 10px snap-aware). NO drag-edge handles in MVP — properties-panel-only edit per Key Decision.
@@ -810,7 +810,7 @@ Closes design-lens coverage gaps. Each rule is implementation-grade decision; и
 4. **F3 swallowed by browser.** Risk: некоторые ОС/браузеры reserve F-keys. **Mitigation:** F3 свободна в Chrome / Firefox / Safari macOS. Если конфликт обнаружится — secondary binding на keybinds Controls overlay.
 5. **Vite plugin path traversal.** Risk: malicious payload пробует `id: "../config"`. **Mitigation:** regex guard + post-resolve containment check (U3).
 6. **localStorage quota на больших drafts.** Risk: 50+ комнат-drafts × 20KB ~ 1MB > some quota limits. **Mitigation:** graceful failure (toast); рекомендация в docs "Export часто".
-7. **Edit-mode render path divergence.** Risk: editor рендерится не 1-в-1 с play (CLAUDE.md "literally copy" rule). **Mitigation:** reuse `render()` function целиком в edit-mode (frame-loop just skips `update()`); ничего нового рисовать в editor — только overlays на DOM.
+7. **Edit-mode render path divergence.** Risk: editor рендерится не 1-в-1 с play (ARCHITECTURE.md "literally copy" rule). **Mitigation:** reuse `render()` function целиком в edit-mode (frame-loop just skips `update()`); ничего нового рисовать в editor — только overlays на DOM.
 8. **`import.meta.glob` HMR boundary.** Risk: новый JSON-файл после Export не подхватывается HMR без restart. **Mitigation:** test U2 явно verifies HMR pickup; fallback workflow — `pnpm dev` restart редко нужен.
 
 ### Dependencies

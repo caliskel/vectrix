@@ -178,7 +178,7 @@ The structure shows expected output; per-unit **Files:** sections are authoritat
 
 **Verification:** `tsc --noEmit` passes; dev preview at `sandbox.html?fontpreview` renders the placeholder set cleanly across sizes.
 
-**Execution note:** Before starting this unit, tag `pre-font-refresh` per the CLAUDE.md "commit before large changes" rule:
+**Execution note:** Before starting this unit, tag `pre-font-refresh` per the ARCHITECTURE.md "commit before large changes" rule:
 ```
 git tag pre-font-refresh
 ```
@@ -476,7 +476,7 @@ This is the explicit rollback point if the rollout regresses.
 **Approach:**
 - Canvas dimensions: responsive, `clamp(56px, 12vw, 120px)` tall as before; aspect ratio derived from "VECTRIX" string width via `measureText`. HiDPI-scaled via `devicePixelRatio`.
 - Logo render path:
-  - Default state: VECTRIX at large display-mode glyphs, `lineWidth` 8-12 for the bold look, with a soft outer glow rendered as a wider, faded second stroke (per the "fake glow" trick in CLAUDE.md's perf architecture — avoid `shadowBlur` per frame).
+  - Default state: VECTRIX at large display-mode glyphs, `lineWidth` 8-12 for the bold look, with a soft outer glow rendered as a wider, faded second stroke (per the "fake glow" trick in ARCHITECTURE.md's perf architecture — avoid `shadowBlur` per frame).
   - Entrance cascade: per-letter `drawIn` animation from U7, 80ms stagger across the 7 letters → ends at 7 × 80 = 560ms.
   - Breathing: parent-scope scale ↔ 1.0–1.02 on a 2.5s sin; outer glow alpha pulse 0.6–1.0 in lockstep. Skip during glitch.
   - Glitch: every 10–25s (preserving the existing cadence), render 3 stacked copies for 60-200ms — red copy at (-4, 0), white core at (0, 0), cyan copy at (4, 0). Whole logo shifts +6px right for the duration.
@@ -489,7 +489,7 @@ This is the explicit rollback point if the rollout regresses.
 - Logo glow pulses on a 2.5s cycle; visually smooth, no per-frame stutter on F3 (FPS overlay).
 - Wait 10-25s on the landing page → glitch fires: RGB-split visible for the documented duration, logo shifts right, settles back.
 - Resize the window (mobile breakpoint) → logo scales fluidly; segment-based rendering quantizes cleanly because of em-aligned coordinates.
-- Run with `prefers-reduced-motion: reduce` → entrance + breathing + glitch are gated to a single static draw (matches CLAUDE.md's accessibility rule that already applies to the menu background).
+- Run with `prefers-reduced-motion: reduce` → entrance + breathing + glitch are gated to a single static draw (matches ARCHITECTURE.md's accessibility rule that already applies to the menu background).
 - F2 perf overlay (F2 isn't currently wired into the landing — but verify with a manual `console.log` if needed): logo render per frame stays under 1ms in steady state (breathing only, no glitch); peaks during entrance + glitch are bounded.
 
 **Verification:** Landing page visually feels cohesive with the rest of the typography. No CSS-driven logo styles remain. Reduced-motion accessibility honored.
@@ -538,7 +538,7 @@ This is the explicit rollback point if the rollout regresses.
 - **Glyph sprite cache for stable strings.** Stroking ~5-12 segments per glyph per frame is fine for short labels but adds up during boss combat where 30 floating texts spawn simultaneously. Cache static strings by `${char}|${px}|${color}|${mode}`; cache dynamic strings at glyph granularity (so "15234" reuses cached "1" + "5" + "2" + "3" + "4" blits).
 - **Animation bypasses sprite cache.** Per-segment animation invalidates the cache key per frame, so animated text strokes directly. This is intentional — animated text is a small temporal window, not the hot path.
 - **8 implementation units, not 4-5 larger ones.** "Потихоньку внедрять" wants bisectable PRs. Each unit lands a coherent, testable slice without breaking the prior unit's surface.
-- **No test framework added.** Tests in this plan are visual / behavioral. Adding Vitest or similar is its own scope. The trade-off is acceptable given the visual-first nature of typography work and the project's existing convention (CLAUDE.md doesn't mention tests; `pnpm build` is the gate).
+- **No test framework added.** Tests in this plan are visual / behavioral. Adding Vitest or similar is its own scope. The trade-off is acceptable given the visual-first nature of typography work and the project's existing convention (ARCHITECTURE.md doesn't mention tests; `pnpm build` is the gate).
 - **Logo last.** The VECTRIX wordmark is the most visible part of the brand. Migrate it after the rest of the system has stabilized so a regression in U1-U7 doesn't take the logo down with it.
 
 ---
@@ -596,7 +596,7 @@ At each phase boundary, the work is committable, deployable, and visually cohere
   - `opentype.js@1.3.4` (or `github:opentypejs/opentype.js#master` if 1.3.4 hits a blocker)
   - `js-angusj-clipper` (latest stable — Clipper2 WASM bindings)
   - `wawoff2` (latest stable — TTF → WOFF2 compression)
-- **Tagging:** `git tag pre-font-refresh` at U1 start (CLAUDE.md "commit before large changes" rule).
+- **Tagging:** `git tag pre-font-refresh` at U1 start (ARCHITECTURE.md "commit before large changes" rule).
 - **Assumed:** browser support for `@font-face` with WOFF2 — already universal for the target audience (project is 2026; WOFF2 is supported everywhere since 2017).
 
 ---

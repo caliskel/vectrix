@@ -225,7 +225,7 @@ drawKeyHudIcon(ctx, x, y, keysHeld, requiredForCurrentRoom);
 - Default (no opts) — current behaviour: starts в idle, обычный awareness ramp.
 
 **Patterns to follow:**
-- Hunter уже принимает `{ startsAggressive?: boolean }` per CLAUDE.md (используется в Room 2/3 narrow trap). Same shape.
+- Hunter уже принимает `{ startsAggressive?: boolean }` per ARCHITECTURE.md (используется в Room 2/3 narrow trap). Same shape.
 - `initAwareness` setup — текущий код устанавливает `awarenessState = "idle"`. Когда startsAggressive — override после init.
 
 **Technical design:**
@@ -466,7 +466,7 @@ buildInfectedHub({ noisy }: { noisy: boolean }): Room {
 - **`keyHeld: boolean` → `keysHeld: number` refactor over additive `multiKeysHeld`.** Clean single-source-of-truth state field. Backward compat: `keyHeld === true` ≡ `keysHeld > 0`. Tutorial uses similar pattern but its own scope; no shared state.
 - **Hub rebuild on entry, not initial-build-once.** Allows dynamic `noisy` variant based on live `state.noisySector`. Trade-off: small per-entry cost (rebuild fresh Walls + Watchers), но Hub is entered handful of times per run, negligible.
 - **Sprint 1 east-door → `room3`, not "to be continued" placeholder.** Preserves end-to-end campaign navigability (player can still reach Sentinel boss if room3-5 are still playable). Alternative "sector complete" overlay also valid but adds new room with no gameplay; current choice cheaper.
-- **Watcher constructor opts mirror Hunter's pattern.** Hunter already has `{ startsAggressive: true }` per CLAUDE.md — Watcher follows the same shape для consistency.
+- **Watcher constructor opts mirror Hunter's pattern.** Hunter already has `{ startsAggressive: true }` per ARCHITECTURE.md — Watcher follows the same shape для consistency.
 - **noisySector flag persists across `transitionToRoom`, resets only on `restartRun`.** Per origin doc Key Decisions — once player provokes the system in a run, that consequence sticks.
 - **No tutorial-game changes.** Tutorial's parallel codebase stays untouched. Tutorial's single-key flow uses default `keysRequired === undefined` semantics.
 - **Hub's spawn point west, east door east.** Match natural reading order. Player enters from west (from room1), exits east main door (after both keys). Top/bottom side-rooms perpendicular trips.

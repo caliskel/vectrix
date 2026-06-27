@@ -76,7 +76,7 @@ function loadStore(): DraftsStore {
     }
     // Migrate inline. v1 → v1 is a no-op; future v2 would patch the
     // shape here before returning. Keeping the framework live from
-    // day one matches the CLAUDE.md storage rule.
+    // day one matches the ARCHITECTURE.md storage rule.
     return migrate({ version, drafts });
   } catch {
     return emptyStore();

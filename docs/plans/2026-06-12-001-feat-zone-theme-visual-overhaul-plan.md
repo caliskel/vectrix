@@ -83,9 +83,9 @@ Traced to origin (see origin: docs/brainstorms/visual-overhaul-zone-themes-requi
 
 - LESSONS.md #1 / HANDOVER.md #3: partial render-pipeline ports cost six iterations once. This plan names exact insertion points per mode (High-Level Technical Design) and requires 1-to-1 mirroring into `src/tutorial/tutorial-game.ts`.
 - HANDOVER.md #1: a perf fix once shipped without F2 confirmation and didn't help. Layer counts and alpha budgets are locked from F2 measurement (U8), not guesses.
-- CLAUDE.md performance architecture + Pulsing Heart ring-accumulation bug: decor lifecycle gets hard caps on live entity counts.
+- ARCHITECTURE.md performance architecture + Pulsing Heart ring-accumulation bug: decor lifecycle gets hard caps on live entity counts.
 - HANDOVER.md #4/#5: tag a checkpoint before multi-module passes (`pre-visual-overhaul`); `perf-pass-stable` is the perf baseline to regress against. Canvas 2D is the committed renderer — no framework detours.
-- CLAUDE.md drift found by research (do not trust doc claims in these areas): darkness is visR 600 / alpha 0.45 uniform dusk (not a 270 px mask), `useCamera` is inert, `Room` type lives in `src/lib/room.ts`, flicker state is vestigial.
+- ARCHITECTURE.md drift found by research (do not trust doc claims in these areas): darkness is visR 600 / alpha 0.45 uniform dusk (not a 270 px mask), `useCamera` is inert, `Room` type lives in `src/lib/room.ts`, flicker state is vestigial.
 
 ### External References
 
@@ -443,8 +443,8 @@ Notched perimeters pilot, JSON/editor support, measurement-driven tuning and the
 
 ## Documentation / Operational Notes
 
-- Tag `pre-visual-overhaul` before U1; rollback is a hard reset to that tag (CLAUDE.md working rule).
-- Update CLAUDE.md's architecture notes after landing (theme module, darkness property, transparent sandbox grid) — research found existing drift; don't add more.
+- Tag `pre-visual-overhaul` before U1; rollback is a hard reset to that tag (ARCHITECTURE.md working rule).
+- Update ARCHITECTURE.md's architecture notes after landing (theme module, darkness property, transparent sandbox grid) — research found existing drift; don't add more.
 - Strong candidate for the repo's first `docs/solutions/` capture via `ce-compound` after completion.
 
 ---
@@ -454,4 +454,4 @@ Notched perimeters pilot, JSON/editor support, measurement-driven tuning and the
 - **Origin document:** [docs/brainstorms/visual-overhaul-zone-themes-requirements.md](../brainstorms/visual-overhaul-zone-themes-requirements.md)
 - Visual reference: `docs/brainstorms/visual-overhaul-reference.jpg`
 - Related code: `src/lib/arena-bg.ts`, `src/lib/walls.ts`, `src/lib/background-energy.ts`, `src/landing/menu-bg.ts`, `src/lib/zone-theme.ts` (new), `src/lib/theme-decor.ts` (new)
-- Institutional sources: `LESSONS.md`, `HANDOVER.md`, CLAUDE.md "Performance architecture"
+- Institutional sources: `LESSONS.md`, `HANDOVER.md`, ARCHITECTURE.md "Performance architecture"
